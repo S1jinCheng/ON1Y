@@ -1,0 +1,3 @@
+# Paste your subscribed channel links below (one per line).
+# Example channel for testing the RSS pipeline (you can delete after adding yours):
+https://www.youtube.com/channel/UC_x5XG1OV2P6uZZ5FSM9Ttw

@@ -1,0 +1,673 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>On1y</title>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --panel: #171b26;
+      --border: #2a3142;
+      --text: #e8ecf4;
+      --muted: #8b95a8;
+      --accent: #5b8def;
+      --ok: #3ecf8e;
+      --warn: #e8b84a;
+      --err: #f07178;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    header {
+      padding: 1.25rem 1.5rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 1rem;
+    }
+    h1 { margin: 0; font-size: 1.35rem; font-weight: 600; }
+    .sub { color: var(--muted); font-size: 0.85rem; }
+    main { padding: 1.25rem 1.5rem 2rem; max-width: 1200px; margin: 0 auto; }
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 0.75rem;
+      margin-bottom: 1.25rem;
+    }
+    .stat {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 0.85rem 1rem;
+    }
+    .stat b { display: block; font-size: 1.5rem; font-weight: 600; }
+    .stat span { color: var(--muted); font-size: 0.8rem; }
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin-bottom: 1.25rem;
+      align-items: center;
+    }
+    button, .btn {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 0.5rem 1rem;
+      font-size: 0.9rem;
+      cursor: pointer;
+    }
+    button.secondary { background: var(--panel); border: 1px solid var(--border); color: var(--text); }
+    button:disabled { opacity: 0.5; cursor: wait; }
+    input[type="url"], input[type="number"], input[type="text"], input[type="password"] {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 8px;
+      padding: 0.5rem 0.75rem;
+      font-size: 0.9rem;
+    }
+    input[type="url"] { min-width: 280px; }
+    .settings-card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem 1.25rem;
+      margin-bottom: 1.25rem;
+    }
+    .settings-card h2 { margin: 0 0 0.75rem; font-size: 1rem; font-weight: 600; }
+    .settings-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 0.75rem;
+      align-items: end;
+    }
+    .settings-grid label { display: block; font-size: 0.8rem; color: var(--muted); margin-bottom: 0.25rem; }
+    .hint { font-size: 0.8rem; color: var(--muted); margin-top: 0.5rem; }
+    .tabs {
+      display: flex;
+      gap: 0.25rem;
+      margin-bottom: 1rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .tabs button {
+      background: transparent;
+      color: var(--muted);
+      border-radius: 8px 8px 0 0;
+      border-bottom: 2px solid transparent;
+    }
+    .tabs button.active {
+      color: var(--text);
+      border-bottom-color: var(--accent);
+    }
+    .panel { display: none; }
+    .panel.active { display: block; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.88rem;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    th, td {
+      text-align: left;
+      padding: 0.6rem 0.75rem;
+      border-bottom: 1px solid var(--border);
+    }
+    th { color: var(--muted); font-weight: 500; background: #1c2130; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: #1a2030; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .badge {
+      display: inline-block;
+      padding: 0.15rem 0.45rem;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      font-weight: 500;
+    }
+    .badge.ok { background: #1a3d2e; color: var(--ok); }
+    .badge.partial { background: #3d351a; color: var(--warn); }
+    .badge.failed, .badge.pending { background: #3d1a1f; color: var(--err); }
+    .badge.processing { background: #1a2a3d; color: var(--accent); }
+    .badge.done { background: #1a2a2a; color: var(--muted); }
+    #toast {
+      position: fixed;
+      bottom: 1rem;
+      right: 1rem;
+      max-width: 360px;
+      padding: 0.75rem 1rem;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      display: none;
+      z-index: 100;
+    }
+    #toast.show { display: block; }
+    .modal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.6);
+      z-index: 50;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+    }
+    .modal.show { display: flex; }
+    .modal-box {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      max-width: 720px;
+      width: 100%;
+      max-height: 85vh;
+      overflow: auto;
+      padding: 1.25rem;
+    }
+    .modal-box pre {
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-size: 0.85rem;
+      background: var(--bg);
+      padding: 1rem;
+      border-radius: 8px;
+      max-height: 50vh;
+      overflow: auto;
+    }
+    .empty { color: var(--muted); padding: 2rem; text-align: center; }
+    .flow {
+      color: var(--muted);
+      font-size: 0.85rem;
+      margin-bottom: 1rem;
+      padding: 0.75rem 1rem;
+      background: var(--panel);
+      border-radius: 8px;
+      border: 1px dashed var(--border);
+    }
+    .alert-banner {
+      display: none;
+      background: #3a1f1f;
+      border: 1px solid var(--err);
+      border-radius: 10px;
+      padding: 0.85rem 1rem;
+      margin-bottom: 1rem;
+      color: #ffd4d4;
+    }
+    .alert-banner.show { display: block; }
+    .alert-banner b { color: #fff; }
+    .alert-banner button {
+      margin-top: 0.5rem;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>On1y</h1>
+      <div class="sub">订阅 → 入队 → 提取 → LLM 蒸馏</div>
+    </div>
+    <button type="button" class="secondary" onclick="refreshAll()">刷新</button>
+  </header>
+
+  <main>
+    <div class="flow">
+      ① <strong>RSS 拉取</strong> 发现新链接入队 → ② <strong>处理队列</strong>（YouTube 快入库 / 知乎 Playwright）→ ③ <strong>LLM 蒸馏</strong>
+    </div>
+
+    <div class="alert-banner" id="alertBanner"></div>
+
+    <div class="stats" id="stats"></div>
+
+    <div class="settings-card" id="llmSettingsCard">
+      <h2>LLM 设置</h2>
+      <div class="settings-grid">
+        <div>
+          <label>API Base URL</label>
+          <input type="text" id="llmBaseUrl" style="width:100%" placeholder="锯齿云文档里的 API 地址，常带 /v1" />
+        </div>
+        <div>
+          <label>模型</label>
+          <input type="text" id="llmModel" style="width:100%" placeholder="deepseek-v4-flash" />
+        </div>
+        <div style="grid-column: span 2">
+          <label>API Key</label>
+          <input type="password" id="llmApiKey" style="width:100%" placeholder="sk-..." autocomplete="off" />
+          <span class="hint" id="llmKeyHint"></span>
+        </div>
+        <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
+          <button type="button" onclick="saveLlmSettings()">保存设置</button>
+          <button type="button" class="secondary" onclick="testLlmSettings()">测试连接</button>
+        </div>
+      </div>
+      <p class="hint">
+        <strong>用锯齿云等中转时：</strong>Base URL 必须填平台控制台里的「API 地址 / Base URL」（常见形如 <code>https://xxx.com/v1</code>），
+        <strong>不要</strong>填 <code>https://api.deepseek.com</code>；模型名也按平台列表填写（可能与官方名不同）。
+        Key 保存在本机 <code>data/llm_settings.json</code>。留空 Key 输入框则保留已保存的值。
+      </p>
+    </div>
+
+    <div class="actions">
+      <button type="button" onclick="rssPoll()">RSS 拉取 (poll)</button>
+      <button type="button" onclick="workerRun()">快入库 (YouTube)</button>
+      <button type="button" onclick="zhihuPipelineRun()">知乎抓取</button>
+      <button type="button" class="secondary" onclick="subtitlesRun()">拉字幕</button>
+      <label>
+        <input type="number" id="workerLimit" value="3" min="1" max="20" style="min-width:4rem;width:4rem" />
+        条
+      </label>
+      <input type="url" id="ingestUrl" placeholder="手动 ingest URL" />
+      <button type="button" class="secondary" onclick="ingest(false)">立即提取</button>
+      <button type="button" class="secondary" onclick="ingest(true)">仅入队</button>
+    </div>
+
+    <div class="tabs">
+      <button type="button" class="active" data-tab="feeds">订阅</button>
+      <button type="button" data-tab="queue">队列</button>
+      <button type="button" data-tab="items">入库</button>
+      <button type="button" data-tab="distill">蒸馏</button>
+    </div>
+
+    <section id="panel-feeds" class="panel active"></section>
+    <section id="panel-queue" class="panel"></section>
+    <section id="panel-items" class="panel"></section>
+    <section id="panel-distill" class="panel">
+      <div class="actions" style="margin-top:0">
+        <button type="button" onclick="distillRun()">LLM 蒸馏</button>
+        <label>
+          <input type="number" id="distillLimit" value="3" min="1" max="10" style="min-width:4rem;width:4rem" />
+          条未蒸馏
+        </label>
+      </div>
+      <div id="distillList"></div>
+    </section>
+  </main>
+
+  <div id="toast"></div>
+  <div id="modal" class="modal" onclick="if(event.target===this) closeModal()">
+    <div class="modal-box" id="modalBody"></div>
+  </div>
+
+  <script>
+    const $ = (s) => document.querySelector(s);
+
+    function toast(msg, isErr) {
+      const el = $("#toast");
+      el.textContent = msg;
+      el.style.borderColor = isErr ? "var(--err)" : "var(--border)";
+      el.classList.add("show");
+      setTimeout(() => el.classList.remove("show"), 4000);
+    }
+
+    async function api(path, opts) {
+      const r = await fetch(path, opts);
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.detail || r.statusText);
+      return data;
+    }
+
+    function badge(status) {
+      const c = status === "ok" ? "ok" : status === "partial" ? "partial" : status;
+      return `<span class="badge ${c}">${status}</span>`;
+    }
+
+    async function loadOverview() {
+      const o = await api("/api/overview");
+      const p = o.pending || {};
+      $("#stats").innerHTML = `
+        <div class="stat"><b>${p.pending ?? 0}</b><span>待入库</span></div>
+        <div class="stat"><b>${o.zhihu_pending ?? 0}</b><span>知乎待抓</span></div>
+        <div class="stat"><b>${(o.subtitles || {}).pending ?? 0}</b><span>待字幕</span></div>
+        <div class="stat"><b>${p.processing ?? 0}</b><span>处理中</span></div>
+        <div class="stat"><b>${p.failed ?? 0}</b><span>失败</span></div>
+        <div class="stat"><b>${o.raw_count ?? 0}</b><span>已入库</span></div>
+        <div class="stat"><b>${o.distilled_count ?? 0}</b><span>已蒸馏</span></div>
+        <div class="stat"><b>${o.feeds_enabled ?? 0}/${o.feeds_total ?? 0}</b><span>订阅启用</span></div>
+      `;
+    }
+
+    async function loadAlerts() {
+      const banner = $("#alertBanner");
+      try {
+        const rows = await api("/api/alerts?active=true");
+        if (!rows.length) {
+          banner.classList.remove("show");
+          banner.innerHTML = "";
+          return;
+        }
+        const latest = rows[rows.length - 1];
+        banner.innerHTML = `
+          <b>⚠️ ${esc(latest.kind_label || latest.kind)}</b>
+          · ${esc(latest.platform)} / ${esc(latest.worker)}
+          <div style="margin-top:0.35rem;font-size:0.85rem">${esc((latest.message || "").slice(0, 240))}</div>
+          ${latest.url ? `<div style="font-size:0.8rem;color:var(--muted);margin-top:0.25rem">${esc(latest.url)}</div>` : ""}
+          <button type="button" onclick="ackAlerts()">知道了</button>`;
+        banner.classList.add("show");
+      } catch (e) {
+        banner.classList.remove("show");
+      }
+    }
+
+    async function ackAlerts() {
+      try {
+        await api("/api/alerts/ack?clear_all=true", { method: "POST" });
+        $("#alertBanner").classList.remove("show");
+        toast("已清除告警");
+      } catch (e) { toast(e.message, true); }
+    }
+
+    async function loadLlmSettings() {
+      const s = await api("/api/llm/settings");
+      $("#llmBaseUrl").value = s.base_url || s.defaults?.base_url || "https://api.deepseek.com";
+      $("#llmModel").value = s.model || s.defaults?.model || "deepseek-v4-flash";
+      $("#llmApiKey").value = "";
+      $("#llmKeyHint").textContent = s.api_key_set
+        ? "已保存: " + (s.api_key_preview || "****")
+        : "尚未保存 API Key";
+    }
+
+    async function testLlmSettings() {
+      setBusy(true);
+      try {
+        const body = {
+          base_url: $("#llmBaseUrl").value.trim(),
+          model: $("#llmModel").value.trim(),
+          api_key: $("#llmApiKey").value,
+        };
+        const r = await api("/api/llm/test", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (r.ok) {
+          toast(`连接成功 (${r.model})：${(r.reply_preview || "").slice(0, 80)}`);
+        } else {
+          toast(r.error || "连接失败", true);
+        }
+      } catch (e) { toast(e.message, true); }
+      setBusy(false);
+    }
+
+    async function saveLlmSettings() {
+      setBusy(true);
+      try {
+        const body = {
+          base_url: $("#llmBaseUrl").value.trim(),
+          model: $("#llmModel").value.trim(),
+          api_key: $("#llmApiKey").value,
+        };
+        const r = await api("/api/llm/settings", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        $("#llmApiKey").value = "";
+        $("#llmKeyHint").textContent = r.api_key_set
+          ? "已保存: " + (r.api_key_preview || "****")
+          : "尚未保存 API Key";
+        toast("LLM 设置已保存");
+      } catch (e) { toast(e.message, true); }
+      setBusy(false);
+    }
+
+    async function loadDistill() {
+      const rows = await api("/api/distill/list?limit=40");
+      if (!rows.length) {
+        $("#distillList").innerHTML = '<p class="empty">暂无蒸馏结果。先入库，再点「LLM 蒸馏」。</p>';
+        return;
+      }
+      $("#distillList").innerHTML = `
+        <table>
+          <thead><tr><th>raw_id</th><th>状态</th><th>摘要</th><th>标题</th><th></th></tr></thead>
+          <tbody>${rows.map(d => `
+            <tr>
+              <td>${d.raw_id}</td>
+              <td>${badge(d.distill_status || "ok")}</td>
+              <td style="max-width:360px">${esc((d.summary || "").slice(0, 120))}${(d.summary||"").length > 120 ? "…" : ""}</td>
+              <td>${esc(d.raw_title || "")}</td>
+              <td><button type="button" class="secondary" onclick="showDistill(${d.raw_id})">详情</button></td>
+            </tr>`).join("")}</tbody>
+        </table>`;
+    }
+
+    async function showDistill(rawId) {
+      const d = await api("/api/distill/" + rawId);
+      const dist = d.distilled || {};
+      const tags = (d.tags || []).map(t => esc(t.name) + (t.parent_id ? "" : "")).join(", ");
+      const rels = (d.relations || []).map(r =>
+        `<li>${esc(r.relation_type)} → <a href="${esc(r.to_url)}" target="_blank">${esc(r.to_title || r.to_url)}</a></li>`
+      ).join("");
+      $("#modalBody").innerHTML = `
+        <h2 style="margin-top:0">${esc((d.raw && d.raw.raw_title) || "无标题")}</h2>
+        <p><strong>摘要</strong></p><p>${esc(dist.summary || "")}</p>
+        <p><strong>标签</strong>: ${tags || "—"}</p>
+        ${rels ? "<p><strong>关联</strong></p><ul>" + rels + "</ul>" : ""}
+        <p><strong>要点</strong></p><pre>${esc(JSON.stringify(dist.key_points || [], null, 2))}</pre>
+        <button type="button" class="secondary" onclick="closeModal()">关闭</button>
+      `;
+      $("#modal").classList.add("show");
+    }
+
+    async function distillRun() {
+      const limit = parseInt($("#distillLimit").value, 10) || 3;
+      setBusy(true);
+      try {
+        toast("LLM 蒸馏中，请稍候（约 10–60 秒/条）…");
+        const r = await api("/api/distill/run", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ limit }),
+        });
+        toast(`蒸馏完成：成功 ${r.distilled}，失败 ${r.failed}`);
+        await refreshAll();
+      } catch (e) { toast(e.message, true); }
+      setBusy(false);
+    }
+
+    async function loadFeeds() {
+      const rows = await api("/api/feeds");
+      if (!rows.length) {
+        $("#panel-feeds").innerHTML = '<p class="empty">无订阅，请编辑 config/feeds.yaml</p>';
+        return;
+      }
+      $("#panel-feeds").innerHTML = `
+        <table>
+          <thead><tr><th>标签</th><th>状态</th><th>游标</th><th>URL</th></tr></thead>
+          <tbody>${rows.map(f => `
+            <tr>
+              <td>${esc(f.label)}</td>
+              <td>${f.enabled ? badge("ok") : '<span class="badge done">关</span>'}</td>
+              <td style="color:var(--muted);font-size:0.8rem">${esc(f.last_entry_id || "—")}</td>
+              <td style="max-width:320px;overflow:hidden;text-overflow:ellipsis">${esc(f.url)}</td>
+            </tr>`).join("")}</tbody>
+        </table>`;
+    }
+
+    async function loadQueue() {
+      const rows = await api("/api/queue?limit=100");
+      if (!rows.length) {
+        $("#panel-queue").innerHTML = '<p class="empty">队列为空</p>';
+        return;
+      }
+      $("#panel-queue").innerHTML = `
+        <table>
+          <thead><tr><th>ID</th><th>状态</th><th>来源</th><th>标题/URL</th><th>错误</th></tr></thead>
+          <tbody>${rows.map(q => `
+            <tr>
+              <td>${q.id}</td>
+              <td>${badge(q.status)}</td>
+              <td>${esc(q.source)}${q.feed_label ? " · " + esc(q.feed_label) : ""}</td>
+              <td>${q.entry_title ? esc(q.entry_title) + "<br>" : ""}<a href="${esc(q.url)}" target="_blank">${esc(shortUrl(q.url))}</a></td>
+              <td style="color:var(--err);font-size:0.8rem">${esc(q.error || "")}</td>
+            </tr>`).join("")}</tbody>
+        </table>`;
+    }
+
+    async function loadItems() {
+      const rows = await api("/api/items?limit=80");
+      if (!rows.length) {
+        $("#panel-items").innerHTML = '<p class="empty">暂无入库内容</p>';
+        return;
+      }
+      $("#panel-items").innerHTML = `
+        <table>
+          <thead><tr><th>ID</th><th>平台</th><th>状态</th><th>字数</th><th>标题</th><th></th></tr></thead>
+          <tbody>${rows.map(i => `
+            <tr>
+              <td>${i.id}</td>
+              <td>${esc(i.platform)}</td>
+              <td>${badge(i.extract_status)}</td>
+              <td>${i.word_count ?? "—"}</td>
+              <td>${esc(i.title || shortUrl(i.url))}</td>
+              <td><button type="button" class="secondary" onclick="showItem(${i.id})">查看</button></td>
+            </tr>`).join("")}</tbody>
+        </table>`;
+    }
+
+    async function showItem(id) {
+      const item = await api("/api/items/" + id);
+      $("#modalBody").innerHTML = `
+        <h2 style="margin-top:0">${esc(item.title || "无标题")}</h2>
+        <p><a href="${esc(item.url)}" target="_blank">${esc(item.url)}</a></p>
+        <p>${badge(item.extract_status)} · ${item.word_count ?? 0} 词 · ${esc(item.platform)}</p>
+        ${item.extract_error ? `<p style="color:var(--err)">${esc(item.extract_error)}</p>` : ""}
+        <pre>${esc(item.body_text || "(无正文)")}</pre>
+        <button type="button" class="secondary" onclick="closeModal()">关闭</button>
+      `;
+      $("#modal").classList.add("show");
+    }
+
+    function closeModal() { $("#modal").classList.remove("show"); }
+
+    function esc(s) {
+      if (!s) return "";
+      const d = document.createElement("div");
+      d.textContent = s;
+      return d.innerHTML;
+    }
+
+    function shortUrl(u) {
+      try { return new URL(u).hostname + new URL(u).pathname.slice(0, 40); }
+      catch { return u; }
+    }
+
+    async function rssPoll() {
+      setBusy(true);
+      try {
+        const r = await api("/api/rss/poll", { method: "POST" });
+        toast("RSS 入队 " + r.enqueued + " 条");
+        await refreshAll();
+      } catch (e) { toast(e.message, true); }
+      setBusy(false);
+    }
+
+    async function workerRun() {
+      const limit = parseInt($("#workerLimit").value, 10) || 3;
+      setBusy(true);
+      try {
+        toast("快入库中（YouTube 仅元数据）…");
+        const r = await api("/api/worker/run", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ limit }),
+        });
+        toast(`完成：成功 ${r.processed}，失败 ${r.failed}`);
+        await refreshAll();
+      } catch (e) { toast(e.message, true); }
+      setBusy(false);
+    }
+
+    async function zhihuPipelineRun() {
+      const limit = parseInt($("#workerLimit").value, 10) || 3;
+      setBusy(true);
+      try {
+        toast("知乎 Playwright 抓取中（每条约 40–70 秒，请耐心等待）…");
+        const r = await api("/api/pipeline/zhihu/run", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ limit }),
+        });
+        const ing = r.ingest || {};
+        let msg = `知乎：成功 ${ing.processed ?? 0}，失败 ${ing.failed ?? 0}`;
+        if (ing.antibot_stopped) msg += "（触发风控，已停批）";
+        if (r.distilled) msg += `；蒸馏 ${r.distilled}`;
+        toast(msg, ing.antibot_stopped);
+        await refreshAll();
+      } catch (e) { toast(e.message, true); }
+      setBusy(false);
+    }
+
+    async function subtitlesRun() {
+      const limit = parseInt($("#workerLimit").value, 10) || 3;
+      setBusy(true);
+      try {
+        toast("拉字幕中，请稍候…");
+        const r = await api("/api/subtitles/run", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ limit }),
+        });
+        toast(`字幕：成功 ${r.processed}，失败 ${r.failed}`);
+        await refreshAll();
+      } catch (e) { toast(e.message, true); }
+      setBusy(false);
+    }
+
+    async function ingest(queue) {
+      const url = $("#ingestUrl").value.trim();
+      if (!url) { toast("请输入 URL", true); return; }
+      setBusy(true);
+      try {
+        const r = await api("/api/ingest", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url, queue }),
+        });
+        toast(queue ? "已入队 #" + r.pending_id : "已入库 #" + r.id);
+        await refreshAll();
+      } catch (e) { toast(e.message, true); }
+      setBusy(false);
+    }
+
+    function setBusy(on) {
+      document.querySelectorAll("button").forEach(b => { if (!b.dataset.tab) b.disabled = on; });
+    }
+
+    async function refreshAll() {
+      await loadOverview();
+      await loadAlerts();
+      await loadLlmSettings();
+      await loadFeeds();
+      await loadQueue();
+      await loadItems();
+      await loadDistill();
+    }
+
+    document.querySelectorAll(".tabs button").forEach(btn => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll(".tabs button").forEach(b => b.classList.remove("active"));
+        document.querySelectorAll(".panel").forEach(p => p.classList.remove("active"));
+        btn.classList.add("active");
+        $("#panel-" + btn.dataset.tab).classList.add("active");
+      });
+    });
+
+    refreshAll().catch(e => toast(e.message, true));
+    setInterval(() => refreshAll().catch(() => {}), 30000);
+  </script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+# One YouTube channel per line (copy to config/youtube_channels.txt).
+# Formats:
+#   UCxxxxxxxxxxxxxxxxxxxxxx
+#   https://www.youtube.com/channel/UCxxxx
+#   https://www.youtube.com/@handle
+#
+# How to collect your subscriptions:
+#   - Open https://www.youtube.com/feed/channels in the browser
+#   - Right-click each channel → copy link, paste below
+#   - Or close Chrome on Windows, then run:
+#       python scripts/sync_youtube_feeds.py
+#     (uses yt-dlp + fresh cookies / Windows Chrome profile)
+
+# Example (replace with your channels):
+# https://www.youtube.com/@MKBHD
+# https://www.youtube.com/channel/UC_x5XG1OV2P6uZZ5FSM9Ttw

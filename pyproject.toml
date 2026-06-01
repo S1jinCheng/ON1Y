@@ -1,0 +1,83 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "on1y"
+version = "0.1.0"
+description = "Personal information routing — Phase 1: ingestion and extraction"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "On1y" }]
+keywords = ["knowledge", "rss", "extraction", "personal"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Typing :: Typed",
+]
+dependencies = [
+    "beautifulsoup4>=4.12",
+    "fastapi>=0.115",
+    "feedparser>=6.0",
+    "httpx>=0.27",
+    "lxml>=5.0",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "python-multipart>=0.0.9",
+    "python-dotenv>=1.0",
+    "pyyaml>=6.0",
+    "playwright>=1.44",
+    "tenacity>=8.3",
+    "uvicorn[standard]>=0.32",
+    "yt-dlp>=2024.4",
+]
+
+[project.optional-dependencies]
+dev = [
+    "mypy>=1.10",
+    "pytest>=8.2",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.4",
+    "types-beautifulsoup4",
+]
+
+[project.scripts]
+on1y = "on1y.cli.main:app"
+
+[project.urls]
+Homepage = "https://github.com/on1y/on1y"
+
+[tool.hatch.build.targets.wheel]
+packages = ["on1y"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["on1y", "tests", "scripts"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "SIM"]
+ignore = ["B008"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+packages = ["on1y"]
+
+[[tool.mypy.overrides]]
+module = ["feedparser.*", "yt_dlp.*", "playwright.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

@@ -1,0 +1,17 @@
+# Zhihu subscriptions for scripts/sync_zhihu_feeds.py
+# One per line. Requires self-hosted RSSHub (see docs/ZHIHU_PIPELINE.md).
+
+# 关注用户动态（最常用）
+activities:your-zhihu-url-token
+
+# 某人的全部回答
+# answers:some-user
+
+# 收藏夹（数字 ID，从收藏夹 URL 获取）
+# collection:1234567890
+
+# 专栏 slug（zhuanlan.zhihu.com/xxx 里的 xxx）
+# column:my-column
+
+# 也支持完整 URL：
+# https://www.zhihu.com/people/example/activities

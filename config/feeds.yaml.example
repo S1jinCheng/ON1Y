@@ -1,0 +1,35 @@
+# Copy to config/feeds.yaml and customize.
+# Docs: docs/RSS.md
+
+feeds:
+  # --- 无需登录的源（适合先测试 RSS 管道）---
+  - url: https://rsshub.app/github/release/microsoft/vscode
+    label: vscode-releases
+    enabled: true
+
+  # --- 视频 / 社媒（RSS 只负责发现 URL；提取要靠 data/cookies/）---
+  # B站 UP 主（将 123456 换成 UP 的 mid）
+  # 推荐: python scripts/sync_bilibili_feeds.py  # 自动拉关注列表
+  # - url: https://rsshub.app/bilibili/user/video/123456
+  #   label: bili-up-example
+  #   enabled: true
+
+  # YouTube 频道（channel_id 从频道页 URL 获取）
+  # - url: https://www.youtube.com/feeds/videos.xml?channel_id=UCxxxxxxxx
+  #   label: youtube-channel
+  #   enabled: true
+
+  # 知乎用户动态 — 推荐先用 scripts/sync_zhihu_feeds.py 生成
+  # - url: http://127.0.0.1:1200/zhihu/people/activities/your-id
+  #   label: zhihu-activities-your-id
+  #   enabled: true
+
+  # 知乎收藏夹
+  # - url: http://127.0.0.1:1200/zhihu/collection/1234567890
+  #   label: zhihu-collection-1234567890
+  #   enabled: false
+
+  # 自建 RSSHub 示例
+  # - url: http://127.0.0.1:1200/github/release/owner/repo
+  #   label: local-rsshub
+  #   enabled: false

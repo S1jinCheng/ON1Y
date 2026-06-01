@@ -1,0 +1,1759 @@
+"""SQLite implementation of StoragePort with schema versioning."""
+
+from __future__ import annotations
+
+import logging
+import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+from on1y.config import PROJECT_ROOT, get_settings
+from on1y.exceptions import StorageError
+from on1y.models.distill import DistilledItem
+from on1y.models.enums import ExtractStatus, PendingStatus, SourceType
+from on1y.models.queue import PendingUrl, QueueEnqueue
+from on1y.models.raw import RawItem, RawItemCreate
+from on1y.models.subtitle_queue import PendingSubtitle
+from on1y.taxonomy.constants import DEFAULT_THEMES, OTHER_THEME_SLUG, slugify_theme_name
+from on1y.utils.author_meta import author_fields_from_meta
+from on1y.utils.published_at import published_at_iso
+from on1y.utils.json_util import dumps_json, dumps_meta, loads_json_list, loads_meta
+
+logger = logging.getLogger(__name__)
+
+SCHEMA_VERSION = 6
+SCHEMA_PATH = PROJECT_ROOT / "sql" / "schema.sql"
+SCHEMA_V2_PATH = PROJECT_ROOT / "sql" / "schema_v2.sql"
+SCHEMA_V3_PATH = PROJECT_ROOT / "sql" / "schema_v3.sql"
+SCHEMA_V4_PATH = PROJECT_ROOT / "sql" / "schema_v4.sql"
+SCHEMA_V5_PATH = PROJECT_ROOT / "sql" / "schema_v5.sql"
+SCHEMA_V6_PATH = PROJECT_ROOT / "sql" / "schema_v6.sql"
+
+
+class SqliteStorage:
+    """Thread-local connections per instance; suitable for single-worker Phase 1."""
+
+    def __init__(self, db_path: Path | None = None) -> None:
+        settings = get_settings()
+        self._db_path = db_path or settings.db_path
+        self._connection: sqlite3.Connection | None = None
+
+    @property
+    def db_path(self) -> Path:
+        return self._db_path
+
+    def initialize(self) -> None:
+        self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        conn = self._connect()
+        if self._current_schema_version(conn) < SCHEMA_VERSION:
+            self._apply_schema(conn)
+        if self._current_schema_version(conn) >= 5:
+            self.seed_default_themes(conn)
+        elif self._current_schema_version(conn) >= 4:
+            self.seed_default_themes_legacy(conn)
+        self._ensure_fts_index(conn)
+        conn.commit()
+
+    def _ensure_fts_index(self, conn: sqlite3.Connection) -> None:
+        if self._current_schema_version(conn) < 6:
+            return
+        from on1y.search.fts import fts_index_count, rebuild_knowledge_fts
+
+        if fts_index_count(conn) == 0:
+            rebuild_knowledge_fts(conn)
+
+    def _touch_search_index(self, conn: sqlite3.Connection, raw_id: int) -> None:
+        if self._current_schema_version(conn) < 6:
+            return
+        from on1y.search.fts import index_raw_item
+
+        index_raw_item(conn, raw_id)
+
+    def _delete_search_index(self, conn: sqlite3.Connection, raw_id: int) -> None:
+        if self._current_schema_version(conn) < 6:
+            return
+        from on1y.search.fts import delete_fts_row
+
+        delete_fts_row(conn, raw_id)
+
+    def _connect(self) -> sqlite3.Connection:
+        if self._connection is None:
+            self._connection = sqlite3.connect(
+                self._db_path,
+                detect_types=sqlite3.PARSE_DECLTYPES,
+                check_same_thread=False,
+            )
+            self._connection.row_factory = sqlite3.Row
+            self._connection.execute("PRAGMA foreign_keys = ON")
+            self._connection.execute("PRAGMA journal_mode = WAL")
+        return self._connection
+
+    @contextmanager
+    def transaction(self) -> Iterator[sqlite3.Connection]:
+        conn = self._connect()
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
+    def _current_schema_version(self, conn: sqlite3.Connection) -> int:
+        try:
+            row = conn.execute(
+                "SELECT MAX(version) AS v FROM schema_migrations"
+            ).fetchone()
+            return int(row["v"]) if row and row["v"] is not None else 0
+        except sqlite3.OperationalError:
+            return 0
+
+    def _apply_schema(self, conn: sqlite3.Connection) -> None:
+        current = self._current_schema_version(conn)
+        if current < 1:
+            if not SCHEMA_PATH.is_file():
+                raise StorageError(f"Schema file not found: {SCHEMA_PATH}")
+            conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+            conn.execute(
+                "INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)",
+                (1,),
+            )
+            logger.info("Applied schema version 1 to %s", self._db_path)
+            current = 1
+        if current < 2:
+            if not SCHEMA_V2_PATH.is_file():
+                raise StorageError(f"Schema file not found: {SCHEMA_V2_PATH}")
+            conn.executescript(SCHEMA_V2_PATH.read_text(encoding="utf-8"))
+            conn.execute(
+                "INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)",
+                (2,),
+            )
+            logger.info("Applied schema version 2 to %s", self._db_path)
+            current = 2
+        if current < 3:
+            if not SCHEMA_V3_PATH.is_file():
+                raise StorageError(f"Schema file not found: {SCHEMA_V3_PATH}")
+            conn.executescript(SCHEMA_V3_PATH.read_text(encoding="utf-8"))
+            conn.execute(
+                "INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)",
+                (3,),
+            )
+            logger.info("Applied schema version 3 to %s", self._db_path)
+            current = 3
+        if current < 4:
+            if not SCHEMA_V4_PATH.is_file():
+                raise StorageError(f"Schema file not found: {SCHEMA_V4_PATH}")
+            conn.executescript(SCHEMA_V4_PATH.read_text(encoding="utf-8"))
+            conn.execute(
+                "INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)",
+                (4,),
+            )
+            logger.info("Applied schema version 4 to %s", self._db_path)
+            current = 4
+        if current < 5:
+            if not SCHEMA_V5_PATH.is_file():
+                raise StorageError(f"Schema file not found: {SCHEMA_V5_PATH}")
+            conn.executescript(SCHEMA_V5_PATH.read_text(encoding="utf-8"))
+            conn.execute(
+                "INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)",
+                (5,),
+            )
+            logger.info("Applied schema version 5 to %s", self._db_path)
+            self.seed_default_themes(conn)
+            current = 5
+        if current < 6:
+            if not SCHEMA_V6_PATH.is_file():
+                raise StorageError(f"Schema file not found: {SCHEMA_V6_PATH}")
+            conn.executescript(SCHEMA_V6_PATH.read_text(encoding="utf-8"))
+            conn.execute(
+                "INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)",
+                (6,),
+            )
+            logger.info("Applied schema version 6 to %s", self._db_path)
+
+    def seed_default_themes_legacy(self, conn: sqlite3.Connection | None = None) -> None:
+        """Seed for schema v4 without description columns."""
+        db = conn or self._connect()
+        for theme in DEFAULT_THEMES:
+            db.execute(
+                """
+                INSERT INTO themes (slug, name_zh, name_en, sort_order)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(slug) DO UPDATE SET
+                    name_zh = excluded.name_zh,
+                    name_en = excluded.name_en,
+                    sort_order = excluded.sort_order
+                """,
+                (theme.slug, theme.name_zh, theme.name_en, theme.sort_order),
+            )
+
+    def seed_default_themes(self, conn: sqlite3.Connection | None = None) -> None:
+        db = conn or self._connect()
+        for theme in DEFAULT_THEMES:
+            db.execute(
+                """
+                INSERT INTO themes (
+                    slug, name_zh, name_en, sort_order,
+                    description_zh, description_en, is_builtin
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(slug) DO UPDATE SET
+                    name_zh = excluded.name_zh,
+                    name_en = excluded.name_en,
+                    sort_order = excluded.sort_order,
+                    description_zh = excluded.description_zh,
+                    description_en = excluded.description_en,
+                    is_builtin = excluded.is_builtin
+                """,
+                (
+                    theme.slug,
+                    theme.name_zh,
+                    theme.name_en,
+                    theme.sort_order,
+                    theme.description_zh,
+                    theme.description_en,
+                    1 if theme.is_builtin else 0,
+                ),
+            )
+
+    def enqueue(self, item: QueueEnqueue) -> int:
+        url = str(item.url)
+        with self.transaction() as conn:
+            conn.execute(
+                """
+                INSERT INTO pending_urls (url, source, source_meta, status)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(url, source) DO UPDATE SET
+                    updated_at = datetime('now'),
+                    source_meta = excluded.source_meta
+                WHERE pending_urls.status IN ('failed', 'pending')
+                """,
+                (url, item.source.value, dumps_meta(item.source_meta), PendingStatus.PENDING.value),
+            )
+            row = conn.execute(
+                "SELECT id FROM pending_urls WHERE url = ? AND source = ?",
+                (url, item.source.value),
+            ).fetchone()
+            if row is None:
+                raise StorageError(f"Failed to enqueue URL: {url}")
+            return int(row["id"])
+
+    def claim_next_pending(self) -> PendingUrl | None:
+        with self.transaction() as conn:
+            row = conn.execute(
+                """
+                SELECT id FROM pending_urls
+                WHERE status = 'pending'
+                ORDER BY created_at ASC
+                LIMIT 1
+                """
+            ).fetchone()
+            if row is None:
+                return None
+            pending_id = int(row["id"])
+            updated = conn.execute(
+                """
+                UPDATE pending_urls
+                SET status = 'processing',
+                    attempts = attempts + 1,
+                    updated_at = datetime('now')
+                WHERE id = ? AND status = 'pending'
+                """,
+                (pending_id,),
+            )
+            if updated.rowcount == 0:
+                return None
+            return self._row_to_pending(
+                conn.execute("SELECT * FROM pending_urls WHERE id = ?", (pending_id,)).fetchone()
+            )
+
+    def claim_next_pending_for_platform(self, platform: str) -> PendingUrl | None:
+        from on1y.utils.platform import pending_url_platform_clause
+
+        clause, params = pending_url_platform_clause(platform)
+        with self.transaction() as conn:
+            row = conn.execute(
+                f"""
+                SELECT id FROM pending_urls
+                WHERE status = 'pending' AND {clause}
+                ORDER BY created_at ASC
+                LIMIT 1
+                """,
+                params,
+            ).fetchone()
+            if row is None:
+                return None
+            pending_id = int(row["id"])
+            updated = conn.execute(
+                """
+                UPDATE pending_urls
+                SET status = 'processing',
+                    attempts = attempts + 1,
+                    updated_at = datetime('now')
+                WHERE id = ? AND status = 'pending'
+                """,
+                (pending_id,),
+            )
+            if updated.rowcount == 0:
+                return None
+            return self._row_to_pending(
+                conn.execute("SELECT * FROM pending_urls WHERE id = ?", (pending_id,)).fetchone()
+            )
+
+    def count_pending_for_platform(self, platform: str, *, status: str = "pending") -> int:
+        from on1y.utils.platform import pending_url_platform_clause
+
+        clause, params = pending_url_platform_clause(platform)
+        conn = self._connect()
+        row = conn.execute(
+            f"SELECT COUNT(*) AS n FROM pending_urls WHERE status = ? AND {clause}",
+            (status, *params),
+        ).fetchone()
+        return int(row["n"]) if row else 0
+
+    def mark_pending_done(self, pending_id: int) -> None:
+        with self.transaction() as conn:
+            conn.execute(
+                """
+                UPDATE pending_urls
+                SET status = 'done', error = NULL, updated_at = datetime('now')
+                WHERE id = ?
+                """,
+                (pending_id,),
+            )
+
+    def mark_pending_failed(self, pending_id: int, error: str, *, retry: bool) -> None:
+        status = PendingStatus.PENDING.value if retry else PendingStatus.FAILED.value
+        with self.transaction() as conn:
+            conn.execute(
+                """
+                UPDATE pending_urls
+                SET status = ?, error = ?, updated_at = datetime('now')
+                WHERE id = ?
+                """,
+                (status, error[:2000], pending_id),
+            )
+
+    def upsert_raw_item(self, item: RawItemCreate) -> RawItem:
+        word_count = len(item.body_text.split()) if item.body_text else 0
+        with self.transaction() as conn:
+            conn.execute(
+                """
+                INSERT INTO raw_items (
+                    url, platform, source, raw_title, body_text,
+                    content_type, extract_status, extract_error,
+                    word_count, source_meta
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(url) DO UPDATE SET
+                    platform = excluded.platform,
+                    source = excluded.source,
+                    raw_title = excluded.raw_title,
+                    body_text = excluded.body_text,
+                    content_type = excluded.content_type,
+                    extract_status = excluded.extract_status,
+                    extract_error = excluded.extract_error,
+                    word_count = excluded.word_count,
+                    source_meta = excluded.source_meta,
+                    updated_at = datetime('now')
+                """,
+                (
+                    item.url,
+                    item.platform,
+                    item.source.value,
+                    item.raw_title,
+                    item.body_text,
+                    item.content_type.value,
+                    item.extract_status.value,
+                    item.extract_error,
+                    word_count,
+                    dumps_meta(item.source_meta),
+                ),
+            )
+            row = conn.execute("SELECT * FROM raw_items WHERE url = ?", (item.url,)).fetchone()
+            if row is None:
+                raise StorageError(f"Failed to upsert raw item: {item.url}")
+            raw = self._row_to_raw(row)
+            self._touch_search_index(conn, raw.id)
+            return raw
+
+    def get_raw_by_url(self, url: str) -> RawItem | None:
+        conn = self._connect()
+        row = conn.execute("SELECT * FROM raw_items WHERE url = ?", (url,)).fetchone()
+        return self._row_to_raw(row) if row else None
+
+    def get_raw_by_id(self, raw_id: int) -> RawItem | None:
+        conn = self._connect()
+        row = conn.execute("SELECT * FROM raw_items WHERE id = ?", (raw_id,)).fetchone()
+        return self._row_to_raw(row) if row else None
+
+    def merge_source_meta(self, raw_id: int, patch: dict[str, Any]) -> None:
+        raw = self.get_raw_by_id(raw_id)
+        if raw is None:
+            raise StorageError(f"raw item not found: {raw_id}")
+        meta = dict(raw.source_meta or {})
+        allow_empty = {"user_note_html", "annotated_body_html"}
+        bool_keys = {"starred"}
+        for key, value in patch.items():
+            if key in bool_keys:
+                meta[key] = bool(value)
+                continue
+            if key in allow_empty:
+                meta[key] = "" if value is None else str(value)
+                continue
+            if value is not None and str(value).strip():
+                meta[key] = value
+        with self.transaction() as conn:
+            conn.execute(
+                "UPDATE raw_items SET source_meta = ?, updated_at = datetime('now') WHERE id = ?",
+                (dumps_meta(meta), raw_id),
+            )
+
+    def list_pending_urls(
+        self,
+        *,
+        status: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[PendingUrl]:
+        conn = self._connect()
+        query = "SELECT * FROM pending_urls WHERE 1=1"
+        params: list[Any] = []
+        if status:
+            query += " AND status = ?"
+            params.append(status)
+        query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+        rows = conn.execute(query, params).fetchall()
+        return [self._row_to_pending(r) for r in rows]
+
+    def count_pending_by_status(self) -> dict[str, int]:
+        conn = self._connect()
+        rows = conn.execute(
+            "SELECT status, COUNT(*) AS c FROM pending_urls GROUP BY status"
+        ).fetchall()
+        counts = {str(r["status"]): int(r["c"]) for r in rows}
+        for key in ("pending", "processing", "done", "failed"):
+            counts.setdefault(key, 0)
+        return counts
+
+    def count_raw_items(self) -> int:
+        conn = self._connect()
+        row = conn.execute("SELECT COUNT(*) AS c FROM raw_items").fetchone()
+        return int(row["c"]) if row else 0
+
+    def count_distilled_items(self) -> int:
+        conn = self._connect()
+        try:
+            row = conn.execute("SELECT COUNT(*) AS c FROM distilled_items").fetchone()
+            return int(row["c"]) if row else 0
+        except sqlite3.OperationalError:
+            return 0
+
+    def url_in_rss_queue(self, url: str) -> bool:
+        from on1y.models.enums import SourceType
+
+        row = self._connect().execute(
+            """
+            SELECT 1 FROM pending_urls
+            WHERE url = ? AND source = ? AND status IN ('done', 'pending', 'processing')
+            LIMIT 1
+            """,
+            (url, SourceType.RSS.value),
+        ).fetchone()
+        return row is not None
+
+    def list_raw_items(
+        self,
+        *,
+        platform: str | None = None,
+        source: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[RawItem]:
+        conn = self._connect()
+        query = "SELECT * FROM raw_items WHERE 1=1"
+        params: list[Any] = []
+        if platform:
+            query += " AND platform = ?"
+            params.append(platform)
+        if source:
+            query += " AND source = ?"
+            params.append(source)
+        query += " ORDER BY ingested_at DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+        rows = conn.execute(query, params).fetchall()
+        return [self._row_to_raw(r) for r in rows]
+
+    def get_rss_feed_state(self, feed_url: str) -> tuple[str | None, str | None]:
+        conn = self._connect()
+        row = conn.execute(
+            "SELECT last_entry_id, last_published FROM rss_feed_state WHERE feed_url = ?",
+            (feed_url,),
+        ).fetchone()
+        if not row:
+            return None, None
+        return row["last_entry_id"], row["last_published"]
+
+    def set_rss_feed_state(
+        self,
+        feed_url: str,
+        *,
+        last_entry_id: str | None,
+        last_published: str | None,
+    ) -> None:
+        with self.transaction() as conn:
+            conn.execute(
+                """
+                INSERT INTO rss_feed_state (feed_url, last_entry_id, last_published)
+                VALUES (?, ?, ?)
+                ON CONFLICT(feed_url) DO UPDATE SET
+                    last_entry_id = excluded.last_entry_id,
+                    last_published = excluded.last_published,
+                    updated_at = datetime('now')
+                """,
+                (feed_url, last_entry_id, last_published),
+            )
+
+    @staticmethod
+    def _parse_dt(value: str | None) -> datetime | None:
+        if not value:
+            return None
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+            try:
+                return datetime.strptime(value, fmt)
+            except ValueError:
+                continue
+        return None
+
+    def _row_to_pending(self, row: sqlite3.Row) -> PendingUrl:
+        return PendingUrl(
+            id=int(row["id"]),
+            url=row["url"],
+            source=SourceType(row["source"]),
+            source_meta=loads_meta(row["source_meta"]),
+            status=PendingStatus(row["status"]),
+            attempts=int(row["attempts"]),
+            error=row["error"],
+            created_at=self._parse_dt(row["created_at"]),
+            updated_at=self._parse_dt(row["updated_at"]),
+        )
+
+    def _row_to_raw(self, row: sqlite3.Row) -> RawItem:
+        from on1y.models.enums import ContentType, ExtractStatus
+
+        return RawItem(
+            id=int(row["id"]),
+            url=row["url"],
+            platform=row["platform"],
+            source=SourceType(row["source"]),
+            raw_title=row["raw_title"],
+            body_text=row["body_text"],
+            content_type=ContentType(row["content_type"]),
+            extract_status=ExtractStatus(row["extract_status"]),
+            extract_error=row["extract_error"],
+            word_count=row["word_count"],
+            source_meta=loads_meta(row["source_meta"]),
+            ingested_at=self._parse_dt(row["ingested_at"]),
+            updated_at=self._parse_dt(row["updated_at"]),
+        )
+
+    def list_raw_ids_without_distill(
+        self, *, limit: int = 20, platform: str | None = None
+    ) -> list[int]:
+        conn = self._connect()
+        platform_clause = ""
+        params: list[object] = []
+        if platform:
+            platform_clause = "AND r.platform = ?"
+            params.append(platform)
+        rows = conn.execute(
+            f"""
+            SELECT r.id FROM raw_items r
+            LEFT JOIN distilled_items d ON d.raw_id = r.id
+            WHERE d.id IS NULL
+              AND r.extract_status IN ('ok', 'partial')
+              AND r.body_text IS NOT NULL
+              AND length(trim(r.body_text)) > 50
+              {platform_clause}
+              AND (
+                r.platform NOT IN ('youtube', 'bilibili')
+                OR json_extract(r.source_meta, '$.subtitle_status') = 'ready'
+              )
+            ORDER BY r.ingested_at DESC
+            LIMIT ?
+            """,
+            (*params, limit),
+        ).fetchall()
+        return [int(r["id"]) for r in rows]
+
+    def _distill_eligibility_sql(self, *, platform: str | None = None) -> tuple[str, list[object]]:
+        platform_clause = ""
+        params: list[object] = []
+        if platform:
+            platform_clause = "AND r.platform = ?"
+            params.append(platform)
+        where = f"""
+            r.extract_status IN ('ok', 'partial')
+              AND r.body_text IS NOT NULL
+              AND length(trim(r.body_text)) > 50
+              {platform_clause}
+              AND (
+                r.platform NOT IN ('youtube', 'bilibili')
+                OR json_extract(r.source_meta, '$.subtitle_status') = 'ready'
+              )
+        """
+        return where, params
+
+    def list_raw_ids_eligible_for_distill(
+        self, *, limit: int = 20, platform: str | None = None
+    ) -> list[int]:
+        where, params = self._distill_eligibility_sql(platform=platform)
+        conn = self._connect()
+        rows = conn.execute(
+            f"""
+            SELECT r.id FROM raw_items r
+            WHERE {where}
+            ORDER BY r.ingested_at DESC
+            LIMIT ?
+            """,
+            (*params, limit),
+        ).fetchall()
+        return [int(r["id"]) for r in rows]
+
+    def list_raw_ids_needing_distill(
+        self,
+        *,
+        prompt_version: str,
+        limit: int = 20,
+        platform: str | None = None,
+    ) -> list[int]:
+        """Undistilled first, then stale prompt_version; skip current version."""
+        where, params = self._distill_eligibility_sql(platform=platform)
+        conn = self._connect()
+        rows = conn.execute(
+            f"""
+            SELECT r.id FROM raw_items r
+            LEFT JOIN distilled_items d ON d.raw_id = r.id
+            WHERE {where}
+              AND (
+                d.id IS NULL
+                OR d.prompt_version IS NULL
+                OR d.prompt_version != ?
+              )
+            ORDER BY (d.id IS NULL) DESC, r.ingested_at DESC
+            LIMIT ?
+            """,
+            (*params, prompt_version, limit),
+        ).fetchall()
+        return [int(r["id"]) for r in rows]
+
+    def count_raw_ids_needing_distill(
+        self, *, prompt_version: str, platform: str | None = None
+    ) -> int:
+        where, params = self._distill_eligibility_sql(platform=platform)
+        conn = self._connect()
+        row = conn.execute(
+            f"""
+            SELECT COUNT(*) AS n FROM raw_items r
+            LEFT JOIN distilled_items d ON d.raw_id = r.id
+            WHERE {where}
+              AND (
+                d.id IS NULL
+                OR d.prompt_version IS NULL
+                OR d.prompt_version != ?
+              )
+            """,
+            (*params, prompt_version),
+        ).fetchone()
+        return int(row["n"]) if row else 0
+
+    def enqueue_subtitle_job(self, raw_id: int, url: str) -> int:
+        with self.transaction() as conn:
+            conn.execute(
+                """
+                INSERT INTO pending_subtitles (raw_id, url, status)
+                VALUES (?, ?, ?)
+                ON CONFLICT(raw_id) DO UPDATE SET
+                    url = excluded.url,
+                    status = 'pending',
+                    error = NULL,
+                    attempts = 0,
+                    updated_at = datetime('now')
+                """,
+                (raw_id, url, PendingStatus.PENDING.value),
+            )
+            row = conn.execute(
+                "SELECT id FROM pending_subtitles WHERE raw_id = ?",
+                (raw_id,),
+            ).fetchone()
+            if row is None:
+                raise StorageError(f"Failed to enqueue subtitle job for raw_id={raw_id}")
+            return int(row["id"])
+
+    def claim_next_pending_subtitle(self, platform: str | None = None) -> PendingSubtitle | None:
+        with self.transaction() as conn:
+            if platform:
+                row = conn.execute(
+                    """
+                    SELECT ps.id FROM pending_subtitles ps
+                    JOIN raw_items r ON r.id = ps.raw_id
+                    WHERE ps.status = 'pending' AND r.platform = ?
+                    ORDER BY ps.created_at ASC
+                    LIMIT 1
+                    """,
+                    (platform,),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    """
+                    SELECT id FROM pending_subtitles
+                    WHERE status = 'pending'
+                    ORDER BY created_at ASC
+                    LIMIT 1
+                    """
+                ).fetchone()
+            if row is None:
+                return None
+            job_id = int(row["id"])
+            updated = conn.execute(
+                """
+                UPDATE pending_subtitles
+                SET status = 'processing',
+                    attempts = attempts + 1,
+                    updated_at = datetime('now')
+                WHERE id = ? AND status = 'pending'
+                """,
+                (job_id,),
+            )
+            if updated.rowcount == 0:
+                return None
+            full = conn.execute(
+                "SELECT * FROM pending_subtitles WHERE id = ?",
+                (job_id,),
+            ).fetchone()
+            return self._row_to_pending_subtitle(full)
+
+    def mark_subtitle_done(self, job_id: int) -> None:
+        with self.transaction() as conn:
+            conn.execute(
+                """
+                UPDATE pending_subtitles
+                SET status = 'done', error = NULL, updated_at = datetime('now')
+                WHERE id = ?
+                """,
+                (job_id,),
+            )
+
+    def mark_subtitle_failed(self, job_id: int, error: str, *, retry: bool) -> None:
+        status = PendingStatus.PENDING.value if retry else PendingStatus.FAILED.value
+        with self.transaction() as conn:
+            conn.execute(
+                """
+                UPDATE pending_subtitles
+                SET status = ?, error = ?, updated_at = datetime('now')
+                WHERE id = ?
+                """,
+                (status, error[:2000], job_id),
+            )
+
+    def count_subtitles_by_status(self) -> dict[str, int]:
+        conn = self._connect()
+        rows = conn.execute(
+            "SELECT status, COUNT(*) AS c FROM pending_subtitles GROUP BY status"
+        ).fetchall()
+        return {str(r["status"]): int(r["c"]) for r in rows}
+
+    def count_pending_subtitles_for_platform(self, platform: str) -> int:
+        conn = self._connect()
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS n
+            FROM pending_subtitles ps
+            JOIN raw_items r ON r.id = ps.raw_id
+            WHERE ps.status = 'pending' AND r.platform = ?
+            """,
+            (platform,),
+        ).fetchone()
+        return int(row["n"]) if row else 0
+
+    def list_video_raw_needing_subtitles(
+        self, platform: str | None = None
+    ) -> list[tuple[int, str]]:
+        """
+        Video rows without subtitle_status=ready and no active subtitle job.
+
+        Platforms: YouTube and Bilibili (optionally filter to one).
+        """
+        conn = self._connect()
+        platform_clause = ""
+        params: tuple[object, ...] = ()
+        if platform:
+            platform_clause = "AND r.platform = ?"
+            params = (platform,)
+        rows = conn.execute(
+            f"""
+            SELECT r.id, r.url FROM raw_items r
+            WHERE r.platform IN ('youtube', 'bilibili')
+              {platform_clause}
+              AND COALESCE(json_extract(r.source_meta, '$.subtitle_status'), '') != 'ready'
+              AND NOT EXISTS (
+                SELECT 1 FROM pending_subtitles ps
+                WHERE ps.raw_id = r.id
+                  AND ps.status IN ('pending', 'processing')
+              )
+            ORDER BY r.id ASC
+            """,
+            params,
+        ).fetchall()
+        return [(int(r["id"]), str(r["url"])) for r in rows]
+
+    def list_youtube_raw_needing_subtitles(self) -> list[tuple[int, str]]:
+        """Backward-compatible alias."""
+        return self.list_video_raw_needing_subtitles()
+
+    def update_raw_item_content(
+        self,
+        raw_id: int,
+        *,
+        body_text: str | None,
+        raw_title: str | None,
+        extract_status: ExtractStatus,
+        extract_error: str | None,
+        source_meta: dict[str, Any],
+    ) -> None:
+        word_count = len(body_text.split()) if body_text else 0
+        with self.transaction() as conn:
+            conn.execute(
+                """
+                UPDATE raw_items SET
+                    body_text = ?,
+                    raw_title = ?,
+                    extract_status = ?,
+                    extract_error = ?,
+                    word_count = ?,
+                    source_meta = ?,
+                    updated_at = datetime('now')
+                WHERE id = ?
+                """,
+                (
+                    body_text,
+                    raw_title,
+                    extract_status.value,
+                    extract_error,
+                    word_count,
+                    dumps_meta(source_meta),
+                    raw_id,
+                ),
+            )
+            self._touch_search_index(conn, raw_id)
+
+    def _row_to_pending_subtitle(self, row: sqlite3.Row | None) -> PendingSubtitle | None:
+        if row is None:
+            return None
+        return PendingSubtitle(
+            id=int(row["id"]),
+            raw_id=int(row["raw_id"]),
+            url=str(row["url"]),
+            status=PendingStatus(row["status"]),
+            attempts=int(row["attempts"]),
+            error=row["error"],
+            created_at=self._parse_dt(row["created_at"]),
+            updated_at=self._parse_dt(row["updated_at"]),
+        )
+
+    def list_raw_urls(self, *, limit: int = 200) -> list[str]:
+        conn = self._connect()
+        rows = conn.execute(
+            "SELECT url FROM raw_items ORDER BY ingested_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [str(r["url"]) for r in rows]
+
+    def get_distilled_by_raw_id(self, raw_id: int) -> Any:
+        conn = self._connect()
+        row = conn.execute(
+            "SELECT * FROM distilled_items WHERE raw_id = ?",
+            (raw_id,),
+        ).fetchone()
+        return self._row_to_distilled(row) if row else None
+
+    def upsert_distilled(
+        self,
+        *,
+        raw_id: int,
+        summary: str | None,
+        key_points: list[str],
+        topics: list[str],
+        model: str | None,
+        prompt_version: str | None,
+        status: str,
+        error: str | None,
+        reader_text: str | None = None,
+    ) -> int:
+        with self.transaction() as conn:
+            conn.execute(
+                """
+                INSERT INTO distilled_items (
+                    raw_id, summary, key_points, topics,
+                    distill_status, distill_error, model, prompt_version, reader_text
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(raw_id) DO UPDATE SET
+                    summary = excluded.summary,
+                    key_points = excluded.key_points,
+                    topics = excluded.topics,
+                    distill_status = excluded.distill_status,
+                    distill_error = excluded.distill_error,
+                    model = excluded.model,
+                    prompt_version = excluded.prompt_version,
+                    reader_text = COALESCE(excluded.reader_text, distilled_items.reader_text),
+                    distilled_at = datetime('now')
+                """,
+                (
+                    raw_id,
+                    summary,
+                    dumps_json(key_points),
+                    dumps_json(topics),
+                    status,
+                    error,
+                    model,
+                    prompt_version,
+                    reader_text,
+                ),
+            )
+            row = conn.execute(
+                "SELECT id FROM distilled_items WHERE raw_id = ?",
+                (raw_id,),
+            ).fetchone()
+            if row is None:
+                raise StorageError(f"Failed to upsert distilled for raw_id={raw_id}")
+            self._touch_search_index(conn, raw_id)
+            return int(row["id"])
+
+    def ensure_tag(self, name: str, *, parent_id: int | None = None) -> int:
+        import re
+
+        name = name.strip()
+        slug = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "-", name.lower()).strip("-") or "tag"
+        with self.transaction() as conn:
+            row = conn.execute("SELECT id FROM tags WHERE name = ?", (name,)).fetchone()
+            if row is not None:
+                if parent_id is not None:
+                    conn.execute(
+                        "UPDATE tags SET parent_id = COALESCE(parent_id, ?) WHERE id = ?",
+                        (parent_id, int(row["id"])),
+                    )
+                return int(row["id"])
+            row = conn.execute("SELECT id FROM tags WHERE slug = ?", (slug,)).fetchone()
+            if row is not None:
+                if parent_id is not None:
+                    conn.execute(
+                        "UPDATE tags SET parent_id = COALESCE(parent_id, ?) WHERE id = ?",
+                        (parent_id, int(row["id"])),
+                    )
+                return int(row["id"])
+            conn.execute(
+                "INSERT INTO tags (name, slug, parent_id) VALUES (?, ?, ?)",
+                (name, slug, parent_id),
+            )
+            row = conn.execute("SELECT id FROM tags WHERE slug = ?", (slug,)).fetchone()
+            if row is None:
+                raise StorageError(f"Failed to ensure tag: {name}")
+            return int(row["id"])
+
+    def clear_item_tags(self, raw_id: int) -> None:
+        with self.transaction() as conn:
+            conn.execute("DELETE FROM item_tags WHERE raw_id = ?", (raw_id,))
+
+    def clear_item_tags_by_source(self, raw_id: int, source: str) -> None:
+        with self.transaction() as conn:
+            conn.execute(
+                "DELETE FROM item_tags WHERE raw_id = ? AND source = ?",
+                (raw_id, source),
+            )
+
+    def link_item_tag(
+        self,
+        raw_id: int,
+        tag_id: int,
+        *,
+        confidence: float | None,
+        source: str = "llm",
+    ) -> None:
+        with self.transaction() as conn:
+            conn.execute(
+                """
+                INSERT INTO item_tags (raw_id, tag_id, confidence, source)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(raw_id, tag_id) DO UPDATE SET
+                    confidence = excluded.confidence
+                """,
+                (raw_id, tag_id, confidence, source),
+            )
+
+    def ensure_flat_tag(self, name: str) -> int:
+        """Dynamic tag — flat mesh, no parent hierarchy."""
+        return self.ensure_tag(name, parent_id=None)
+
+    def clear_item_themes(self, raw_id: int) -> None:
+        with self.transaction() as conn:
+            conn.execute("DELETE FROM item_themes WHERE raw_id = ?", (raw_id,))
+
+    def link_item_theme(
+        self,
+        raw_id: int,
+        theme_id: int,
+        *,
+        confidence: float | None,
+        source: str = "llm",
+    ) -> None:
+        with self.transaction() as conn:
+            conn.execute(
+                """
+                INSERT INTO item_themes (raw_id, theme_id, confidence, source)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(raw_id, theme_id) DO UPDATE SET
+                    confidence = excluded.confidence,
+                    source = excluded.source
+                """,
+                (raw_id, theme_id, confidence, source),
+            )
+
+    def get_theme_id_by_slug(self, slug: str) -> int | None:
+        row = self._connect().execute(
+            "SELECT id FROM themes WHERE slug = ? AND archived_at IS NULL",
+            (slug.strip().lower(),),
+        ).fetchone()
+        return int(row["id"]) if row else None
+
+    def get_theme_by_id(self, theme_id: int) -> dict[str, Any] | None:
+        row = self._connect().execute(
+            "SELECT * FROM themes WHERE id = ?",
+            (theme_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def list_active_themes(self) -> list[dict[str, Any]]:
+        conn = self._connect()
+        rows = conn.execute(
+            """
+            SELECT id, slug, name_zh, name_en, description_zh, description_en,
+                   sort_order, is_builtin
+            FROM themes
+            WHERE archived_at IS NULL
+            ORDER BY sort_order ASC, id ASC
+            """
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def list_themes_with_counts(self, *, include_archived: bool = False) -> list[dict[str, Any]]:
+        conn = self._connect()
+        archived_clause = "" if include_archived else "AND t.archived_at IS NULL"
+        rows = conn.execute(
+            f"""
+            SELECT
+                t.id,
+                t.slug,
+                t.name_zh,
+                t.name_en,
+                t.description_zh,
+                t.description_en,
+                t.sort_order,
+                t.is_builtin,
+                t.archived_at,
+                COUNT(DISTINCT r.id) AS item_count
+            FROM themes t
+            LEFT JOIN raw_items r ON r.theme_id = t.id
+            WHERE 1=1 {archived_clause}
+            GROUP BY t.id, t.slug, t.name_zh, t.name_en, t.description_zh,
+                     t.description_en, t.sort_order, t.is_builtin, t.archived_at
+            ORDER BY t.sort_order ASC, t.id ASC
+            """
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def create_theme(
+        self,
+        *,
+        slug: str,
+        name_zh: str,
+        name_en: str,
+        description_zh: str = "",
+        description_en: str = "",
+        sort_order: int | None = None,
+        is_builtin: bool = False,
+    ) -> dict[str, Any]:
+        normalized_slug = slug.strip().lower() if slug.strip() else slugify_theme_name(name_zh)
+        if not normalized_slug:
+            raise StorageError("theme slug required")
+        conn = self._connect()
+        if sort_order is None:
+            row = conn.execute(
+                "SELECT COALESCE(MAX(sort_order), 0) + 10 AS n FROM themes"
+            ).fetchone()
+            sort_order = int(row["n"]) if row else 10
+        with self.transaction() as tx:
+            tx.execute(
+                """
+                INSERT INTO themes (
+                    slug, name_zh, name_en, sort_order,
+                    description_zh, description_en, is_builtin
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    normalized_slug,
+                    name_zh.strip(),
+                    name_en.strip() or name_zh.strip(),
+                    sort_order,
+                    description_zh.strip(),
+                    description_en.strip(),
+                    1 if is_builtin else 0,
+                ),
+            )
+        created = self.get_theme_id_by_slug(normalized_slug)
+        if created is None:
+            row = conn.execute("SELECT * FROM themes WHERE slug = ?", (normalized_slug,)).fetchone()
+            return dict(row) if row else {}
+        return self.get_theme_by_id(created) or {}
+
+    def update_theme(
+        self,
+        theme_id: int,
+        *,
+        name_zh: str | None = None,
+        name_en: str | None = None,
+        description_zh: str | None = None,
+        description_en: str | None = None,
+        sort_order: int | None = None,
+    ) -> dict[str, Any] | None:
+        fields: list[str] = []
+        params: list[Any] = []
+        if name_zh is not None:
+            fields.append("name_zh = ?")
+            params.append(name_zh.strip())
+        if name_en is not None:
+            fields.append("name_en = ?")
+            params.append(name_en.strip())
+        if description_zh is not None:
+            fields.append("description_zh = ?")
+            params.append(description_zh.strip())
+        if description_en is not None:
+            fields.append("description_en = ?")
+            params.append(description_en.strip())
+        if sort_order is not None:
+            fields.append("sort_order = ?")
+            params.append(sort_order)
+        if not fields:
+            return self.get_theme_by_id(theme_id)
+        fields.append("updated_at = datetime('now')")
+        params.append(theme_id)
+        with self.transaction() as conn:
+            conn.execute(
+                f"UPDATE themes SET {', '.join(fields)} WHERE id = ?",
+                params,
+            )
+        return self.get_theme_by_id(theme_id)
+
+    def archive_theme(self, theme_id: int, *, reassign_to_other: bool = True) -> None:
+        theme = self.get_theme_by_id(theme_id)
+        if theme is None:
+            raise StorageError(f"theme not found: {theme_id}")
+        if int(theme.get("is_builtin") or 0):
+            raise StorageError("cannot archive built-in theme")
+        other_id = self.get_theme_id_by_slug(OTHER_THEME_SLUG)
+        with self.transaction() as conn:
+            if reassign_to_other and other_id is not None:
+                conn.execute(
+                    "UPDATE raw_items SET theme_id = ?, theme_source = 'remap' "
+                    "WHERE theme_id = ?",
+                    (other_id, theme_id),
+                )
+            conn.execute(
+                "UPDATE themes SET archived_at = datetime('now') WHERE id = ?",
+                (theme_id,),
+            )
+
+    def list_raw_ids_by_theme(self, theme_id: int) -> list[int]:
+        rows = self._connect().execute(
+            "SELECT id FROM raw_items WHERE theme_id = ? ORDER BY id ASC",
+            (theme_id,),
+        ).fetchall()
+        return [int(r["id"]) for r in rows]
+
+    def get_raw_theme_source(self, raw_id: int) -> str | None:
+        row = self._connect().execute(
+            "SELECT theme_source FROM raw_items WHERE id = ?",
+            (raw_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return str(row["theme_source"]) if row["theme_source"] else None
+
+    def set_item_theme(self, raw_id: int, theme_id: int, *, source: str = "llm") -> None:
+        with self.transaction() as conn:
+            conn.execute(
+                "UPDATE raw_items SET theme_id = ?, theme_source = ? WHERE id = ?",
+                (theme_id, source, raw_id),
+            )
+            conn.execute("DELETE FROM item_themes WHERE raw_id = ?", (raw_id,))
+            conn.execute(
+                """
+                INSERT INTO item_themes (raw_id, theme_id, confidence, source)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(raw_id, theme_id) DO UPDATE SET source = excluded.source
+                """,
+                (raw_id, theme_id, 1.0, source),
+            )
+
+    def set_item_theme_by_slug(self, raw_id: int, slug: str, *, source: str = "llm") -> None:
+        theme_id = self.get_theme_id_by_slug(slug.strip().lower())
+        if theme_id is None:
+            theme_id = self.get_theme_id_by_slug(OTHER_THEME_SLUG)
+        if theme_id is None:
+            return
+        self.set_item_theme(raw_id, theme_id, source=source)
+
+    def get_item_tag_names(self, raw_id: int) -> list[str]:
+        rows = self._connect().execute(
+            """
+            SELECT t.name FROM item_tags it
+            JOIN tags t ON t.id = it.tag_id
+            WHERE it.raw_id = ?
+            ORDER BY t.name ASC
+            """,
+            (raw_id,),
+        ).fetchall()
+        return [str(r["name"]) for r in rows]
+
+    def merge_llm_tags(self, raw_id: int, tag_names: list[str]) -> None:
+        self.clear_item_tags_by_source(raw_id, "llm")
+        seen: set[str] = set()
+        for name in tag_names:
+            label = name.strip()
+            if not label or label in seen:
+                continue
+            seen.add(label)
+            tag_id = self.ensure_flat_tag(label)
+            self.link_item_tag(raw_id, tag_id, confidence=1.0, source="llm")
+
+    def merge_user_tags(self, raw_id: int, tag_names: list[str]) -> None:
+        seen = set(self.get_item_tag_names(raw_id))
+        for name in tag_names:
+            label = name.strip()
+            if not label or label in seen:
+                continue
+            seen.add(label)
+            tag_id = self.ensure_flat_tag(label)
+            self.link_item_tag(raw_id, tag_id, confidence=1.0, source="user")
+
+    def set_item_classification(
+        self,
+        raw_id: int,
+        *,
+        theme_slug: str | None = None,
+        theme_slugs: list[str] | None = None,
+        tag_names: list[str] | None = None,
+        tags: list[str] | None = None,
+        source: str = "manual",
+    ) -> None:
+        slug = theme_slug
+        if not slug and theme_slugs:
+            slug = theme_slugs[0] if theme_slugs else None
+        if slug:
+            self.set_item_theme_by_slug(raw_id, slug, source=source)
+        names = tag_names if tag_names is not None else (tags or [])
+        if source == "manual":
+            self.clear_item_tags(raw_id)
+            seen: set[str] = set()
+            for name in names:
+                label = name.strip()
+                if not label or label in seen:
+                    continue
+                seen.add(label)
+                tag_id = self.ensure_flat_tag(label)
+                self.link_item_tag(raw_id, tag_id, confidence=1.0, source="user")
+        else:
+            self.merge_llm_tags(raw_id, names)
+        conn = self._connect()
+        self._touch_search_index(conn, raw_id)
+        conn.commit()
+
+    def record_theme_operation(
+        self,
+        *,
+        op_type: str,
+        source_theme_id: int | None,
+        target_theme_ids: list[int],
+        total_items: int,
+        processed_items: int,
+    ) -> int:
+        with self.transaction() as conn:
+            conn.execute(
+                """
+                INSERT INTO theme_operations (
+                    op_type, source_theme_id, target_theme_ids,
+                    status, total_items, processed_items, completed_at
+                ) VALUES (?, ?, ?, 'done', ?, ?, datetime('now'))
+                """,
+                (
+                    op_type,
+                    source_theme_id,
+                    dumps_json(target_theme_ids),
+                    total_items,
+                    processed_items,
+                ),
+            )
+            row = conn.execute("SELECT last_insert_rowid() AS id").fetchone()
+            return int(row["id"]) if row else 0
+
+    def get_reader_content(self, raw_id: int) -> dict[str, Any] | None:
+        conn = self._connect()
+        row = conn.execute(
+            """
+            SELECT r.id, r.url, r.raw_title, r.body_text, r.platform, r.source_meta,
+                   d.summary, d.reader_text
+            FROM raw_items r
+            LEFT JOIN distilled_items d ON d.raw_id = r.id
+            WHERE r.id = ?
+            """,
+            (raw_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        from on1y.utils.transcript_meta import classify_transcript, pick_single_transcript
+
+        meta = loads_meta(row["source_meta"])
+        author_info = author_fields_from_meta(meta)
+        body_text = row["body_text"]
+        prefer = get_settings().content_locale
+        display_body = pick_single_transcript(body_text or "", prefer_lang=prefer)
+        translated_body_text = str(meta.get("translated_body_text") or "").strip() or None
+        transcript_kind = classify_transcript(display_body, prefer_lang=prefer)
+        return {
+            "raw_id": int(row["id"]),
+            "url": str(row["url"]),
+            "title": row["raw_title"],
+            "platform": str(row["platform"]),
+            "body_text": display_body,
+            "raw_body_text": body_text,
+            "summary": row["summary"],
+            "reader_text": row["reader_text"],
+            "user_note_html": str(meta.get("user_note_html") or ""),
+            "annotated_body_html": str(meta.get("annotated_body_html") or ""),
+            "transcript_kind": transcript_kind,
+            "translated_body_text": translated_body_text,
+            "can_translate": transcript_kind == "en" and not translated_body_text,
+            **author_info,
+        }
+
+    def delete_raw_item(self, raw_id: int) -> None:
+        with self.transaction() as conn:
+            self._delete_search_index(conn, raw_id)
+            conn.execute("DELETE FROM item_tags WHERE raw_id = ?", (raw_id,))
+            conn.execute("DELETE FROM item_themes WHERE raw_id = ?", (raw_id,))
+            conn.execute("DELETE FROM distilled_items WHERE raw_id = ?", (raw_id,))
+            conn.execute(
+                "DELETE FROM item_relations WHERE from_raw_id = ? OR to_raw_id = ?",
+                (raw_id, raw_id),
+            )
+            conn.execute("DELETE FROM raw_items WHERE id = ?", (raw_id,))
+
+    def list_dynamic_tags_with_counts(self, *, limit: int = 200) -> list[dict[str, Any]]:
+        conn = self._connect()
+        rows = conn.execute(
+            """
+            SELECT
+                t.id,
+                t.name,
+                t.slug,
+                COUNT(DISTINCT it.raw_id) AS item_count
+            FROM tags t
+            INNER JOIN item_tags it ON it.tag_id = t.id
+            GROUP BY t.id, t.name, t.slug
+            ORDER BY item_count DESC, t.name ASC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def clear_relations_from(self, raw_id: int) -> None:
+        with self.transaction() as conn:
+            conn.execute(
+                "DELETE FROM item_relations WHERE from_raw_id = ? AND source = 'llm'",
+                (raw_id,),
+            )
+
+    def add_relation(
+        self,
+        *,
+        from_raw_id: int,
+        to_raw_id: int,
+        relation_type: str,
+        note: str | None,
+        confidence: float | None,
+        source: str = "llm",
+    ) -> None:
+        with self.transaction() as conn:
+            conn.execute(
+                """
+                INSERT INTO item_relations (
+                    from_raw_id, to_raw_id, relation_type, note, confidence, source
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(from_raw_id, to_raw_id, relation_type) DO UPDATE SET
+                    note = excluded.note,
+                    confidence = excluded.confidence
+                """,
+                (from_raw_id, to_raw_id, relation_type, note, confidence, source),
+            )
+
+    def list_distilled_summary(
+        self,
+        *,
+        limit: int = 30,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        conn = self._connect()
+        rows = conn.execute(
+            """
+            SELECT d.id, d.raw_id, d.summary, d.distill_status, d.distilled_at,
+                   r.url, r.raw_title, r.platform
+            FROM distilled_items d
+            JOIN raw_items r ON r.id = d.raw_id
+            ORDER BY d.distilled_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            (limit, offset),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def list_tags_with_counts(self) -> list[dict[str, Any]]:
+        conn = self._connect()
+        rows = conn.execute(
+            """
+            SELECT
+                t.id,
+                t.name,
+                t.slug,
+                t.parent_id,
+                COUNT(DISTINCT it.raw_id) AS item_count
+            FROM tags t
+            LEFT JOIN item_tags it ON it.tag_id = t.id
+            GROUP BY t.id, t.name, t.slug, t.parent_id
+            ORDER BY t.name ASC
+            """
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def search_knowledge_items(
+        self,
+        *,
+        query: str,
+        limit: int = 40,
+        offset: int = 0,
+        platform: str | None = None,
+        source: str | None = None,
+        tag_ids: list[int] | None = None,
+        theme_id: int | None = None,
+    ) -> dict[str, Any]:
+        """BM25-ranked full-text search with snippets."""
+        from on1y.search.fts import search_knowledge_fts
+
+        conn = self._connect()
+        if self._current_schema_version(conn) < 6:
+            items = self.list_knowledge_items(
+                limit=limit,
+                offset=offset,
+                platform=platform,
+                source=source,
+                query=query,
+                tag_ids=tag_ids,
+                theme_id=theme_id,
+            )
+            return {"items": items, "total": len(items), "engine": "like"}
+
+        hits, total = search_knowledge_fts(
+            conn,
+            user_query=query,
+            limit=limit,
+            offset=offset,
+            platform=platform,
+            source=source,
+            theme_id=theme_id,
+            tag_ids=tag_ids,
+        )
+        if not hits:
+            return {"items": [], "total": 0, "engine": "fts5"}
+
+        raw_ids = [int(h["raw_id"]) for h in hits]
+        placeholders = ",".join("?" for _ in raw_ids)
+        rows = conn.execute(
+            f"""
+            SELECT
+                r.id AS raw_id,
+                r.url,
+                r.raw_title,
+                r.platform,
+                r.source,
+                r.ingested_at,
+                r.source_meta,
+                r.theme_id,
+                d.summary,
+                d.topics,
+                d.prompt_version,
+                d.distill_status
+            FROM raw_items r
+            LEFT JOIN distilled_items d ON d.raw_id = r.id
+            WHERE r.id IN ({placeholders})
+            """,
+            raw_ids,
+        ).fetchall()
+        row_by_id = {int(r["raw_id"]): r for r in rows}
+        ordered_rows = [row_by_id[rid] for rid in raw_ids if rid in row_by_id]
+        items = self._assemble_knowledge_items(ordered_rows)
+        hit_map = {int(h["raw_id"]): h for h in hits}
+        for item in items:
+            hit = hit_map.get(int(item["raw_id"]))
+            if not hit:
+                continue
+            item["search_rank"] = hit.get("search_rank")
+            item["search_snippet"] = hit.get("search_snippet")
+            item["search_title_html"] = hit.get("search_title_html")
+            item["search_summary_html"] = hit.get("search_summary_html")
+        return {"items": items, "total": total, "engine": "fts5"}
+
+    def list_knowledge_items(
+        self,
+        *,
+        limit: int = 30,
+        offset: int = 0,
+        platform: str | None = None,
+        source: str | None = None,
+        query: str | None = None,
+        tag_ids: list[int] | None = None,
+        theme_id: int | None = None,
+    ) -> list[dict[str, Any]]:
+        conn = self._connect()
+        if query and query.strip() and self._current_schema_version(conn) >= 6:
+            result = self.search_knowledge_items(
+                query=query,
+                limit=limit,
+                offset=offset,
+                platform=platform,
+                source=source,
+                tag_ids=tag_ids,
+                theme_id=theme_id,
+            )
+            return result["items"]
+
+        where_parts: list[str] = []
+        params: list[Any] = []
+        if platform:
+            where_parts.append("r.platform = ?")
+            params.append(platform)
+        if source:
+            where_parts.append("r.source = ?")
+            params.append(source)
+        if query and query.strip() and self._current_schema_version(conn) < 6:
+            where_parts.append(
+                "("
+                "COALESCE(r.raw_title, '') LIKE ? "
+                "OR COALESCE(d.summary, '') LIKE ? "
+                "OR COALESCE(r.body_text, '') LIKE ?"
+                ")"
+            )
+            like = f"%{query.strip()}%"
+            params.extend([like, like, like])
+        if tag_ids:
+            placeholders = ",".join("?" for _ in tag_ids)
+            where_parts.append(
+                "EXISTS ("
+                "SELECT 1 FROM item_tags itf "
+                f"WHERE itf.raw_id = r.id AND itf.tag_id IN ({placeholders})"
+                ")"
+            )
+            params.extend(tag_ids)
+        if theme_id is not None:
+            where_parts.append("r.theme_id = ?")
+            params.append(theme_id)
+        where_sql = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
+        rows = conn.execute(
+            f"""
+            SELECT
+                r.id AS raw_id,
+                r.url,
+                r.raw_title,
+                r.platform,
+                r.source,
+                r.ingested_at,
+                r.source_meta,
+                r.theme_id,
+                d.summary,
+                d.topics,
+                d.prompt_version,
+                d.distill_status
+            FROM raw_items r
+            LEFT JOIN distilled_items d ON d.raw_id = r.id
+            {where_sql}
+            ORDER BY COALESCE(d.distilled_at, r.ingested_at) DESC
+            LIMIT ? OFFSET ?
+            """,
+            (*params, limit, offset),
+        ).fetchall()
+        return self._assemble_knowledge_items(rows)
+
+    def _assemble_knowledge_items(self, rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
+        conn = self._connect()
+        item_ids = [int(r["raw_id"]) for r in rows]
+        if not item_ids:
+            return []
+        placeholders = ",".join("?" for _ in item_ids)
+        tag_rows = conn.execute(
+            f"""
+            SELECT it.raw_id, t.id, t.name, t.slug
+            FROM item_tags it
+            JOIN tags t ON t.id = it.tag_id
+            WHERE it.raw_id IN ({placeholders})
+            ORDER BY t.name ASC
+            """,
+            item_ids,
+        ).fetchall()
+        theme_ids = {int(r["theme_id"]) for r in rows if r["theme_id"] is not None}
+        theme_map: dict[int, dict[str, Any]] = {}
+        if theme_ids:
+            th_placeholders = ",".join("?" for _ in theme_ids)
+            theme_rows = conn.execute(
+                f"""
+                SELECT id, slug, name_zh, name_en
+                FROM themes
+                WHERE id IN ({th_placeholders})
+                """,
+                list(theme_ids),
+            ).fetchall()
+            for row in theme_rows:
+                theme_map[int(row["id"])] = {
+                    "id": int(row["id"]),
+                    "slug": str(row["slug"]),
+                    "name_zh": str(row["name_zh"]),
+                    "name_en": str(row["name_en"]),
+                }
+        tags_by_raw: dict[int, list[dict[str, Any]]] = {raw_id: [] for raw_id in item_ids}
+        for row in tag_rows:
+            raw_id = int(row["raw_id"])
+            tags_by_raw.setdefault(raw_id, []).append(
+                {
+                    "id": int(row["id"]),
+                    "name": str(row["name"]),
+                    "slug": str(row["slug"]),
+                }
+            )
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            raw_id = int(row["raw_id"])
+            meta = loads_meta(row["source_meta"])
+            author_info = author_fields_from_meta(meta)
+            starred = bool(meta.get("starred"))
+            topics = loads_json_list(row["topics"])
+            tid = row["theme_id"]
+            theme_obj = theme_map.get(int(tid)) if tid is not None else None
+            themes_list = [theme_obj] if theme_obj else []
+            items.append(
+                {
+                    "raw_id": raw_id,
+                    "url": str(row["url"]),
+                    "title": row["raw_title"],
+                    "platform": str(row["platform"]),
+                    "source": str(row["source"]),
+                    "ingested_at": row["ingested_at"],
+                    "published_at": published_at_iso(meta),
+                    "feed_label": str(meta.get("feed_label") or "").strip() or None,
+                    "hot_rank": meta.get("hot_rank"),
+                    "heat_text": str(meta.get("heat_text") or "").strip() or None,
+                    "summary": row["summary"] or meta.get("entry_excerpt"),
+                    "topics": topics if isinstance(topics, list) else [],
+                    "prompt_version": row["prompt_version"],
+                    "distill_status": row["distill_status"],
+                    **author_info,
+                    "theme_id": int(tid) if tid is not None else None,
+                    "theme": theme_obj,
+                    "tags": tags_by_raw.get(raw_id, []),
+                    "themes": themes_list,
+                    "starred": starred,
+                }
+            )
+        return items
+
+    def get_distilled_detail(self, raw_id: int) -> dict[str, Any] | None:
+        conn = self._connect()
+        drow = conn.execute(
+            "SELECT * FROM distilled_items WHERE raw_id = ?",
+            (raw_id,),
+        ).fetchone()
+        if not drow:
+            return None
+        raw = conn.execute("SELECT * FROM raw_items WHERE id = ?", (raw_id,)).fetchone()
+        tags = conn.execute(
+            """
+            SELECT t.id, t.name, t.slug, it.confidence
+            FROM item_tags it
+            JOIN tags t ON t.id = it.tag_id
+            WHERE it.raw_id = ?
+            ORDER BY t.name ASC
+            """,
+            (raw_id,),
+        ).fetchall()
+        themes = conn.execute(
+            """
+            SELECT th.id, th.slug, th.name_zh, th.name_en, ith.confidence
+            FROM item_themes ith
+            JOIN themes th ON th.id = ith.theme_id
+            WHERE ith.raw_id = ?
+            ORDER BY th.sort_order ASC
+            """,
+            (raw_id,),
+        ).fetchall()
+        rels = conn.execute(
+            """
+            SELECT ir.*, r.url AS to_url, r.raw_title AS to_title
+            FROM item_relations ir
+            JOIN raw_items r ON r.id = ir.to_raw_id
+            WHERE ir.from_raw_id = ?
+            """,
+            (raw_id,),
+        ).fetchall()
+        distilled = self._row_to_distilled(drow)
+        return {
+            "distilled": distilled.model_dump(),
+            "raw": dict(raw) if raw else None,
+            "tags": [dict(t) for t in tags],
+            "themes": [dict(t) for t in themes],
+            "relations": [dict(r) for r in rels],
+        }
+
+    def _row_to_distilled(self, row: sqlite3.Row) -> DistilledItem:
+        kp = loads_json_list(row["key_points"])
+        tp = loads_json_list(row["topics"])
+        return DistilledItem(
+            id=int(row["id"]),
+            raw_id=int(row["raw_id"]),
+            summary=row["summary"],
+            key_points=kp if isinstance(kp, list) else [],
+            topics=tp if isinstance(tp, list) else [],
+            distill_status=row["distill_status"],
+            distill_error=row["distill_error"],
+            model=row["model"],
+            prompt_version=row["prompt_version"],
+            distilled_at=self._parse_dt(row["distilled_at"]),
+        )
+
+    def close(self) -> None:
+        if self._connection is not None:
+            self._connection.close()
+            self._connection = None
+
+
+def get_storage() -> SqliteStorage:
+    storage = SqliteStorage()
+    storage.initialize()
+    return storage
