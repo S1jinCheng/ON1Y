@@ -54,6 +54,8 @@ class SubscriptionSyncRequest(BaseModel):
     ingest_limit: int = Field(default=10, ge=1, le=50)
     subtitle_limit: int = Field(default=10, ge=0, le=50)
     distill_limit: int = Field(default=10, ge=0, le=50)
+    refresh_feeds: bool = False
+    sync_hotlist: bool = False
 
 
 class DistillBackfillRequest(BaseModel):
@@ -408,7 +410,8 @@ def create_app() -> FastAPI:
         from on1y.config import get_settings
         from on1y.subscriptions.sync_job import start_subscription_sync_job
 
-        if body.platform not in {"bilibili", "zhihu", "all"}:
+        allowed = {"bilibili", "youtube", "zhihu", "all"}
+        if body.platform not in allowed:
             raise HTTPException(status_code=400, detail=f"unsupported platform: {body.platform}")
 
         settings = get_settings()
@@ -425,6 +428,8 @@ def create_app() -> FastAPI:
             ingest_limit=body.ingest_limit,
             subtitle_limit=body.subtitle_limit,
             distill_limit=body.distill_limit,
+            sync_hotlist=body.sync_hotlist,
+            refresh_feeds=body.refresh_feeds or None,
         )
 
     @app.post("/api/hotlist/sync")
@@ -953,8 +958,11 @@ def create_app() -> FastAPI:
 def run_server(*, host: str | None = None, port: int | None = None) -> None:
     import uvicorn
 
+    from on1y.subscriptions.auto_sync import start_auto_sync_loop
+
     settings = get_settings()
     settings.ensure_data_dir()
+    start_auto_sync_loop()
     uvicorn.run(
         create_app(),
         host=host or settings.web_host,

@@ -118,7 +118,19 @@ class Settings(BaseSettings):
     require_login_cookies: bool = Field(default=True)
 
     rss_config_path: Path = Field(default=PROJECT_ROOT / "config" / "feeds.yaml")
+    # Used by serve background auto-sync when auto_sync_enabled=true
     rss_poll_interval_minutes: int = Field(default=30, ge=1)
+    auto_sync_enabled: bool = Field(default=False)
+    auto_sync_interval_minutes: int = Field(default=30, ge=5, le=24 * 60)
+    auto_sync_platform: str = Field(default="all", pattern="^(bilibili|youtube|zhihu|all)$")
+    auto_sync_ingest: bool = Field(default=True)
+    auto_sync_ingest_limit: int = Field(default=10, ge=1, le=50)
+    auto_sync_subtitle_limit: int = Field(default=10, ge=0, le=50)
+    auto_sync_distill_limit: int = Field(default=10, ge=0, le=50)
+    # Optional: refresh feeds.yaml from platform lists before RSS poll
+    youtube_auto_refresh_channels: bool = Field(default=False)
+    youtube_refresh_max_channels: int = Field(default=50, ge=1, le=500)
+    zhihu_auto_refresh_follows: bool = Field(default=False)
 
     log_level: str = Field(default="INFO")
 

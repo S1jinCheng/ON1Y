@@ -254,6 +254,8 @@ export function runSubscriptionSync(payload?: {
   ingest_limit?: number;
   subtitle_limit?: number;
   distill_limit?: number;
+  refresh_feeds?: boolean;
+  sync_hotlist?: boolean;
 }): Promise<{
   started: boolean;
   running?: boolean;
@@ -278,6 +280,8 @@ export type SubscriptionSyncStatus = {
         rate_limited?: number;
       };
     };
+    youtube?: { poll?: { enqueued?: number; skipped_before_since?: number } };
+    zhihu?: { poll?: { enqueued?: number; skipped_before_since?: number } };
     enrich?: {
       distill?: {
         distilled?: number;

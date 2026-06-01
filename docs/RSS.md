@@ -74,7 +74,30 @@ on1y list --source rss
 on1y rss reset vscode-releases
 ```
 
-## 3. 定时自动跑（cron）
+## 3. 与 `on1y subscriptions` 的关系
+
+| 平台 | 推荐命令 |
+|------|----------|
+| B 站 UP | `on1y subscriptions --platform bilibili`（API 动态流，非 RSS） |
+| YouTube | 先 `python scripts/sync_youtube_feeds.py` 写入 `yt-*`，再 `on1y subscriptions --platform youtube` |
+| 知乎关注 | 先 `on1y bootstrap --sync-zhihu-follows`，再 `on1y subscriptions --platform zhihu` |
+| 全部 | `on1y subscriptions --platform all --ingest` |
+
+`data/subscription_settings.json` 中的 `youtube_sync_since` / `zhihu_sync_since` 会在 RSS poll 时按条目发布时间过滤。
+
+知乎热榜请用 `on1y hotlist sync`，不要与 `--platform zhihu` 混淆。
+
+## 4. 定时自动跑（cron / Windows）
+
+**方式 A**：`on1y serve` + `.env`：
+
+```env
+ON1Y_AUTO_SYNC_ENABLED=true
+ON1Y_AUTO_SYNC_INTERVAL_MINUTES=30
+ON1Y_AUTO_SYNC_PLATFORM=all
+```
+
+**方式 B**：系统计划任务 / cron
 
 每 30 分钟拉一次订阅，并处理最多 5 条新 URL：
 

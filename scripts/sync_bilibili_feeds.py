@@ -21,7 +21,7 @@ def main() -> int:
     parser.add_argument(
         "--poll-only",
         action="store_true",
-        help="Only poll followed UPs for new videos (skip feeds.yaml merge)",
+        help="Only poll for new videos (respects ON1Y_BILIBILI_UP_POLL_MODE)",
     )
     parser.add_argument(
         "--backfill",
@@ -34,10 +34,7 @@ def main() -> int:
 
     from on1y.adapters.sqlite_storage import get_storage
     from on1y.config import get_settings
-    from on1y.ingestion.bilibili_subscriptions import (
-        poll_bilibili_up_updates,
-        sync_bilibili_up_config,
-    )
+    from on1y.ingestion.bilibili_subscriptions import sync_bilibili_up_config
     from on1y.subscriptions import sync_subscriptions
 
     settings = get_settings()
@@ -63,12 +60,6 @@ def main() -> int:
     try:
         if args.config_only:
             report = sync_bilibili_up_config(settings=settings, enabled=not args.disabled)
-        elif args.poll_only:
-            report = poll_bilibili_up_updates(
-                storage,
-                settings=settings,
-                backfill=args.backfill,
-            )
         else:
             report = sync_subscriptions(
                 storage,
@@ -77,6 +68,8 @@ def main() -> int:
                 poll=poll,
                 backfill=args.backfill,
             )
+            if isinstance(report, dict) and "bilibili" in report:
+                report = report["bilibili"]
     finally:
         storage.close()
 

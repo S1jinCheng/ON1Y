@@ -101,6 +101,10 @@ def public_settings_view() -> dict[str, Any]:
         "platforms": list(PLATFORMS),
         "bilibili_up_sync_enabled": settings.bilibili_up_sync_enabled,
         "bilibili_up_poll_mode": settings.bilibili_up_poll_mode,
+        "auto_sync_enabled": settings.auto_sync_enabled,
+        "auto_sync_interval_minutes": settings.auto_sync_interval_minutes,
+        "youtube_auto_refresh_channels": settings.youtube_auto_refresh_channels,
+        "zhihu_auto_refresh_follows": settings.zhihu_auto_refresh_follows,
     }
 
 

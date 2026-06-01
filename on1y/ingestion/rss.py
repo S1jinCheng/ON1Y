@@ -83,16 +83,29 @@ def parse_feed(feed: FeedConfig) -> Any:
         return feedparser.parse(feed.url, agent=USER_AGENT)
 
 
-def poll_rss_feeds(storage: StoragePort, config_path: Path | None = None) -> int:
+def poll_rss_feeds(
+    storage: StoragePort,
+    config_path: Path | None = None,
+    *,
+    label: str | None = None,
+    label_prefix: str | None = None,
+    sync_since_ts: int | None = None,
+    skip_no_feeds: bool = False,
+) -> int:
     """
-    Poll all enabled feeds and enqueue new entries.
+    Poll enabled feeds and enqueue new entries.
     Returns count of newly enqueued URLs.
     """
-    feeds = _select_feeds(config_path)
+    try:
+        feeds = _select_feeds(config_path, label=label, label_prefix=label_prefix)
+    except ConfigurationError:
+        if skip_no_feeds:
+            return 0
+        raise
     total_new = 0
     for feed in feeds:
         try:
-            new_count = _poll_single_feed(storage, feed)
+            new_count, _ = _poll_single_feed(storage, feed, sync_since_ts=sync_since_ts)
             total_new += new_count
             logger.info("Feed %s: enqueued %s new item(s)", feed.label, new_count)
         except Exception as exc:
@@ -109,21 +122,29 @@ def poll_rss_feeds_backfill(
     label_prefix: str | None = None,
     max_items_per_feed: int = 100,
     skip_existing: bool = True,
+    sync_since_ts: int | None = None,
+    skip_no_feeds: bool = False,
 ) -> int:
     """
     Cold-start: enqueue up to `max_items_per_feed` entries from each matching feed.
     Skips URLs already stored or successfully processed in the queue.
     Sets the feed cursor to the newest entry when done.
     """
-    feeds = _select_feeds(config_path, label=label, label_prefix=label_prefix)
+    try:
+        feeds = _select_feeds(config_path, label=label, label_prefix=label_prefix)
+    except ConfigurationError:
+        if skip_no_feeds:
+            return 0
+        raise
     total_new = 0
     for feed in feeds:
         try:
-            new_count = _backfill_single_feed(
+            new_count, _ = _backfill_single_feed(
                 storage,
                 feed,
                 max_items=max_items_per_feed,
                 skip_existing=skip_existing,
+                sync_since_ts=sync_since_ts,
             )
             total_new += new_count
             logger.info("Feed %s backfill: enqueued %s item(s)", feed.label, new_count)
@@ -179,7 +200,12 @@ def reset_feed_cursor(
     return False
 
 
-def _poll_single_feed(storage: StoragePort, feed: FeedConfig) -> int:
+def _poll_single_feed(
+    storage: StoragePort,
+    feed: FeedConfig,
+    *,
+    sync_since_ts: int | None = None,
+) -> tuple[int, int]:
     parsed = parse_feed(feed)
     if parsed.bozo and not parsed.entries:
         raise ConfigurationError(f"Feed parse error for {feed.url}: {parsed.bozo_exception}")
@@ -187,20 +213,35 @@ def _poll_single_feed(storage: StoragePort, feed: FeedConfig) -> int:
     last_id, last_published = storage.get_rss_feed_state(feed.url)
 
     if last_id is None and last_published is None:
-        return poll_rss_feeds_initial(storage, feed, parsed=parsed)
+        if sync_since_ts is not None:
+            settings = get_settings()
+            return _backfill_single_feed(
+                storage,
+                feed,
+                max_items=settings.rss_backfill_max_items_per_feed,
+                skip_existing=True,
+                sync_since_ts=sync_since_ts,
+                parsed=parsed,
+            )
+        enqueued = poll_rss_feeds_initial(storage, feed, parsed=parsed)
+        return enqueued, 0
 
     new_entries: list[Any] = []
+    skipped_before_since = 0
 
     for entry in parsed.entries:
         entry_id = entry.get("id") or entry.get("link")
         if not entry_id:
             continue
         published = _entry_published(entry)
+        if _is_before_since(published, sync_since_ts):
+            skipped_before_since += 1
+            continue
         if _is_newer(entry_id, published, last_id, last_published):
             new_entries.append(entry)
 
     if not new_entries:
-        return 0
+        return 0, skipped_before_since
 
     new_entries.reverse()
     enqueued = 0
@@ -233,7 +274,7 @@ def _poll_single_feed(storage: StoragePort, feed: FeedConfig) -> int:
             last_published=newest_pub,
         )
 
-    return enqueued
+    return enqueued, skipped_before_since
 
 
 def _entry_published(entry: Any) -> str | None:
@@ -271,23 +312,35 @@ def _parse_feed_date(value: str) -> datetime | None:
         return None
 
 
+def _is_before_since(published: str | None, sync_since_ts: int | None) -> bool:
+    if sync_since_ts is None or not published:
+        return False
+    pub_dt = _parse_feed_date(published)
+    if pub_dt is None:
+        return False
+    return int(pub_dt.timestamp()) < sync_since_ts
+
+
 def _backfill_single_feed(
     storage: StoragePort,
     feed: FeedConfig,
     *,
     max_items: int,
     skip_existing: bool,
-) -> int:
-    parsed = parse_feed(feed)
+    sync_since_ts: int | None = None,
+    parsed: Any | None = None,
+) -> tuple[int, int]:
+    parsed = parsed or parse_feed(feed)
     if parsed.bozo and not parsed.entries:
         raise ConfigurationError(f"Feed parse error for {feed.url}: {parsed.bozo_exception}")
 
     entries = list(parsed.entries[:max_items])
     if not entries:
-        return 0
+        return 0, 0
 
     entries.reverse()
     enqueued = 0
+    skipped_before_since = 0
     newest_id: str | None = None
     newest_pub: str | None = None
 
@@ -297,6 +350,9 @@ def _backfill_single_feed(
             continue
         entry_id = entry.get("id") or link
         published = _entry_published(entry)
+        if _is_before_since(published, sync_since_ts):
+            skipped_before_since += 1
+            continue
         if skip_existing and _should_skip_backfill_url(storage, link):
             continue
         meta = {
@@ -319,7 +375,7 @@ def _backfill_single_feed(
             last_entry_id=newest_id,
             last_published=newest_pub,
         )
-    return enqueued
+    return enqueued, skipped_before_since
 
 
 def _should_skip_backfill_url(storage: StoragePort, url: str) -> bool:

@@ -203,23 +203,26 @@ def _cmd_subscriptions(args: argparse.Namespace) -> int:
             backfill=args.backfill,
             dry_run=args.dry_run,
             sync_since_ts=sync_since_ts,
+            sync_hotlist=args.sync_hotlist,
+            refresh_feeds=args.refresh_feeds or None,
         )
         if args.ingest and not args.dry_run and not args.config_only:
-            from on1y.pipeline.video_enrich import run_video_enrich_pipeline
+            if args.platform in {"bilibili", "all"}:
+                from on1y.pipeline.video_enrich import run_video_enrich_pipeline
 
-            plat = "bilibili" if args.platform in {"bilibili", "all"} else None
-            if plat:
                 report["enrich"] = run_video_enrich_pipeline(
                     storage,
-                    platform=plat,
+                    platform="bilibili",
                     ingest_limit=args.ingest_limit,
                     subtitle_limit=args.subtitle_limit,
                     distill_limit=args.distill_limit,
                 )
-            else:
+            if args.platform in {"youtube", "zhihu", "all"}:
                 from on1y.pipeline.worker import run_worker_batch
 
-                report["ingest"] = run_worker_batch(storage, args.ingest_limit, close_storage=False)
+                report["worker"] = run_worker_batch(
+                    storage, args.ingest_limit, close_storage=False
+                )
     finally:
         storage.close()
     print(json.dumps(report, ensure_ascii=False, indent=2))
@@ -536,12 +539,28 @@ def build_parser() -> argparse.ArgumentParser:
     p_boot.add_argument("--pause", type=float, default=1.0, help="YouTube catchup pause between rounds")
     p_boot.set_defaults(func=_cmd_bootstrap)
 
-    p_subs = sub.add_parser("subscriptions", help="Sync platform subscriptions (Bilibili UP first)")
+    p_subs = sub.add_parser(
+        "subscriptions",
+        help="Sync subscriptions: bilibili (API), youtube/zhihu (RSS), all",
+    )
     p_subs.add_argument(
         "--platform",
-        choices=["bilibili", "zhihu", "all"],
+        choices=["bilibili", "youtube", "zhihu", "all"],
         default="bilibili",
-        help="Platform to sync (default: bilibili)",
+        help=(
+            "bilibili=dynamic UP feed; youtube/zhihu=RSS feeds (yt-/zhihu-); "
+            "zhihu does not include hotlist (use: on1y hotlist sync); all=bilibili+youtube+zhihu RSS"
+        ),
+    )
+    p_subs.add_argument(
+        "--refresh-feeds",
+        action="store_true",
+        help="Refresh feeds.yaml from YouTube/Zhihu follow lists before RSS poll",
+    )
+    p_subs.add_argument(
+        "--sync-hotlist",
+        action="store_true",
+        help="Also sync Zhihu hotlist (off by default for --platform zhihu)",
     )
     p_subs.add_argument(
         "--config-only",

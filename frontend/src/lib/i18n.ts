@@ -99,6 +99,14 @@ const UI = {
     bilibiliDistillFailed: "失败",
     bilibiliDistillAlreadyRunning: "摘要任务进行中",
     bilibiliSyncHint: "仅拉取「视频投稿」动态（type=video），自动跳过图文、专栏和广告。",
+    platformYoutube: "YouTube",
+    platformZhihu: "知乎关注",
+    youtubeSyncHint: "通过 feeds.yaml 中 yt-* RSS 源拉取；需先用脚本或 bootstrap 写入频道列表。",
+    zhihuSyncHint: "通过 feeds.yaml 中 zhihu-* RSS 源拉取关注动态；热榜请用下方按钮单独同步。",
+    syncBackfill: "补历史（backfill）",
+    syncBackfillHint: "勾选后会多拉取近期条目；配合起始日期可只补该日期之后的内容。",
+    syncPlatformNow: "同步此平台",
+    syncAllNow: "全部同步",
     searchResults: "共 {n} 条匹配"
   },
   en: {
@@ -199,6 +207,14 @@ const UI = {
     bilibiliDistillFailed: "failed",
     bilibiliDistillAlreadyRunning: "Summary job already running",
     bilibiliSyncHint: "Video uploads only (type=video); image posts, articles, and ads are skipped.",
+    platformYoutube: "YouTube",
+    platformZhihu: "Zhihu follows",
+    youtubeSyncHint: "Polls yt-* RSS feeds in feeds.yaml; run sync_youtube_feeds or bootstrap first.",
+    zhihuSyncHint: "Polls zhihu-* RSS feeds; use the hotlist button below for daily hot list.",
+    syncBackfill: "Backfill history",
+    syncBackfillHint: "Fetch more recent entries; combine with start date to limit the window.",
+    syncPlatformNow: "Sync this platform",
+    syncAllNow: "Sync all",
     searchResults: "{n} matches"
   }
 } as const;
