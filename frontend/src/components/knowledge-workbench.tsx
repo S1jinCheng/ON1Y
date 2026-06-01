@@ -1,19 +1,34 @@
 "use client";
 
 import * as Select from "@radix-ui/react-select";
-import { ChevronDown, ExternalLink, RefreshCw, Search } from "lucide-react";
+import {
+  CheckSquare,
+  ChevronDown,
+  ExternalLink,
+  Forward,
+  RefreshCw,
+  RotateCcw,
+  Search,
+  Square,
+  Star,
+  Trash2,
+  X
+} from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 
 import { FeedItemCard } from "@/components/feed-item-card";
+import { ThemeMovePopover } from "@/components/theme-move-popover";
 import { NotesPanel } from "@/components/notes-panel";
 import { OriginalTextPanel } from "@/components/original-text-panel";
 import { SubscriptionSettingsButton } from "@/components/subscription-settings-panel";
 import { TagChipEditor } from "@/components/tag-chip-editor";
 import {
   createTheme,
+  batchDeleteKnowledgeItems,
   deleteKnowledgeItem,
+  getCollectionCounts,
   getKnowledgeItems,
   getReaderContent,
   getTaxonomy,
@@ -21,6 +36,7 @@ import {
   patchItemClassification,
   saveItemNote,
   splitTheme,
+  restoreKnowledgeItem,
   toggleItemFavorite,
   translateItemTranscript,
   uploadDocument
@@ -33,7 +49,13 @@ import {
   type ReaderContent,
   type ThemeRow
 } from "@/lib/types";
-import { ALL_FILTER, useKnowledgeFilterStore } from "@/store/knowledge-store";
+import { sortKnowledgeItems, sortOptionsForUi } from "@/lib/sort-knowledge-items";
+import {
+  ALL_FILTER,
+  hydrateKnowledgeSortMode,
+  type KnowledgeCollection,
+  useKnowledgeFilterStore
+} from "@/store/knowledge-store";
 
 function filterValue(value: string): string | undefined {
   return value === ALL_FILTER || value === "" ? undefined : value;
@@ -162,8 +184,15 @@ export default function KnowledgeWorkbench(): JSX.Element {
     setTag,
     setQuery,
     setPlatform,
-    setSource
+    setSource,
+    collection,
+    setCollection,
+    sortMode,
+    setSortMode
   } = useKnowledgeFilterStore();
+
+  const isTrash = collection === "trash";
+  const isFavorites = collection === "favorites";
 
   const ui = (key: UiKey): string => t(locale, key);
 
@@ -183,6 +212,13 @@ export default function KnowledgeWorkbench(): JSX.Element {
   const [readerExpanded, setReaderExpanded] = useState<boolean>(false);
   const [searchTotal, setSearchTotal] = useState<number | undefined>(undefined);
   const [searchEngine, setSearchEngine] = useState<string | undefined>(undefined);
+  const [selectionMode, setSelectionMode] = useState<boolean>(false);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [batchDeleteConfirm, setBatchDeleteConfirm] = useState<boolean>(false);
+  const [collectionCounts, setCollectionCounts] = useState<{ favorites: number; trash: number }>({
+    favorites: 0,
+    trash: 0
+  });
 
   const platformOptions = useMemo(
     () => [
@@ -194,6 +230,26 @@ export default function KnowledgeWorkbench(): JSX.Element {
     ],
     [locale]
   );
+
+  const hasSearch = Boolean(query.trim());
+
+  const sortOptions = useMemo(
+    () => sortOptionsForUi(locale, hasSearch),
+    [locale, hasSearch]
+  );
+
+  const displayItems = useMemo(
+    () => sortKnowledgeItems(items, sortMode, locale, { hasSearch }),
+    [items, sortMode, locale, hasSearch]
+  );
+
+  const allVisibleSelected =
+    displayItems.length > 0 &&
+    displayItems.every((item) => selectedIds.has(item.raw_id));
+
+  useEffect(() => {
+    hydrateKnowledgeSortMode();
+  }, []);
 
   const sourceOptions = useMemo(
     () => [
@@ -258,7 +314,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
     setLoading(true);
     setMessage("");
     try {
-      const [taxonomy, itemResp] = await Promise.all([
+      const [taxonomy, itemResp, counts] = await Promise.all([
         getTaxonomy(locale),
         getKnowledgeItems({
           locale,
@@ -267,11 +323,14 @@ export default function KnowledgeWorkbench(): JSX.Element {
           q: query,
           platform: filterValue(platform),
           source: filterValue(source),
+          collection,
           limit: 80
-        })
+        }),
+        getCollectionCounts()
       ]);
       setThemes(taxonomy.themes);
       setDynamicTags(taxonomy.tags);
+      setCollectionCounts(counts);
       setItems(itemResp.items);
       setSearchTotal(itemResp.total);
       setSearchEngine(itemResp.engine);
@@ -305,7 +364,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
       window.clearTimeout(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [locale, selectedThemeId, selectedTagId, platform, source, query]);
+  }, [locale, selectedThemeId, selectedTagId, platform, source, query, collection]);
 
   async function selectItem(item: KnowledgeItem): Promise<void> {
     setReaderExpanded(false);
@@ -325,28 +384,179 @@ export default function KnowledgeWorkbench(): JSX.Element {
   }
 
   async function handleToggleFavorite(item: KnowledgeItem): Promise<void> {
+    const nextStarred = !item.starred;
     try {
-      await toggleItemFavorite(item.raw_id, !item.starred);
+      await toggleItemFavorite(item.raw_id, nextStarred);
+      if (isFavorites && !nextStarred) {
+        setMessage(ui("unfavorite"));
+        await refreshData();
+        return;
+      }
       setItems((prev) =>
         prev.map((row) =>
-          row.raw_id === item.raw_id ? { ...row, starred: !item.starred } : row
+          row.raw_id === item.raw_id ? { ...row, starred: nextStarred } : row
         )
       );
       if (active?.raw_id === item.raw_id) {
-        setActive({ ...item, starred: !item.starred });
+        setActive({ ...item, starred: nextStarred });
       }
+      setMessage(nextStarred ? ui("favorite") : ui("unfavorite"));
+      void getCollectionCounts().then(setCollectionCounts);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "favorite failed");
+    }
+  }
+
+  async function handleRestoreItem(rawId: number): Promise<void> {
+    try {
+      await restoreKnowledgeItem(rawId);
+      setMessage(locale === "zh" ? "已恢复" : "Restored");
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        next.delete(rawId);
+        return next;
+      });
+      await refreshData();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "restore failed");
     }
   }
 
   async function handleDeleteItem(rawId: number): Promise<void> {
     try {
       await deleteKnowledgeItem(rawId);
-      setMessage(locale === "zh" ? "已删除" : "Deleted");
+      setMessage(isTrash ? (locale === "zh" ? "已永久删除" : "Permanently deleted") : locale === "zh" ? "已移至最近删除" : "Moved to trash");
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        next.delete(rawId);
+        return next;
+      });
       await refreshData();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "delete failed");
+    }
+  }
+
+  function handleToggleSelect(rawId: number): void {
+    if (!selectionMode) {
+      setSelectionMode(true);
+      setSelectedIds(new Set([rawId]));
+      return;
+    }
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(rawId)) {
+        next.delete(rawId);
+      } else {
+        next.add(rawId);
+      }
+      if (next.size === 0) {
+        setSelectionMode(false);
+        setBatchDeleteConfirm(false);
+      }
+      return next;
+    });
+  }
+
+  function toggleSelectAllVisible(): void {
+    if (allVisibleSelected) {
+      setSelectedIds(new Set());
+      setBatchDeleteConfirm(false);
+      return;
+    }
+    setSelectionMode(true);
+    setSelectedIds(new Set(displayItems.map((item) => item.raw_id)));
+  }
+
+  function clearSelection(): void {
+    setSelectedIds(new Set());
+    setBatchDeleteConfirm(false);
+  }
+
+  function exitSelectionMode(): void {
+    setSelectionMode(false);
+    clearSelection();
+  }
+
+  function switchCollection(next: KnowledgeCollection): void {
+    exitSelectionMode();
+    setCollection(next);
+  }
+
+  async function handleBatchFavorite(): Promise<void> {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) {
+      return;
+    }
+    const selected = ids
+      .map((rawId) => items.find((item) => item.raw_id === rawId))
+      .filter((row): row is KnowledgeItem => row !== undefined);
+    const allStarred = selected.length > 0 && selected.every((row) => row.starred);
+    const targetStarred = !allStarred;
+
+    setLoading(true);
+    try {
+      for (const row of selected) {
+        if (row.starred !== targetStarred) {
+          await toggleItemFavorite(row.raw_id, targetStarred);
+        }
+      }
+      setMessage(
+        targetStarred
+          ? locale === "zh"
+            ? `已收藏 ${selected.length} 条`
+            : `Favorited ${selected.length} items`
+          : locale === "zh"
+            ? `已取消收藏 ${selected.length} 条`
+            : `Unfavorited ${selected.length} items`
+      );
+      if (isFavorites && !targetStarred) {
+        exitSelectionMode();
+      }
+      await refreshData();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "favorite failed");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleBatchMoveTheme(themeId: number): Promise<void> {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) {
+      return;
+    }
+    setLoading(true);
+    try {
+      for (const rawId of ids) {
+        await moveItemTheme(rawId, themeId);
+      }
+      setMessage(ui("batchMoved").replace("{n}", String(ids.length)));
+      exitSelectionMode();
+      await refreshData();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "move failed");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleBatchDelete(): Promise<void> {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) {
+      return;
+    }
+    setLoading(true);
+    try {
+      const result = await batchDeleteKnowledgeItems(ids);
+      setMessage(ui("batchDeleted").replace("{n}", String(result.deleted)));
+      exitSelectionMode();
+      await refreshData();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "delete failed");
+    } finally {
+      setLoading(false);
+      setBatchDeleteConfirm(false);
     }
   }
 
@@ -573,9 +783,12 @@ export default function KnowledgeWorkbench(): JSX.Element {
               <div className="mb-4 space-y-0.5">
                 <button
                   type="button"
-                  onClick={() => setTheme(undefined)}
+                  onClick={() => {
+                    switchCollection("feed");
+                    setTheme(undefined);
+                  }}
                   className={`w-full rounded px-2 py-1.5 text-left text-sm ${
-                    selectedThemeId === undefined
+                    selectedThemeId === undefined && collection === "feed"
                       ? "bg-black font-medium text-white"
                       : "hover:bg-soft"
                   }`}
@@ -586,9 +799,12 @@ export default function KnowledgeWorkbench(): JSX.Element {
                   <button
                     key={theme.id}
                     type="button"
-                    onClick={() => setTheme(theme.id)}
+                    onClick={() => {
+                      setCollection("feed");
+                      setTheme(theme.id);
+                    }}
                     className={`flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-sm ${
-                      selectedThemeId === theme.id
+                      selectedThemeId === theme.id && collection === "feed"
                         ? "bg-black font-medium text-white"
                         : "hover:bg-soft"
                     }`}
@@ -603,6 +819,48 @@ export default function KnowledgeWorkbench(): JSX.Element {
                     </span>
                   </button>
                 ))}
+              </div>
+
+              <div className="mb-4 border-t border-border pt-3">
+                <h2 className="mb-2 text-xs font-medium uppercase tracking-wider text-muted">
+                  {locale === "zh" ? "专栏" : "Collections"}
+                </h2>
+                <div className="space-y-0.5">
+                  <button
+                    type="button"
+                    onClick={() => switchCollection("favorites")}
+                    className={`flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-sm ${
+                      isFavorites
+                        ? "bg-black font-medium text-white"
+                        : "hover:bg-soft"
+                    }`}
+                  >
+                    <span className="inline-flex items-center gap-1.5">
+                      <Star className="h-3.5 w-3.5" />
+                      {ui("collectionFavorites")}
+                    </span>
+                    <span
+                      className={`text-xs ${isFavorites ? "text-neutral-300" : "text-muted"}`}
+                    >
+                      {collectionCounts.favorites}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => switchCollection("trash")}
+                    className={`flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-sm ${
+                      isTrash ? "bg-black font-medium text-white" : "hover:bg-soft"
+                    }`}
+                  >
+                    <span className="inline-flex items-center gap-1.5">
+                      <Trash2 className="h-3.5 w-3.5" />
+                      {ui("collectionTrash")}
+                    </span>
+                    <span className={`text-xs ${isTrash ? "text-neutral-300" : "text-muted"}`}>
+                      {collectionCounts.trash}
+                    </span>
+                  </button>
+                </div>
               </div>
 
               <button
@@ -697,11 +955,116 @@ export default function KnowledgeWorkbench(): JSX.Element {
 
         <Panel minSize={20} defaultSize={24} className="min-h-0 overflow-hidden">
           <ColumnScroll className="border-r border-border p-3">
-              <h2 className="mb-3 text-xs font-medium uppercase tracking-wider text-muted">
-                {ui("feed")} ({items.length})
-              </h2>
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <h2 className="text-xs font-medium uppercase tracking-wider text-muted">
+                  {isFavorites
+                    ? ui("collectionFavorites")
+                    : isTrash
+                      ? ui("collectionTrash")
+                      : ui("feed")}{" "}
+                  ({displayItems.length})
+                </h2>
+                <FilterSelect
+                  placeholder={ui("sortBy")}
+                  value={sortMode}
+                  onChange={(value) => setSortMode(value as typeof sortMode)}
+                  options={sortOptions}
+                />
+              </div>
+              {selectionMode ? (
+                <div className="mb-3 flex items-center justify-between gap-2 rounded-lg border border-border bg-neutral-50 px-2 py-1.5">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={toggleSelectAllVisible}
+                      title={ui("selectAll")}
+                      aria-label={ui("selectAll")}
+                      aria-pressed={allVisibleSelected}
+                      className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-md border transition-colors ${
+                        allVisibleSelected
+                          ? "border-black bg-black text-white"
+                          : "border-border bg-white text-neutral-500 hover:border-neutral-400"
+                      }`}
+                    >
+                      {allVisibleSelected ? (
+                        <CheckSquare className="h-4 w-4" />
+                      ) : (
+                        <Square className="h-4 w-4" />
+                      )}
+                    </button>
+                    <span className="truncate text-xs font-medium text-neutral-700">
+                      {ui("batchSelected").replace("{n}", String(selectedIds.size))}
+                    </span>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-0.5">
+                    {isTrash ? null : (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => void handleBatchFavorite()}
+                          disabled={selectedIds.size === 0 || loading}
+                          title={ui("favorite")}
+                          aria-label={ui("favorite")}
+                          className="flex h-8 w-8 items-center justify-center rounded-md text-neutral-500 hover:bg-white hover:text-black disabled:opacity-40"
+                        >
+                          <Star className="h-4 w-4" />
+                        </button>
+                        <ThemeMovePopover
+                          themes={themes}
+                          locale={locale}
+                          onSelect={(themeId) => void handleBatchMoveTheme(themeId)}
+                          floatPanel
+                          trigger={
+                            <button
+                              type="button"
+                              disabled={selectedIds.size === 0 || loading}
+                              title={ui("moveTheme")}
+                              aria-label={ui("moveTheme")}
+                              className="flex h-8 w-8 items-center justify-center rounded-md text-neutral-500 hover:bg-white hover:text-black disabled:opacity-40"
+                            >
+                              <Forward className="h-4 w-4" />
+                            </button>
+                          }
+                        />
+                      </>
+                    )}
+                    {batchDeleteConfirm ? (
+                      <button
+                        type="button"
+                        onClick={() => void handleBatchDelete()}
+                        disabled={selectedIds.size === 0 || loading}
+                        title={ui("batchDeleteConfirm")}
+                        aria-label={ui("batchDeleteConfirm")}
+                        className="flex h-8 w-8 items-center justify-center rounded-md text-red-600 hover:bg-red-50 disabled:opacity-40"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setBatchDeleteConfirm(true)}
+                        disabled={selectedIds.size === 0 || loading}
+                        title={ui("batchDelete")}
+                        aria-label={ui("batchDelete")}
+                        className="flex h-8 w-8 items-center justify-center rounded-md text-neutral-500 hover:bg-white hover:text-red-600 disabled:opacity-40"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={exitSelectionMode}
+                      title={locale === "zh" ? "退出批量" : "Exit batch"}
+                      aria-label={locale === "zh" ? "退出批量" : "Exit batch"}
+                      className="flex h-8 w-8 items-center justify-center rounded-md text-neutral-500 hover:bg-white hover:text-black"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+              ) : null}
               <div className="space-y-2">
-                {items.map((item) => (
+                {displayItems.map((item) => (
                   <FeedItemCard
                     key={item.raw_id}
                     item={item}
@@ -715,6 +1078,10 @@ export default function KnowledgeWorkbench(): JSX.Element {
                     unfavoriteLabel={ui("unfavorite")}
                     deleteLabel={ui("deleteItem")}
                     deleteConfirmLabel={ui("deleteConfirm")}
+                    batchSelectLabel={ui("batchSelect")}
+                    trashMode={isTrash}
+                    restoreLabel={ui("restoreItem")}
+                    onRestore={() => void handleRestoreItem(item.raw_id)}
                     authorAvatar={
                       <AuthorAvatar
                         author={item.author}
@@ -723,15 +1090,22 @@ export default function KnowledgeWorkbench(): JSX.Element {
                         size="md"
                       />
                     }
+                    selectionMode={selectionMode}
+                    selected={selectedIds.has(item.raw_id)}
+                    onToggleSelected={() => handleToggleSelect(item.raw_id)}
                     onSelect={() => void selectItem(item)}
                     onMoveTheme={(themeId) => void handleThemeMoveForItem(item.raw_id, themeId)}
                     onToggleFavorite={() => void handleToggleFavorite(item)}
                     onDelete={() => void handleDeleteItem(item.raw_id)}
                   />
                 ))}
-                {items.length === 0 ? (
+                {displayItems.length === 0 ? (
                   <div className="rounded border border-dashed border-border p-4 text-sm text-muted">
-                    {ui("noItems")}
+                    {isTrash
+                      ? ui("trashEmpty")
+                      : isFavorites
+                        ? ui("favoritesEmpty")
+                        : ui("noItems")}
                   </div>
                 ) : null}
               </div>

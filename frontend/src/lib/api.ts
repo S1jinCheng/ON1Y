@@ -36,6 +36,10 @@ export function getTaxonomy(locale: Locale): Promise<TaxonomyResponse> {
   return request<TaxonomyResponse>(`/api/knowledge/taxonomy?locale=${locale}`);
 }
 
+export function getCollectionCounts(): Promise<{ favorites: number; trash: number }> {
+  return request<{ favorites: number; trash: number }>("/api/knowledge/collections");
+}
+
 export function getKnowledgeItems(params: {
   locale?: Locale;
   themeId?: number;
@@ -43,10 +47,14 @@ export function getKnowledgeItems(params: {
   q?: string;
   platform?: string;
   source?: string;
+  collection?: "feed" | "favorites" | "trash";
   limit?: number;
 }): Promise<KnowledgeItemsResponse> {
   const query = new URLSearchParams();
   query.set("limit", String(params.limit ?? 60));
+  if (params.collection && params.collection !== "feed") {
+    query.set("collection", params.collection);
+  }
   if (params.themeId !== undefined) {
     query.set("theme_id", String(params.themeId));
   }
@@ -106,6 +114,28 @@ export function toggleItemFavorite(
 
 export function deleteKnowledgeItem(rawId: number): Promise<{ raw_id: number; deleted: boolean }> {
   return request(`/api/knowledge/items/${rawId}`, { method: "DELETE" });
+}
+
+export function batchDeleteKnowledgeItems(
+  rawIds: number[]
+): Promise<{ raw_ids: number[]; deleted: number; not_found: number }> {
+  return request("/api/knowledge/items/batch-delete", {
+    method: "POST",
+    body: JSON.stringify({ raw_ids: rawIds })
+  });
+}
+
+export function restoreKnowledgeItem(rawId: number): Promise<{ raw_id: number; restored: boolean }> {
+  return request(`/api/knowledge/items/${rawId}/restore`, { method: "POST" });
+}
+
+export function batchRestoreKnowledgeItems(
+  rawIds: number[]
+): Promise<{ raw_ids: number[]; restored: number; not_found: number }> {
+  return request("/api/knowledge/items/batch-restore", {
+    method: "POST",
+    body: JSON.stringify({ raw_ids: rawIds })
+  });
 }
 
 export function moveItemTheme(

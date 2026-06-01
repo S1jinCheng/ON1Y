@@ -129,6 +129,14 @@ class FavoriteUpdate(BaseModel):
     starred: bool = False
 
 
+class BatchDeleteRequest(BaseModel):
+    raw_ids: list[int] = Field(min_length=1, max_length=200)
+
+
+class BatchRestoreRequest(BaseModel):
+    raw_ids: list[int] = Field(min_length=1, max_length=200)
+
+
 class NewThemeSpec(BaseModel):
     slug: str = ""
     name_zh: str = Field(min_length=1)
@@ -643,6 +651,17 @@ def create_app() -> FastAPI:
         finally:
             storage.close()
 
+    @app.get("/api/knowledge/collections")
+    def knowledge_collections() -> dict[str, Any]:
+        storage = get_storage()
+        try:
+            return {
+                "favorites": storage.count_collection_items("favorites"),
+                "trash": storage.count_collection_items("trash"),
+            }
+        finally:
+            storage.close()
+
     @app.get("/api/knowledge/items")
     def knowledge_items(
         limit: int = Query(default=40, ge=1, le=200),
@@ -653,9 +672,13 @@ def create_app() -> FastAPI:
         theme_id: int | None = Query(default=None),
         tag_id: int | None = Query(default=None),
         include_descendants: bool = Query(default=False),
+        collection: str = Query(default="feed"),
     ) -> dict[str, Any]:
         storage = get_storage()
         try:
+            coll = collection.strip().lower()
+            if coll not in {"feed", "favorites", "trash"}:
+                raise HTTPException(status_code=400, detail=f"unsupported collection: {collection}")
             tag_ids = [tag_id] if tag_id is not None else None
             if include_descendants and tag_id is not None:
                 tag_ids = [tag_id]
@@ -668,12 +691,14 @@ def create_app() -> FastAPI:
                     source=source,
                     tag_ids=tag_ids,
                     theme_id=theme_id,
+                    collection=coll,
                 )
                 return {
                     "items": result["items"],
                     "count": len(result["items"]),
                     "total": result["total"],
                     "engine": result.get("engine", "fts5"),
+                    "collection": coll,
                 }
             rows = storage.list_knowledge_items(
                 limit=limit,
@@ -682,8 +707,9 @@ def create_app() -> FastAPI:
                 source=source,
                 tag_ids=tag_ids,
                 theme_id=theme_id,
+                collection=coll,
             )
-            return {"items": rows, "count": len(rows)}
+            return {"items": rows, "count": len(rows), "collection": coll}
         finally:
             storage.close()
 
@@ -859,6 +885,34 @@ def create_app() -> FastAPI:
                 raise HTTPException(status_code=404, detail="raw item not found")
             storage.merge_source_meta(raw_id, {"starred": body.starred})
             return {"raw_id": raw_id, "starred": body.starred}
+        finally:
+            storage.close()
+
+    @app.post("/api/knowledge/items/batch-delete")
+    def batch_delete_knowledge_items(body: BatchDeleteRequest) -> dict[str, Any]:
+        storage = get_storage()
+        try:
+            counts = storage.delete_raw_items(body.raw_ids)
+            return {"raw_ids": body.raw_ids, **counts}
+        finally:
+            storage.close()
+
+    @app.post("/api/knowledge/items/batch-restore")
+    def batch_restore_knowledge_items(body: BatchRestoreRequest) -> dict[str, Any]:
+        storage = get_storage()
+        try:
+            counts = storage.restore_raw_items(body.raw_ids)
+            return {"raw_ids": body.raw_ids, **counts}
+        finally:
+            storage.close()
+
+    @app.post("/api/knowledge/items/{raw_id}/restore")
+    def restore_knowledge_item(raw_id: int) -> dict[str, Any]:
+        storage = get_storage()
+        try:
+            if not storage.restore_raw_item(raw_id):
+                raise HTTPException(status_code=404, detail="item not in trash")
+            return {"raw_id": raw_id, "restored": True}
         finally:
             storage.close()
 

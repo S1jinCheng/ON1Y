@@ -6,7 +6,7 @@ import logging
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -24,13 +24,14 @@ from on1y.utils.json_util import dumps_json, dumps_meta, loads_json_list, loads_
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 SCHEMA_PATH = PROJECT_ROOT / "sql" / "schema.sql"
 SCHEMA_V2_PATH = PROJECT_ROOT / "sql" / "schema_v2.sql"
 SCHEMA_V3_PATH = PROJECT_ROOT / "sql" / "schema_v3.sql"
 SCHEMA_V4_PATH = PROJECT_ROOT / "sql" / "schema_v4.sql"
 SCHEMA_V5_PATH = PROJECT_ROOT / "sql" / "schema_v5.sql"
 SCHEMA_V6_PATH = PROJECT_ROOT / "sql" / "schema_v6.sql"
+SCHEMA_V7_PATH = PROJECT_ROOT / "sql" / "schema_v7.sql"
 
 
 class SqliteStorage:
@@ -172,6 +173,28 @@ class SqliteStorage:
                 (6,),
             )
             logger.info("Applied schema version 6 to %s", self._db_path)
+            current = 6
+        if current < 7:
+            if not SCHEMA_V7_PATH.is_file():
+                raise StorageError(f"Schema file not found: {SCHEMA_V7_PATH}")
+            conn.executescript(SCHEMA_V7_PATH.read_text(encoding="utf-8"))
+            conn.execute(
+                "INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)",
+                (7,),
+            )
+            logger.info("Applied schema version 7 to %s", self._db_path)
+
+    @staticmethod
+    def _collection_clause(collection: str | None) -> str:
+        key = (collection or "feed").strip().lower()
+        if key == "trash":
+            return "r.deleted_at IS NOT NULL"
+        if key == "favorites":
+            return (
+                "r.deleted_at IS NULL AND "
+                "COALESCE(CAST(json_extract(r.source_meta, '$.starred') AS INTEGER), 0) = 1"
+            )
+        return "r.deleted_at IS NULL"
 
     def seed_default_themes_legacy(self, conn: sqlite3.Connection | None = None) -> None:
         """Seed for schema v4 without description columns."""
@@ -337,6 +360,14 @@ class SqliteStorage:
             )
 
     def upsert_raw_item(self, item: RawItemCreate) -> RawItem:
+        from on1y.utils.author_meta import merge_author_meta
+
+        existing = self.get_raw_by_url(item.url)
+        source_meta = dict(item.source_meta or {})
+        if existing and existing.source_meta:
+            source_meta = merge_author_meta(existing.source_meta, source_meta)
+        item = item.model_copy(update={"source_meta": source_meta})
+
         word_count = len(item.body_text.split()) if item.body_text else 0
         with self.transaction() as conn:
             conn.execute(
@@ -394,7 +425,7 @@ class SqliteStorage:
             raise StorageError(f"raw item not found: {raw_id}")
         meta = dict(raw.source_meta or {})
         allow_empty = {"user_note_html", "annotated_body_html"}
-        bool_keys = {"starred"}
+        bool_keys = {"starred", "distill_pending"}
         for key, value in patch.items():
             if key in bool_keys:
                 meta[key] = bool(value)
@@ -1347,17 +1378,138 @@ class SqliteStorage:
             **author_info,
         }
 
+    def _purge_raw_item_row(self, conn: sqlite3.Connection, raw_id: int) -> None:
+        self._delete_search_index(conn, raw_id)
+        conn.execute("DELETE FROM item_tags WHERE raw_id = ?", (raw_id,))
+        conn.execute("DELETE FROM item_themes WHERE raw_id = ?", (raw_id,))
+        conn.execute("DELETE FROM distilled_items WHERE raw_id = ?", (raw_id,))
+        conn.execute(
+            "DELETE FROM item_relations WHERE from_raw_id = ? OR to_raw_id = ?",
+            (raw_id, raw_id),
+        )
+        conn.execute("DELETE FROM raw_items WHERE id = ?", (raw_id,))
+
+    def _soft_delete_raw_row(self, conn: sqlite3.Connection, raw_id: int) -> bool:
+        row = conn.execute(
+            "SELECT id, deleted_at FROM raw_items WHERE id = ?",
+            (raw_id,),
+        ).fetchone()
+        if row is None:
+            return False
+        if row["deleted_at"]:
+            return True
+        deleted_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        conn.execute(
+            "UPDATE raw_items SET deleted_at = ? WHERE id = ?",
+            (deleted_at, raw_id),
+        )
+        self._delete_search_index(conn, raw_id)
+        return True
+
     def delete_raw_item(self, raw_id: int) -> None:
+        """Soft-delete, or permanently purge if already in trash."""
         with self.transaction() as conn:
-            self._delete_search_index(conn, raw_id)
-            conn.execute("DELETE FROM item_tags WHERE raw_id = ?", (raw_id,))
-            conn.execute("DELETE FROM item_themes WHERE raw_id = ?", (raw_id,))
-            conn.execute("DELETE FROM distilled_items WHERE raw_id = ?", (raw_id,))
+            row = conn.execute(
+                "SELECT id, deleted_at FROM raw_items WHERE id = ?",
+                (raw_id,),
+            ).fetchone()
+            if row is None:
+                raise StorageError(f"raw item not found: {raw_id}")
+            if row["deleted_at"]:
+                self._purge_raw_item_row(conn, raw_id)
+            elif not self._soft_delete_raw_row(conn, raw_id):
+                raise StorageError(f"raw item not found: {raw_id}")
+
+    def delete_raw_items(self, raw_ids: list[int]) -> dict[str, int]:
+        """Soft-delete multiple items. Returns deleted / not_found counts."""
+        unique: list[int] = []
+        seen: set[int] = set()
+        for value in raw_ids:
+            rid = int(value)
+            if rid not in seen:
+                seen.add(rid)
+                unique.append(rid)
+        deleted = 0
+        not_found = 0
+        with self.transaction() as conn:
+            for raw_id in unique:
+                row = conn.execute(
+                    "SELECT id, deleted_at FROM raw_items WHERE id = ?",
+                    (raw_id,),
+                ).fetchone()
+                if row is None:
+                    not_found += 1
+                    continue
+                if row["deleted_at"]:
+                    self._purge_raw_item_row(conn, raw_id)
+                elif self._soft_delete_raw_row(conn, raw_id):
+                    pass
+                else:
+                    not_found += 1
+                    continue
+                deleted += 1
+        return {"deleted": deleted, "not_found": not_found}
+
+    def restore_raw_item(self, raw_id: int) -> bool:
+        with self.transaction() as conn:
+            row = conn.execute(
+                "SELECT id FROM raw_items WHERE id = ? AND deleted_at IS NOT NULL",
+                (raw_id,),
+            ).fetchone()
+            if row is None:
+                return False
             conn.execute(
-                "DELETE FROM item_relations WHERE from_raw_id = ? OR to_raw_id = ?",
-                (raw_id, raw_id),
+                "UPDATE raw_items SET deleted_at = NULL WHERE id = ?",
+                (raw_id,),
             )
-            conn.execute("DELETE FROM raw_items WHERE id = ?", (raw_id,))
+            if self._current_schema_version(conn) >= 6:
+                from on1y.search.fts import index_raw_item
+
+                index_raw_item(conn, raw_id)
+            return True
+
+    def restore_raw_items(self, raw_ids: list[int]) -> dict[str, int]:
+        restored = 0
+        not_found = 0
+        with self.transaction() as conn:
+            for raw_id in raw_ids:
+                row = conn.execute(
+                    "SELECT id FROM raw_items WHERE id = ? AND deleted_at IS NOT NULL",
+                    (int(raw_id),),
+                ).fetchone()
+                if row is None:
+                    not_found += 1
+                    continue
+                conn.execute(
+                    "UPDATE raw_items SET deleted_at = NULL WHERE id = ?",
+                    (int(raw_id),),
+                )
+                if self._current_schema_version(conn) >= 6:
+                    from on1y.search.fts import index_raw_item
+
+                    index_raw_item(conn, int(raw_id))
+                restored += 1
+        return {"restored": restored, "not_found": not_found}
+
+    def purge_raw_item(self, raw_id: int) -> bool:
+        """Permanently remove a trashed item."""
+        with self.transaction() as conn:
+            row = conn.execute(
+                "SELECT id FROM raw_items WHERE id = ? AND deleted_at IS NOT NULL",
+                (raw_id,),
+            ).fetchone()
+            if row is None:
+                return False
+            self._purge_raw_item_row(conn, raw_id)
+            return True
+
+    def count_collection_items(self, collection: str) -> int:
+        conn = self._connect()
+        clause = self._collection_clause(collection)
+        row = conn.execute(
+            f"SELECT COUNT(*) AS n FROM raw_items r WHERE {clause}",
+        ).fetchone()
+        return int(row["n"]) if row else 0
 
     def list_dynamic_tags_with_counts(self, *, limit: int = 200) -> list[dict[str, Any]]:
         conn = self._connect()
@@ -1456,6 +1608,7 @@ class SqliteStorage:
         source: str | None = None,
         tag_ids: list[int] | None = None,
         theme_id: int | None = None,
+        collection: str | None = None,
     ) -> dict[str, Any]:
         """BM25-ranked full-text search with snippets."""
         from on1y.search.fts import search_knowledge_fts
@@ -1470,9 +1623,11 @@ class SqliteStorage:
                 query=query,
                 tag_ids=tag_ids,
                 theme_id=theme_id,
+                collection=collection,
             )
             return {"items": items, "total": len(items), "engine": "like"}
 
+        collection_sql = self._collection_clause_for_conn(conn, collection)
         hits, total = search_knowledge_fts(
             conn,
             user_query=query,
@@ -1482,6 +1637,7 @@ class SqliteStorage:
             source=source,
             theme_id=theme_id,
             tag_ids=tag_ids,
+            collection_sql=collection_sql,
         )
         if not hits:
             return {"items": [], "total": 0, "engine": "fts5"}
@@ -1523,6 +1679,20 @@ class SqliteStorage:
             item["search_summary_html"] = hit.get("search_summary_html")
         return {"items": items, "total": total, "engine": "fts5"}
 
+    def _collection_clause_for_conn(
+        self, conn: sqlite3.Connection, collection: str | None
+    ) -> str:
+        if self._current_schema_version(conn) < 7:
+            key = (collection or "feed").strip().lower()
+            if key == "trash":
+                return "0"
+            if key == "favorites":
+                return (
+                    "COALESCE(CAST(json_extract(r.source_meta, '$.starred') AS INTEGER), 0) = 1"
+                )
+            return "1"
+        return self._collection_clause(collection)
+
     def list_knowledge_items(
         self,
         *,
@@ -1533,6 +1703,7 @@ class SqliteStorage:
         query: str | None = None,
         tag_ids: list[int] | None = None,
         theme_id: int | None = None,
+        collection: str | None = None,
     ) -> list[dict[str, Any]]:
         conn = self._connect()
         if query and query.strip() and self._current_schema_version(conn) >= 6:
@@ -1544,10 +1715,11 @@ class SqliteStorage:
                 source=source,
                 tag_ids=tag_ids,
                 theme_id=theme_id,
+                collection=collection,
             )
             return result["items"]
 
-        where_parts: list[str] = []
+        where_parts: list[str] = [self._collection_clause_for_conn(conn, collection)]
         params: list[Any] = []
         if platform:
             where_parts.append("r.platform = ?")
@@ -1578,6 +1750,12 @@ class SqliteStorage:
             where_parts.append("r.theme_id = ?")
             params.append(theme_id)
         where_sql = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
+        coll = (collection or "feed").strip().lower()
+        order_sql = (
+            "r.deleted_at DESC"
+            if coll == "trash"
+            else "COALESCE(d.distilled_at, r.ingested_at) DESC"
+        )
         rows = conn.execute(
             f"""
             SELECT
@@ -1587,6 +1765,7 @@ class SqliteStorage:
                 r.platform,
                 r.source,
                 r.ingested_at,
+                r.deleted_at,
                 r.source_meta,
                 r.theme_id,
                 d.summary,
@@ -1596,12 +1775,16 @@ class SqliteStorage:
             FROM raw_items r
             LEFT JOIN distilled_items d ON d.raw_id = r.id
             {where_sql}
-            ORDER BY COALESCE(d.distilled_at, r.ingested_at) DESC
+            ORDER BY {order_sql}
             LIMIT ? OFFSET ?
             """,
             (*params, limit, offset),
         ).fetchall()
-        return self._assemble_knowledge_items(rows)
+        items = self._assemble_knowledge_items(rows)
+        if (collection or "feed").strip().lower() == "trash":
+            for item in items:
+                item["deleted"] = True
+        return items
 
     def _assemble_knowledge_items(self, rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
         conn = self._connect()
@@ -1680,6 +1863,9 @@ class SqliteStorage:
                     "tags": tags_by_raw.get(raw_id, []),
                     "themes": themes_list,
                     "starred": starred,
+                    "deleted_at": row["deleted_at"]
+                    if "deleted_at" in row.keys()
+                    else None,
                 }
             )
         return items

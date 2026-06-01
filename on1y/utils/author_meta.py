@@ -81,3 +81,33 @@ def author_meta_patch(
     if channel_id and channel_id.strip():
         patch["channel_id"] = channel_id.strip()
     return patch
+
+
+_AUTHOR_META_KEYS = frozenset(
+    {"author", "author_avatar", "author_url", "cover_image", "channel_id"}
+)
+
+
+def merge_author_meta(
+    base: dict[str, Any] | None,
+    patch: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Fill empty author/cover fields in base; never overwrite non-empty values."""
+    out = dict(base or {})
+    if not patch:
+        return out
+    for key, value in patch.items():
+        if key not in _AUTHOR_META_KEYS:
+            continue
+        text = str(value or "").strip()
+        if not text:
+            continue
+        if key == "author_avatar" and _is_video_thumbnail(text):
+            continue
+        existing = str(out.get(key) or "").strip()
+        if existing:
+            if key == "author_avatar" and _is_video_thumbnail(existing):
+                out[key] = text
+            continue
+        out[key] = text
+    return out

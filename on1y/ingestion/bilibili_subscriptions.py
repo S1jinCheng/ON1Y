@@ -287,6 +287,7 @@ def poll_bilibili_dynamic_updates(
                         arc=_dynamic_to_arc(parsed),
                         up_mid=up_mid,
                         uname=uname,
+                        up_face=str(parsed.get("up_face") or "").strip() or None,
                         label=label,
                         title_index=title_index,
                         report=report,
@@ -442,6 +443,7 @@ def poll_bilibili_up_updates(
                         arc=arc,
                         up_mid=up_mid,
                         uname=uname,
+                        up_face=str(row.get("face") or "").strip() or None,
                         label=label,
                         title_index=title_index,
                         report=report,
@@ -499,6 +501,7 @@ def poll_bilibili_up_updates(
                         arc=arc,
                         up_mid=up_mid,
                         uname=uname,
+                        up_face=str(row.get("face") or "").strip() or None,
                         label=label,
                         title_index=title_index,
                         report=report,
@@ -528,6 +531,7 @@ def _enqueue_bilibili_video(
     label: str,
     title_index: dict[str, list[int]],
     report: dict[str, Any],
+    up_face: str | None = None,
     initial_snapshot: bool = False,
     backfill: bool = False,
     subscription_source: str = "bilibili_up",
@@ -567,6 +571,7 @@ def _enqueue_bilibili_video(
     meta.update(
         author_meta_patch(
             author=uname,
+            author_avatar=up_face,
             author_url=f"https://space.bilibili.com/{up_mid}",
             cover_image=str(arc.get("pic") or arc.get("cover") or "").strip() or None,
         )

@@ -16,7 +16,7 @@ from on1y.pipeline.video_meta import (
 )
 from on1y.ports.storage import StoragePort
 from on1y.exceptions import DuplicateVideoError
-from on1y.utils.author_meta import author_meta_patch
+from on1y.pipeline.video_author import enrich_video_source_meta
 from on1y.utils.bilibili_url import normalize_bilibili_url
 from on1y.utils.platform import PLATFORM_BILIBILI, YTDLP_VIDEO_PLATFORMS, detect_platform, normalize_url
 from on1y.utils.video_dedup import find_youtube_duplicate, remove_bilibili_duplicate_of_youtube
@@ -73,18 +73,10 @@ def process_video_fast(
             platform=platform,
         )
 
-    meta_dict = with_subtitle_pending(source_meta)
+    meta_dict = with_subtitle_pending(dict(source_meta or {}))
     if meta.description:
         meta_dict[VIDEO_DESCRIPTION] = meta.description[:50_000]
-    meta_dict.update(
-        author_meta_patch(
-            author=meta.uploader,
-            author_avatar=meta.uploader_avatar,
-            author_url=meta.uploader_url,
-            cover_image=meta.cover_image,
-            channel_id=meta.channel_id,
-        )
-    )
+    meta_dict = enrich_video_source_meta(meta_dict, platform=platform, url=normalized)
     if meta.video_id:
         meta_dict["video_id"] = str(meta.video_id)
     if meta.duration_sec:

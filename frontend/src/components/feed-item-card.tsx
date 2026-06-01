@@ -1,10 +1,11 @@
 "use client";
 
-import { MoreVertical, Star, Trash2 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { CheckCircle2, Circle, Forward, RotateCcw, Star, Trash2 } from "lucide-react";
+import { useState } from "react";
 
-import { themeDisplayName } from "@/lib/i18n";
+import { ThemeMovePopover } from "@/components/theme-move-popover";
 import { formatSourceLine } from "@/lib/format-published-at";
+import { themeDisplayName } from "@/lib/i18n";
 import { platformLabel } from "@/lib/platform-label";
 import type { KnowledgeItem, Locale, ThemeRow } from "@/lib/types";
 
@@ -20,11 +21,18 @@ type FeedItemCardProps = {
   unfavoriteLabel: string;
   deleteLabel: string;
   deleteConfirmLabel: string;
+  batchSelectLabel: string;
   authorAvatar: React.ReactNode;
   onSelect: () => void;
   onMoveTheme: (themeId: number) => void;
   onToggleFavorite: () => void;
   onDelete: () => void;
+  selectionMode?: boolean;
+  selected?: boolean;
+  onToggleSelected?: () => void;
+  trashMode?: boolean;
+  restoreLabel?: string;
+  onRestore?: () => void;
 };
 
 function SearchHtml(props: {
@@ -41,6 +49,25 @@ function SearchHtml(props: {
   return <span className={props.className}>{props.fallback}</span>;
 }
 
+function ActionBtn(props: {
+  label: string;
+  onClick: (e: React.MouseEvent) => void;
+  className?: string;
+  children: React.ReactNode;
+}): JSX.Element {
+  return (
+    <button
+      type="button"
+      aria-label={props.label}
+      title={props.label}
+      onClick={props.onClick}
+      className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-black ${props.className ?? ""}`}
+    >
+      {props.children}
+    </button>
+  );
+}
+
 export function FeedItemCard(props: FeedItemCardProps): JSX.Element {
   const {
     item,
@@ -54,11 +81,18 @@ export function FeedItemCard(props: FeedItemCardProps): JSX.Element {
     unfavoriteLabel,
     deleteLabel,
     deleteConfirmLabel,
+    batchSelectLabel,
     authorAvatar,
     onSelect,
     onMoveTheme,
     onToggleFavorite,
-    onDelete
+    onDelete,
+    selectionMode = false,
+    selected = false,
+    onToggleSelected,
+    trashMode = false,
+    restoreLabel = "Restore",
+    onRestore
   } = props;
 
   const sourceLine = formatSourceLine({
@@ -70,124 +104,38 @@ export function FeedItemCard(props: FeedItemCardProps): JSX.Element {
     locale
   });
 
-  const [menuOpen, setMenuOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    if (!menuOpen) {
+  function handleContentClick(): void {
+    if (selectionMode) {
+      onToggleSelected?.();
       return;
     }
-    function onDocClick(event: MouseEvent): void {
-      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
-        setMenuOpen(false);
-        setConfirmDelete(false);
-      }
-    }
-    document.addEventListener("mousedown", onDocClick);
-    return () => document.removeEventListener("mousedown", onDocClick);
-  }, [menuOpen]);
+    onSelect();
+  }
 
   return (
     <div
-      className={`relative rounded-lg border transition-colors ${
-        active ? "border-black bg-soft" : "border-border bg-white hover:bg-panel"
+      className={`flex overflow-hidden rounded-lg border transition-colors ${
+        selectionMode && selected
+          ? "border-black bg-soft ring-1 ring-black"
+          : active
+            ? "border-black bg-soft"
+            : "border-border bg-white hover:bg-panel"
       }`}
     >
-      <div className="absolute right-1.5 top-1.5 z-10" ref={menuRef}>
-        <button
-          type="button"
-          aria-label="Actions"
-          onClick={(e) => {
-            e.stopPropagation();
-            setMenuOpen((v) => !v);
-            setConfirmDelete(false);
-          }}
-          className="rounded p-1 text-neutral-500 hover:bg-white hover:text-black"
-        >
-          <MoreVertical className="h-4 w-4" />
-        </button>
-        {menuOpen ? (
-          <div className="absolute right-0 top-full z-50 mt-1 w-44 overflow-hidden rounded-md border border-border bg-white py-1 shadow-lg">
-            <p className="px-3 py-1 text-[10px] font-medium uppercase tracking-wide text-muted">
-              {moveThemeLabel}
-            </p>
-            <div className="max-h-36 overflow-y-auto">
-              {themes.map((theme) => (
-                <button
-                  key={theme.id}
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onMoveTheme(theme.id);
-                    setMenuOpen(false);
-                  }}
-                  className={`block w-full px-3 py-1.5 text-left text-xs hover:bg-soft ${
-                    item.theme_id === theme.id ? "font-medium text-black" : "text-neutral-700"
-                  }`}
-                >
-                  {themeDisplayName(theme, locale)}
-                </button>
-              ))}
-            </div>
-            <div className="my-1 border-t border-border" />
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                onToggleFavorite();
-                setMenuOpen(false);
-              }}
-              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-soft"
-            >
-              <Star
-                className={`h-3.5 w-3.5 ${item.starred ? "fill-amber-400 text-amber-500" : ""}`}
-              />
-              {item.starred ? unfavoriteLabel : favoriteLabel}
-            </button>
-            {confirmDelete ? (
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onDelete();
-                  setMenuOpen(false);
-                }}
-                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-red-600 hover:bg-red-50"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-                {deleteConfirmLabel}
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setConfirmDelete(true);
-                }}
-                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-red-600 hover:bg-red-50"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-                {deleteLabel}
-              </button>
-            )}
-          </div>
-        ) : null}
-      </div>
-
-      <button type="button" onClick={onSelect} className="w-full p-3 pr-9 text-left">
+      <button
+        type="button"
+        onClick={handleContentClick}
+        className="min-w-0 flex-1 p-3 text-left"
+      >
         <div className="flex gap-3">
           {authorAvatar}
           <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-1.5">
-              <div className="truncate text-xs font-medium text-neutral-800">
-                {item.author.trim() || unknownAuthorLabel}
-              </div>
-              {item.starred ? (
-                <Star className="h-3 w-3 shrink-0 fill-amber-400 text-amber-500" />
-              ) : null}
+            <div className="truncate text-xs font-medium text-neutral-800">
+              {item.author.trim() || unknownAuthorLabel}
             </div>
-            <div className="mt-0.5 line-clamp-2 text-sm font-medium leading-snug">
+            <div className="mt-0.5 text-sm font-medium leading-snug">
               <SearchHtml
                 html={item.search_title_html}
                 fallback={item.title || item.url}
@@ -196,7 +144,7 @@ export function FeedItemCard(props: FeedItemCardProps): JSX.Element {
             {sourceLine ? (
               <div className="mt-1 text-[11px] text-neutral-500">{sourceLine}</div>
             ) : null}
-            <div className="mt-1 line-clamp-2 text-xs leading-relaxed text-neutral-600">
+            <div className="mt-1 text-xs leading-relaxed text-neutral-600">
               <SearchHtml
                 html={item.search_summary_html}
                 fallback={item.summary || item.search_snippet || noSummaryLabel}
@@ -223,6 +171,99 @@ export function FeedItemCard(props: FeedItemCardProps): JSX.Element {
           </div>
         </div>
       </button>
+
+      <div
+        className={`flex shrink-0 flex-col items-center justify-center gap-0 border-l border-border bg-neutral-50/80 ${
+          selectionMode ? "w-10 py-2" : "py-1"
+        }`}
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={() => undefined}
+        role="presentation"
+      >
+        <ActionBtn
+          label={batchSelectLabel}
+          className={selected ? "text-black" : ""}
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleSelected?.();
+          }}
+        >
+          {selected ? (
+            <CheckCircle2 className="h-4 w-4 fill-black text-white" />
+          ) : (
+            <Circle className="h-4 w-4" />
+          )}
+        </ActionBtn>
+
+        {trashMode && !selectionMode ? (
+          <ActionBtn
+            label={restoreLabel}
+            onClick={(e) => {
+              e.stopPropagation();
+              onRestore?.();
+            }}
+          >
+            <RotateCcw className="h-4 w-4" />
+          </ActionBtn>
+        ) : !trashMode && !selectionMode ? (
+          <>
+        <ActionBtn
+          label={item.starred ? unfavoriteLabel : favoriteLabel}
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleFavorite();
+          }}
+        >
+          <Star
+            className={`h-4 w-4 ${item.starred ? "fill-amber-400 text-amber-500" : ""}`}
+          />
+        </ActionBtn>
+
+          <ThemeMovePopover
+            themes={themes}
+            locale={locale}
+            currentThemeId={item.theme_id}
+            onSelect={onMoveTheme}
+            floatPanel
+            trigger={
+              <button
+                type="button"
+                aria-label={moveThemeLabel}
+                title={moveThemeLabel}
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-black"
+              >
+                <Forward className="h-4 w-4" />
+              </button>
+            }
+          />
+
+          {confirmDelete ? (
+            <ActionBtn
+              label={deleteConfirmLabel}
+              className="text-red-600 hover:bg-red-50 hover:text-red-700"
+              onClick={(e) => {
+                e.stopPropagation();
+                onDelete();
+                setConfirmDelete(false);
+              }}
+            >
+              <Trash2 className="h-4 w-4" />
+            </ActionBtn>
+          ) : (
+            <ActionBtn
+              label={deleteLabel}
+              className="hover:text-red-600"
+              onClick={(e) => {
+                e.stopPropagation();
+                setConfirmDelete(true);
+              }}
+            >
+              <Trash2 className="h-4 w-4" />
+            </ActionBtn>
+          )}
+          </>
+        ) : null}
+      </div>
     </div>
   );
 }

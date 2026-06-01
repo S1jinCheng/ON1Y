@@ -65,7 +65,7 @@ def _fetch_index_payload(conn: sqlite3.Connection, raw_id: int) -> dict[str, str
         FROM raw_items r
         LEFT JOIN distilled_items d ON d.raw_id = r.id
         LEFT JOIN themes th ON th.id = r.theme_id
-        WHERE r.id = ?
+        WHERE r.id = ? AND (r.deleted_at IS NULL OR r.deleted_at = '')
         """,
         (raw_id,),
     ).fetchone()
@@ -176,6 +176,7 @@ def search_knowledge_fts(
     source: str | None = None,
     theme_id: int | None = None,
     tag_ids: list[int] | None = None,
+    collection_sql: str = "r.deleted_at IS NULL",
 ) -> tuple[list[dict[str, Any]], int]:
     """
     Ranked FTS search. Returns (hits, total_estimate).
@@ -194,6 +195,7 @@ def search_knowledge_fts(
             source=source,
             theme_id=theme_id,
             tag_ids=tag_ids,
+            collection_sql=collection_sql,
         )
     return _search_fts_bm25(
         conn,
@@ -204,6 +206,7 @@ def search_knowledge_fts(
         source=source,
         theme_id=theme_id,
         tag_ids=tag_ids,
+        collection_sql=collection_sql,
     )
 
 
@@ -217,8 +220,9 @@ def _search_fts_bm25(
     source: str | None,
     theme_id: int | None,
     tag_ids: list[int] | None,
+    collection_sql: str,
 ) -> tuple[list[dict[str, Any]], int]:
-    where_parts = ["knowledge_fts MATCH ?"]
+    where_parts = ["knowledge_fts MATCH ?", collection_sql]
     params: list[Any] = [fts_q]
 
     if platform:
@@ -304,9 +308,10 @@ def _search_hybrid(
     source: str | None,
     theme_id: int | None,
     tag_ids: list[int] | None,
+    collection_sql: str,
 ) -> tuple[list[dict[str, Any]], int]:
     """LIKE fallback for terms shorter than trigram minimum (3 chars)."""
-    where_parts = ["r.extract_status IN ('ok', 'partial')"]
+    where_parts = ["r.extract_status IN ('ok', 'partial')", collection_sql]
     params: list[Any] = []
     for term in terms:
         like = f"%{term}%"

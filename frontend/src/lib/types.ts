@@ -57,6 +57,7 @@ export type KnowledgeItem = {
   themes: ItemTheme[];
   tags: ItemTag[];
   starred?: boolean;
+  deleted_at?: string | null;
   search_rank?: number;
   search_snippet?: string;
   search_title_html?: string;

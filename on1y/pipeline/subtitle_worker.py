@@ -19,6 +19,7 @@ from on1y.pipeline.video_meta import (
     with_subtitle_ready,
 )
 from on1y.ports.storage import StoragePort
+from on1y.pipeline.video_author import enrich_video_source_meta
 from on1y.utils.platform import YTDLP_VIDEO_PLATFORMS
 
 logger = logging.getLogger(__name__)
@@ -58,8 +59,10 @@ def _maybe_auto_distill(storage: SqliteStorage, raw_id: int) -> None:
             logger.debug("Skip auto-distill: no LLM API key")
             return
         distill_raw_item(storage, raw_id)
+        storage.merge_source_meta(raw_id, {"distill_pending": False})
         logger.info("Auto-distilled raw_id=%s after subtitles", raw_id)
     except Exception as exc:
+        storage.merge_source_meta(raw_id, {"distill_pending": True})
         logger.warning("Auto-distill failed for raw_id=%s: %s", raw_id, exc)
 
 
@@ -118,6 +121,7 @@ def run_subtitle_batch(
             meta = with_subtitle_ready(raw.source_meta)
             if description:
                 meta[VIDEO_DESCRIPTION] = description[:50_000]
+            meta = enrich_video_source_meta(meta, platform=raw.platform, url=job.url)
 
             if (
                 settings.content_locale.lower().startswith("zh")

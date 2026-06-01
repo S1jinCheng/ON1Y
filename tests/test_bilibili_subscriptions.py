@@ -215,3 +215,35 @@ def test_parse_dynamic_video_rejects_draw_and_article() -> None:
     assert parse_dynamic_video_item(draw) is None
     assert parse_dynamic_video_item(article) is None
     assert parse_dynamic_video_item(ad) is None
+
+
+def test_parse_dynamic_video_includes_up_face() -> None:
+    from on1y.ingestion.bilibili_api import parse_dynamic_video_item
+
+    item = {
+        "type": "DYNAMIC_TYPE_AV",
+        "id_str": "dyn1",
+        "modules": {
+            "module_author": {
+                "mid": "42",
+                "name": "UP",
+                "pub_ts": 1_740_000_000,
+                "face": "https://i0.hdslb.com/bfs/face/up.jpg",
+            },
+            "module_dynamic": {
+                "major": {
+                    "type": "MAJOR_TYPE_ARCHIVE",
+                    "archive": {
+                        "bvid": "BV1test0001",
+                        "title": "t",
+                        "desc": "d",
+                        "cover": "https://example.com/cover.jpg",
+                        "duration_text": "01:00",
+                    },
+                }
+            },
+        },
+    }
+    parsed = parse_dynamic_video_item(item)
+    assert parsed is not None
+    assert parsed["up_face"] == "https://i0.hdslb.com/bfs/face/up.jpg"

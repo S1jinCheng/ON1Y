@@ -187,7 +187,7 @@ def fetch_bilibili_followings(
     page_size: int = 50,
     client: httpx.Client | None = None,
 ) -> list[dict[str, str]]:
-    """Return followed UPs as {mid, uname} for the logged-in user (or vmid)."""
+    """Return followed UPs as {mid, uname, face?} for the logged-in user (or vmid)."""
     settings = settings or get_settings()
     me = fetch_bilibili_me(cookie_path=cookie_path, settings=settings, client=client)
     target_mid = str(vmid or me["mid"])
@@ -225,12 +225,14 @@ def fetch_bilibili_followings(
                 if not mid or mid in seen:
                     continue
                 seen.add(mid)
-                rows.append(
-                    {
-                        "mid": mid,
-                        "uname": str(item.get("uname") or item.get("name") or mid),
-                    }
-                )
+                face = str(item.get("face") or "").strip()
+                row: dict[str, str] = {
+                    "mid": mid,
+                    "uname": str(item.get("uname") or item.get("name") or mid),
+                }
+                if face:
+                    row["face"] = face
+                rows.append(row)
             total = int(data.get("total") or 0)
             if pn * page_size >= total or len(batch) < page_size:
                 break
@@ -241,6 +243,43 @@ def fetch_bilibili_followings(
 
     logger.info("Fetched %s Bilibili following(s) for vmid=%s", len(rows), target_mid)
     return rows
+
+
+def fetch_bilibili_up_face(
+    up_mid: str,
+    *,
+    cookie_path=None,
+    settings: Settings | None = None,
+    client: httpx.Client | None = None,
+) -> str:
+    """Return UP face URL for a single mid (card API)."""
+    up_mid = str(up_mid or "").strip()
+    if not up_mid:
+        return ""
+    settings = settings or get_settings()
+    path = cookie_path or settings.bilibili_cookies_path
+    jar = _cookie_jar(path)
+    own_client = client is None
+    if own_client:
+        client = httpx.Client(headers=DEFAULT_HEADERS, cookies=jar, timeout=settings.http_timeout_seconds)
+    try:
+        assert client is not None
+        response = client.get(
+            f"{BILIBILI_API}/x/web-interface/card",
+            params={"mid": up_mid},
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if payload.get("code") != 0:
+            return ""
+        card = (payload.get("data") or {}).get("card") or {}
+        return str(card.get("face") or "").strip()
+    except Exception as exc:
+        logger.debug("Bilibili card face lookup failed mid=%s: %s", up_mid, exc)
+        return ""
+    finally:
+        if own_client and client is not None:
+            client.close()
 
 
 def iter_up_recent_videos(
@@ -391,7 +430,8 @@ def parse_dynamic_video_item(item: dict[str, Any]) -> dict[str, Any] | None:
         except ValueError:
             duration_sec = None
 
-    return {
+    up_face = str(author_mod.get("face") or "").strip()
+    parsed: dict[str, Any] = {
         "dynamic_id": str(item.get("id_str") or bvid),
         "bvid": bvid,
         "title": str(archive.get("title") or "").strip(),
@@ -402,6 +442,9 @@ def parse_dynamic_video_item(item: dict[str, Any]) -> dict[str, Any] | None:
         "uname": str(author_mod.get("name") or up_mid).strip(),
         "duration_sec": duration_sec,
     }
+    if up_face:
+        parsed["up_face"] = up_face
+    return parsed
 
 
 def iter_dynamic_video_feed(
