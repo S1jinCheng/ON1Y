@@ -96,6 +96,35 @@ class Settings(BaseSettings):
     # Zhihu daily hot list (questions + excerpt + link)
     zhihu_hotlist_enabled: bool = Field(default=True)
     zhihu_hotlist_limit: int = Field(default=50, ge=1, le=100)
+    zhihu_hotlist_auto_tag: bool = Field(default=True)
+    # The Economist daily digest (RSS → hot-list column)
+    economist_hotlist_enabled: bool = Field(default=True)
+    economist_hotlist_limit: int = Field(default=40, ge=1, le=100)
+    economist_hotlist_auto_tag: bool = Field(default=True)
+    # Official feed works in many regions; use RSSHub if blocked, e.g.
+    # http://127.0.0.1:1200/economist/latest or /economist/espresso
+    economist_hotlist_rss_url: str = Field(
+        default=(
+            "https://github.com/hehonghui/awesome-english-ebooks/"
+            "commits/master/01_economist.atom"
+        )
+    )
+    # Optional mirror for raw PDF URLs when raw.githubusercontent.com is slow/blocked.
+    # Example: https://ghfast.top/https://raw.githubusercontent.com/hehonghui/awesome-english-ebooks/master
+    economist_github_raw_base: str = Field(default="")
+    economist_epub_preview_max_chars: int = Field(default=40_000, ge=2_000, le=200_000)
+    economist_auto_sync_enabled: bool = Field(default=True)
+    economist_auto_sync_interval_minutes: int = Field(default=60, ge=15, le=24 * 60)
+    economist_auto_kindle: bool = Field(default=True)
+    kindle_send_to: str | None = Field(default=None)
+
+    # SMTP for Send to Kindle (FROM must be approved in Amazon account settings)
+    smtp_host: str | None = Field(default=None)
+    smtp_port: int = Field(default=587, ge=1, le=65535)
+    smtp_user: str | None = Field(default=None)
+    smtp_password: str | None = Field(default=None)
+    smtp_from: str | None = Field(default=None)
+    smtp_use_tls: bool = Field(default=True)
     # Max RSS entries to enqueue per feed during cold-start backfill
     rss_backfill_max_items_per_feed: int = Field(default=100, ge=1, le=500)
 
@@ -126,7 +155,7 @@ class Settings(BaseSettings):
     auto_sync_ingest: bool = Field(default=True)
     auto_sync_ingest_limit: int = Field(default=10, ge=1, le=50)
     auto_sync_subtitle_limit: int = Field(default=10, ge=0, le=50)
-    auto_sync_distill_limit: int = Field(default=10, ge=0, le=50)
+    auto_sync_distill_limit: int = Field(default=50, ge=0, le=50)
     # Optional: refresh feeds.yaml from platform lists before RSS poll
     youtube_auto_refresh_channels: bool = Field(default=False)
     youtube_refresh_max_channels: int = Field(default=50, ge=1, le=500)
@@ -136,6 +165,15 @@ class Settings(BaseSettings):
 
     web_host: str = Field(default="127.0.0.1")
     web_port: int = Field(default=8765, ge=1, le=65535)
+
+    # Multi-user auth (web UI + per-user cookies/profile)
+    auth_secret_key: str = Field(default="change-me-in-production")
+    auth_token_ttl_hours: int = Field(default=168, ge=1, le=24 * 30)
+    auth_required: bool = Field(default=True)
+    auth_allow_registration: bool = Field(default=True)
+    bootstrap_username: str = Field(default="admin")
+    bootstrap_password: str | None = Field(default=None)
+    bootstrap_email: str | None = Field(default=None)
     # Comma-separated extra CORS origins for the Next.js dev server (e.g. http://localhost:3001)
     cors_origins: str = Field(default="")
 

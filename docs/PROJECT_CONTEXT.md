@@ -33,8 +33,11 @@ on1y serve
 | 知乎关注 | `feeds.yaml` 中 `zhihu-*` RSS | `on1y subscriptions --platform zhihu` |
 | 全部 | 上三者串联 | `on1y subscriptions --platform all --ingest` |
 | 知乎热榜 | 独立热榜 API（**不是**关注订阅） | `on1y hotlist sync` 或 Web「同步知乎热榜」 |
+| 经济学人周刊 | GitHub [hehonghui/awesome-english-ebooks](https://github.com/hehonghui/awesome-english-ebooks) 提交 RSS | 自动：`on1y serve` 后台检测新刊 → 入库 → 可选发 Kindle；手动：`on1y hotlist auto` |
 
 起始日期保存在 `data/subscription_settings.json`（`bilibili_sync_since` / `youtube_sync_since` / `zhihu_sync_since`）。
+
+**多用户（schema v9）**：`users` / `user_profiles` / `user_subscription_settings` 表；Web 登录 JWT（`ON1Y_AUTH_SECRET_KEY`）。每用户数据目录 `data/users/<id>/`（cookies、llm_settings、subscription_settings）。旧版 `data/user_profile.json` 与 `data/cookies/` 在首次迁移时并入用户 id=1。知识库条目 `raw_items.user_id` 按登录用户隔离。
 
 可选定时（`on1y serve` 后台）：
 

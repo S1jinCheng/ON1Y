@@ -9,6 +9,8 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+SYNC_PLATFORM_ORDER = ("bilibili", "youtube", "zhihu")
+
 _lock = threading.Lock()
 _state: dict[str, Any] = {
     "running": False,
@@ -24,67 +26,105 @@ def subscription_sync_status() -> dict[str, Any]:
         return dict(_state)
 
 
+def normalize_sync_platforms(
+    *,
+    platform: str = "all",
+    platforms: list[str] | None = None,
+) -> list[str]:
+    allowed = set(SYNC_PLATFORM_ORDER)
+    if platforms:
+        out = [p for p in platforms if p in allowed]
+        if not out:
+            raise ValueError("platforms must include at least one of bilibili, youtube, zhihu")
+        return out
+    if platform == "all":
+        return list(SYNC_PLATFORM_ORDER)
+    if platform not in allowed:
+        raise ValueError(f"unsupported platform: {platform}")
+    return [platform]
+
+
 def _execute_subscription_sync(
     *,
-    platform: str = "bilibili",
+    platforms: list[str],
     backfill: bool = False,
     ingest: bool = False,
-    ingest_limit: int = 10,
-    subtitle_limit: int = 10,
-    distill_limit: int = 10,
+    ingest_limit: int = 30,
+    subtitle_limit: int = 30,
+    distill_limit: int = 30,
+    use_ai_summary: bool = True,
     sync_hotlist: bool = False,
     refresh_feeds: bool | None = None,
 ) -> tuple[dict[str, Any] | None, str | None]:
     from on1y.adapters.sqlite_storage import get_storage
+    from on1y.distill.processor import run_distill_batch
     from on1y.pipeline.video_enrich import run_video_enrich_pipeline
     from on1y.pipeline.worker import run_worker_batch
     from on1y.subscriptions import sync_subscriptions
 
-    report: dict[str, Any] | None = None
+    if not use_ai_summary:
+        distill_limit = 0
+
+    combined: dict[str, Any] = {"platforms": platforms, "use_ai_summary": use_ai_summary}
     error: str | None = None
     storage = get_storage()
     try:
-        report = sync_subscriptions(
-            storage,
-            platform=platform,
-            sync_config=platform in {"bilibili", "all"},
-            poll=platform in {"bilibili", "youtube", "zhihu", "all"},
-            backfill=backfill,
-            sync_hotlist=sync_hotlist,
-            refresh_feeds=refresh_feeds,
-        )
-        if ingest:
-            if platform in {"bilibili", "all"}:
-                report["enrich"] = run_video_enrich_pipeline(
-                    storage,
-                    platform="bilibili",
-                    ingest_limit=ingest_limit,
-                    subtitle_limit=subtitle_limit,
-                    distill_limit=distill_limit,
-                )
-            if platform in {"youtube", "zhihu", "all"}:
-                report["worker"] = run_worker_batch(storage, ingest_limit)
-        logger.info("Subscription sync finished: %s", report)
+        for name in SYNC_PLATFORM_ORDER:
+            if name not in platforms:
+                continue
+            platform_report = sync_subscriptions(
+                storage,
+                platform=name,
+                sync_config=name == "bilibili",
+                poll=True,
+                backfill=backfill,
+                sync_hotlist=sync_hotlist and name == "bilibili",
+                refresh_feeds=refresh_feeds,
+            )
+            if ingest:
+                if name == "bilibili":
+                    platform_report["enrich"] = run_video_enrich_pipeline(
+                        storage,
+                        platform="bilibili",
+                        ingest_limit=ingest_limit,
+                        subtitle_limit=subtitle_limit,
+                        distill_limit=distill_limit,
+                        use_ai_summary=use_ai_summary,
+                    )
+                else:
+                    platform_report["ingest"] = run_worker_batch(
+                        storage, ingest_limit, platform=name
+                    )
+                    if use_ai_summary and distill_limit > 0:
+                        platform_report["distill"] = run_distill_batch(
+                            storage, distill_limit, platform=name
+                        )
+            combined[name] = platform_report
+        logger.info("Subscription sync finished: %s", combined)
+        return combined, None
     except Exception as exc:
         error = str(exc)
         logger.exception("Subscription sync failed")
+        return combined if combined.get("platforms") else None, error
     finally:
         storage.close()
-    return report, error
 
 
 def run_subscription_sync_blocking(
     *,
-    platform: str = "bilibili",
+    platform: str = "all",
+    platforms: list[str] | None = None,
     backfill: bool = False,
     ingest: bool = False,
-    ingest_limit: int = 10,
-    subtitle_limit: int = 10,
-    distill_limit: int = 10,
+    ingest_limit: int = 30,
+    subtitle_limit: int = 30,
+    distill_limit: int = 30,
+    use_ai_summary: bool = True,
     sync_hotlist: bool = False,
     refresh_feeds: bool | None = None,
 ) -> dict[str, Any] | None:
     """Run sync in the current thread; return None if another sync is running."""
+    targets = normalize_sync_platforms(platform=platform, platforms=platforms)
     with _lock:
         if _state["running"]:
             return None
@@ -99,12 +139,13 @@ def run_subscription_sync_blocking(
         )
 
     report, error = _execute_subscription_sync(
-        platform=platform,
+        platforms=targets,
         backfill=backfill,
         ingest=ingest,
         ingest_limit=ingest_limit,
         subtitle_limit=subtitle_limit,
         distill_limit=distill_limit,
+        use_ai_summary=use_ai_summary,
         sync_hotlist=sync_hotlist,
         refresh_feeds=refresh_feeds,
     )
@@ -118,15 +159,22 @@ def run_subscription_sync_blocking(
 
 def start_subscription_sync_job(
     *,
-    platform: str = "bilibili",
+    platform: str = "all",
+    platforms: list[str] | None = None,
     backfill: bool = False,
     ingest: bool = False,
-    ingest_limit: int = 10,
-    subtitle_limit: int = 10,
-    distill_limit: int = 10,
+    ingest_limit: int = 30,
+    subtitle_limit: int = 30,
+    distill_limit: int = 30,
+    use_ai_summary: bool = True,
     sync_hotlist: bool = False,
     refresh_feeds: bool | None = None,
 ) -> dict[str, Any]:
+    try:
+        targets = normalize_sync_platforms(platform=platform, platforms=platforms)
+    except ValueError as exc:
+        return {"started": False, "running": False, "message": str(exc)}
+
     with _lock:
         if _state["running"]:
             return {
@@ -146,12 +194,13 @@ def start_subscription_sync_job(
 
     def _run() -> None:
         report, error = _execute_subscription_sync(
-            platform=platform,
+            platforms=targets,
             backfill=backfill,
             ingest=ingest,
             ingest_limit=ingest_limit,
             subtitle_limit=subtitle_limit,
             distill_limit=distill_limit,
+            use_ai_summary=use_ai_summary,
             sync_hotlist=sync_hotlist,
             refresh_feeds=refresh_feeds,
         )

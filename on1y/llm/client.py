@@ -133,12 +133,12 @@ def _parse_json_response(text: str) -> dict[str, Any]:
     return parsed
 
 
-@lru_cache
-def get_llm_client() -> LlmClient:
+@lru_cache(maxsize=64)
+def _get_llm_client_cached(user_id: int) -> LlmClient:
     cfg = get_resolved_llm_settings()
     if not cfg.api_key_set:
         raise ConfigurationError(
-            "未配置 LLM API Key。请在 http://127.0.0.1:8765 的「LLM 设置」保存 DeepSeek Key"
+            "未配置 LLM API Key。请在「设置 → AI 模型」保存 API Key，或设置 ON1Y_LLM_API_KEY"
         )
     return LlmClient(
         base_url=cfg.base_url,
@@ -146,3 +146,9 @@ def get_llm_client() -> LlmClient:
         model=cfg.model,
         timeout=cfg.timeout_seconds,
     )
+
+
+def get_llm_client() -> LlmClient:
+    from on1y.auth.context import get_effective_user_id
+
+    return _get_llm_client_cached(get_effective_user_id())

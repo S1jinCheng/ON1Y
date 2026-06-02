@@ -1,28 +1,102 @@
 "use client";
 
-import { Settings2 } from "lucide-react";
+import { Plus, Settings2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import {
-  getDistillBackfillStatus,
   getSubscriptionSettings,
   getSubscriptionSyncStatus,
-  runDistillBackfill,
-  runHotlistSync,
   runSubscriptionSync,
   saveSubscriptionSettings,
+  type SubscriptionSettings,
   type SubscriptionSyncStatus
 } from "@/lib/api";
 import { t, type Locale, type UiKey } from "@/lib/i18n";
+
+type PlatformKey = "bilibili" | "youtube" | "zhihu";
+
+const ALL_PLATFORMS: PlatformKey[] = ["bilibili", "youtube", "zhihu"];
+
+function platformLabel(platform: PlatformKey, ui: (key: UiKey) => string): string {
+  if (platform === "bilibili") {
+    return ui("platformBilibili");
+  }
+  if (platform === "youtube") {
+    return ui("platformYoutube");
+  }
+  return ui("platformZhihu");
+}
+
+function pickDisplayDate(settings: SubscriptionSettings): string {
+  const dates = ALL_PLATFORMS.map((p) => {
+    if (p === "bilibili") {
+      return settings.bilibili_sync_since;
+    }
+    if (p === "youtube") {
+      return settings.youtube_sync_since;
+    }
+    return settings.zhihu_sync_since;
+  }).filter((value): value is string => Boolean(value));
+  if (dates.length === 0) {
+    return "";
+  }
+  return dates[0] ?? "";
+}
+
+function buildSincePayload(
+  active: PlatformKey[],
+  syncSince: string
+): {
+  bilibili_sync_since?: string | null;
+  youtube_sync_since?: string | null;
+  zhihu_sync_since?: string | null;
+} {
+  const since = syncSince.trim();
+  const payload: {
+    bilibili_sync_since?: string | null;
+    youtube_sync_since?: string | null;
+    zhihu_sync_since?: string | null;
+  } = {};
+  if (active.includes("bilibili")) {
+    payload.bilibili_sync_since = since || "";
+  }
+  if (active.includes("youtube")) {
+    payload.youtube_sync_since = since || "";
+  }
+  if (active.includes("zhihu")) {
+    payload.zhihu_sync_since = since || "";
+  }
+  return payload;
+}
 
 function sumEnqueued(status: SubscriptionSyncStatus): number {
   const report = status.last_report;
   if (!report) {
     return 0;
   }
-  let total = report.bilibili?.poll?.enqueued ?? 0;
-  total += report.youtube?.poll?.enqueued ?? 0;
-  total += report.zhihu?.poll?.enqueued ?? 0;
+  let total = 0;
+  for (const key of ALL_PLATFORMS) {
+    const block = report[key] as { poll?: { enqueued?: number } } | undefined;
+    total += block?.poll?.enqueued ?? 0;
+  }
+  return total;
+}
+
+function sumDistilled(status: SubscriptionSyncStatus): number {
+  const report = status.last_report;
+  if (!report) {
+    return 0;
+  }
+  let total = 0;
+  for (const key of ALL_PLATFORMS) {
+    const block = report[key] as
+      | {
+          enrich?: { distill?: { distilled?: number } };
+          distill?: { distilled?: number };
+        }
+      | undefined;
+    total += block?.enrich?.distill?.distilled ?? block?.distill?.distilled ?? 0;
+  }
   return total;
 }
 
@@ -40,18 +114,10 @@ function pollSyncUntilDone(onMessage: (message: string) => void, ui: (key: UiKey
           return;
         }
         const enqueued = sumEnqueued(status);
-        const deferred = status.last_report?.bilibili?.poll?.ups_deferred ?? 0;
-        const rateLimited = status.last_report?.bilibili?.poll?.rate_limited ?? 0;
-        const distilled = status.last_report?.enrich?.distill?.distilled ?? 0;
+        const distilled = sumDistilled(status);
         let message = `${ui("syncDone")}: +${enqueued}`;
         if (distilled > 0) {
-          message += ` · ${ui("bilibiliDistillDone")} ${distilled}`;
-        }
-        if (deferred > 0) {
-          message += ` · ${ui("syncDeferred")} ${deferred}`;
-        }
-        if (rateLimited > 0) {
-          message += ` · ${ui("syncRateLimited")} ${rateLimited}`;
+          message += ` · ${ui("syncSummariesDone")} ${distilled}`;
         }
         onMessage(message);
       } catch (error) {
@@ -62,51 +128,21 @@ function pollSyncUntilDone(onMessage: (message: string) => void, ui: (key: UiKey
   }, 3000);
 }
 
-function pollDistillUntilDone(onMessage: (message: string) => void, ui: (key: UiKey) => string): void {
-  const timer = window.setInterval(() => {
-    void (async () => {
-      try {
-        const status = await getDistillBackfillStatus();
-        if (status.running) {
-          return;
-        }
-        window.clearInterval(timer);
-        if (status.error) {
-          onMessage(status.error);
-          return;
-        }
-        const distilled = status.distilled ?? 0;
-        const failed = status.failed ?? 0;
-        let message = `${ui("bilibiliDistillDone")}: ${distilled}`;
-        if (failed > 0) {
-          message += ` · ${ui("bilibiliDistillFailed")} ${failed}`;
-        }
-        onMessage(message);
-      } catch (error) {
-        window.clearInterval(timer);
-        onMessage(error instanceof Error ? error.message : String(error));
-      }
-    })();
-  }, 5000);
-}
-
-type PlatformKey = "bilibili" | "youtube" | "zhihu";
-
 export function SubscriptionSettingsPanel(props: {
   locale: Locale;
   open: boolean;
   onClose: () => void;
   onMessage?: (message: string) => void;
   onSyncStarted?: () => void;
-  onDistillStarted?: () => void;
 }): JSX.Element | null {
   const ui = (key: UiKey): string => t(props.locale, key);
-  const [loading, setLoading] = useState<boolean>(false);
-  const [submitting, setSubmitting] = useState<boolean>(false);
-  const [bilibiliSince, setBilibiliSince] = useState("");
-  const [youtubeSince, setYoutubeSince] = useState("");
-  const [zhihuSince, setZhihuSince] = useState("");
-  const [backfill, setBackfill] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [activePlatforms, setActivePlatforms] = useState<PlatformKey[]>([...ALL_PLATFORMS]);
+  const [syncSince, setSyncSince] = useState("");
+  const [useAiSummary, setUseAiSummary] = useState(true);
+
+  const availableToAdd = ALL_PLATFORMS.filter((p) => !activePlatforms.includes(p));
 
   useEffect(() => {
     if (!props.open) {
@@ -120,9 +156,12 @@ export function SubscriptionSettingsPanel(props: {
         if (cancelled) {
           return;
         }
-        setBilibiliSince(settings.bilibili_sync_since ?? "");
-        setYoutubeSince(settings.youtube_sync_since ?? "");
-        setZhihuSince(settings.zhihu_sync_since ?? "");
+        const enabled = (settings.enabled_platforms ?? ALL_PLATFORMS).filter((p) =>
+          ALL_PLATFORMS.includes(p as PlatformKey)
+        ) as PlatformKey[];
+        setActivePlatforms(enabled.length > 0 ? enabled : [...ALL_PLATFORMS]);
+        setSyncSince(pickDisplayDate(settings));
+        setUseAiSummary(true);
       } catch (error) {
         props.onMessage?.(error instanceof Error ? error.message : String(error));
       } finally {
@@ -140,37 +179,44 @@ export function SubscriptionSettingsPanel(props: {
     return null;
   }
 
-  async function handleSave(): Promise<void> {
-    setSubmitting(true);
-    try {
-      await saveSubscriptionSettings({
-        bilibili_sync_since: bilibiliSince.trim() || null,
-        youtube_sync_since: youtubeSince.trim() || null,
-        zhihu_sync_since: zhihuSince.trim() || null
-      });
-      props.onMessage?.(ui("settingsSaved"));
-    } catch (error) {
-      props.onMessage?.(error instanceof Error ? error.message : String(error));
-    } finally {
-      setSubmitting(false);
-    }
+  function removePlatform(platform: PlatformKey): void {
+    setActivePlatforms((prev) => prev.filter((p) => p !== platform));
   }
 
-  async function handleSync(platform: PlatformKey | "all"): Promise<void> {
+  function addPlatform(platform: PlatformKey): void {
+    setActivePlatforms((prev) => {
+      if (prev.includes(platform)) {
+        return prev;
+      }
+      return [...prev, platform].sort(
+        (a, b) => ALL_PLATFORMS.indexOf(a) - ALL_PLATFORMS.indexOf(b)
+      );
+    });
+  }
+
+  async function persistSettings(platforms: PlatformKey[]): Promise<void> {
+    const sinceFields = buildSincePayload(platforms, syncSince);
+    await saveSubscriptionSettings({
+      ...sinceFields,
+      enabled_platforms: platforms
+    });
+  }
+
+  async function handleSync(): Promise<void> {
+    if (activePlatforms.length === 0) {
+      props.onMessage?.(ui("selectAtLeastOnePlatform"));
+      return;
+    }
     setSubmitting(true);
     try {
-      await saveSubscriptionSettings({
-        bilibili_sync_since: bilibiliSince.trim() || null,
-        youtube_sync_since: youtubeSince.trim() || null,
-        zhihu_sync_since: zhihuSince.trim() || null
-      });
+      await persistSettings(activePlatforms);
       const result = await runSubscriptionSync({
-        platform,
-        backfill,
+        platforms: activePlatforms,
         ingest: true,
-        ingest_limit: 20,
-        subtitle_limit: 10,
-        distill_limit: 10
+        use_ai_summary: useAiSummary,
+        ingest_limit: 30,
+        subtitle_limit: 30,
+        distill_limit: useAiSummary ? 50 : 0
       });
       if (!result.started) {
         props.onMessage?.(result.message ?? ui("syncAlreadyRunning"));
@@ -186,160 +232,127 @@ export function SubscriptionSettingsPanel(props: {
     }
   }
 
-  async function handleHotlistSync(): Promise<void> {
-    setSubmitting(true);
-    try {
-      const report = await runHotlistSync({ sources: ["zhihu"] });
-      const zh = report.results?.zhihu;
-      const created = zh?.created ?? 0;
-      const updated = zh?.updated ?? 0;
-      props.onMessage?.(`${ui("hotlistSyncDone")}: +${created} / ↻${updated}`);
-      props.onClose();
-    } catch (error) {
-      props.onMessage?.(error instanceof Error ? error.message : String(error));
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  async function handleBilibiliDistill(): Promise<void> {
-    setSubmitting(true);
-    try {
-      const result = await runDistillBackfill({ platform: "bilibili", max_items: 500 });
-      if (!result.started) {
-        props.onMessage?.(result.message ?? ui("bilibiliDistillAlreadyRunning"));
-        return;
-      }
-      props.onMessage?.(result.message ?? ui("bilibiliDistillStarted"));
-      props.onDistillStarted?.();
-      props.onClose();
-    } catch (error) {
-      props.onMessage?.(error instanceof Error ? error.message : String(error));
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  function platformSince(
-    platform: PlatformKey,
-    value: string,
-    onChange: (v: string) => void
-  ): JSX.Element {
-    const labelKey =
-      platform === "bilibili"
-        ? "platformBilibili"
-        : platform === "youtube"
-          ? "platformYoutube"
-          : "platformZhihu";
-    const hintKey =
-      platform === "bilibili"
-        ? "bilibiliSyncHint"
-        : platform === "youtube"
-          ? "youtubeSyncHint"
-          : "zhihuSyncHint";
-    return (
-      <label className="block space-y-1.5">
-        <span className="text-sm font-medium">{ui(labelKey)}</span>
-        <span className="block text-xs text-muted">{ui("syncSince")}</span>
-        <input
-          type="date"
-          value={value}
-          onChange={(event) => onChange(event.target.value)}
-          className="w-full rounded-md border border-border px-3 py-2 text-sm"
-          disabled={loading || submitting}
-        />
-        <span className="block text-xs text-muted">{ui(hintKey)}</span>
-        <button
-          type="button"
-          onClick={() => void handleSync(platform)}
-          disabled={loading || submitting}
-          className="mt-1 rounded-md border border-border bg-white px-3 py-1.5 text-sm hover:bg-soft disabled:opacity-50"
-        >
-          {submitting ? ui("syncing") : ui("syncPlatformNow")}
-        </button>
-      </label>
-    );
-  }
-
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 p-4 pt-10">
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/35 p-4 pt-12">
       <div
         role="dialog"
         aria-labelledby="subscription-settings-title"
-        className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-lg border border-border bg-white p-4 shadow-xl"
+        className="w-full max-w-sm rounded-xl border border-neutral-200 bg-white shadow-2xl"
       >
-        <div className="mb-4 flex items-center justify-between">
-          <h2 id="subscription-settings-title" className="text-base font-semibold">
+        <div className="flex items-center justify-between border-b border-neutral-100 px-4 py-3">
+          <h2 id="subscription-settings-title" className="text-sm font-semibold tracking-tight">
             {ui("subscriptionSettings")}
           </h2>
           <button
             type="button"
             onClick={props.onClose}
-            className="rounded px-2 py-1 text-sm text-muted hover:bg-soft hover:text-black"
+            className="flex h-7 w-7 items-center justify-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-black"
+            aria-label={ui("themeEditDone")}
           >
-            ✕
+            <X className="h-4 w-4" />
           </button>
         </div>
 
-        <label className="mb-4 flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={backfill}
-            onChange={(event) => setBackfill(event.target.checked)}
-            disabled={loading || submitting}
-          />
-          <span>{ui("syncBackfill")}</span>
-        </label>
-        <p className="mb-4 text-xs text-muted">{ui("syncBackfillHint")}</p>
+        <div className="space-y-4 px-4 py-4">
+          <section>
+            <p className="mb-2 text-xs font-medium text-neutral-500">{ui("syncPlatformBox")}</p>
+            <div className="min-h-[7.5rem] rounded-lg border border-neutral-200 bg-neutral-50/80 p-2">
+              {activePlatforms.length === 0 ? (
+                <p className="px-2 py-6 text-center text-xs text-muted">{ui("syncPlatformEmpty")}</p>
+              ) : (
+                <ul className="space-y-1">
+                  {activePlatforms.map((platform) => (
+                    <li
+                      key={platform}
+                      className="flex items-center gap-2 rounded-md border border-neutral-200/80 bg-white px-2 py-2 shadow-sm"
+                    >
+                      <span
+                        className="flex h-4 w-4 shrink-0 items-center justify-center rounded border border-neutral-300 bg-black"
+                        aria-hidden
+                      >
+                        <span className="h-2 w-2 rounded-sm bg-white" />
+                      </span>
+                      <span className="min-w-0 flex-1 truncate text-sm font-medium text-neutral-900">
+                        {platformLabel(platform, ui)}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => removePlatform(platform)}
+                        disabled={loading || submitting}
+                        className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-neutral-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-40"
+                        aria-label={`${ui("deleteTheme")} ${platformLabel(platform, ui)}`}
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            {availableToAdd.length > 0 ? (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {availableToAdd.map((platform) => (
+                  <button
+                    key={platform}
+                    type="button"
+                    onClick={() => addPlatform(platform)}
+                    disabled={loading || submitting}
+                    className="inline-flex items-center gap-1 rounded-md border border-dashed border-neutral-300 bg-white px-2 py-1 text-xs text-neutral-600 hover:border-neutral-400 hover:text-black disabled:opacity-50"
+                  >
+                    <Plus className="h-3 w-3" />
+                    {platformLabel(platform, ui)}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </section>
 
-        <div className="space-y-5">
-          {platformSince("bilibili", bilibiliSince, setBilibiliSince)}
-          {platformSince("youtube", youtubeSince, setYoutubeSince)}
-          {platformSince("zhihu", zhihuSince, setZhihuSince)}
+          <section>
+            <p className="mb-2 text-xs font-medium text-neutral-500">{ui("syncSinceLabel")}</p>
+            <div className="flex items-center gap-2">
+              <input
+                type="date"
+                value={syncSince}
+                onChange={(event) => setSyncSince(event.target.value)}
+                disabled={loading || submitting}
+                className="w-[10.5rem] rounded-md border border-neutral-200 bg-white px-2.5 py-2 text-sm shadow-sm outline-none focus:border-neutral-400 disabled:opacity-50"
+              />
+              {syncSince ? (
+                <button
+                  type="button"
+                  onClick={() => setSyncSince("")}
+                  disabled={loading || submitting}
+                  className="text-xs text-muted underline-offset-2 hover:text-black hover:underline disabled:opacity-50"
+                >
+                  {ui("syncSinceClear")}
+                </button>
+              ) : null}
+            </div>
+            <p className="mt-1.5 text-[11px] leading-relaxed text-muted">{ui("syncSinceHint")}</p>
+          </section>
 
-          <div className="rounded-md border border-border bg-soft/40 p-3">
-            <div className="mb-2 text-sm font-medium">{ui("bilibiliSummaries")}</div>
-            <p className="mb-3 text-xs text-muted">{ui("bilibiliSummariesHint")}</p>
-            <button
-              type="button"
-              onClick={() => void handleBilibiliDistill()}
-              disabled={loading || submitting}
-              className="rounded-md border border-border bg-white px-3 py-1.5 text-sm hover:bg-soft disabled:opacity-50"
-            >
-              {submitting ? ui("bilibiliDistillRunning") : ui("bilibiliDistillNow")}
-            </button>
-          </div>
-
-          <div className="rounded-md border border-border bg-soft/40 p-3">
-            <div className="mb-2 text-sm font-medium">{ui("hotlistColumn")}</div>
-            <p className="mb-3 text-xs text-muted">{ui("hotlistColumnHint")}</p>
-            <button
-              type="button"
-              onClick={() => void handleHotlistSync()}
-              disabled={loading || submitting}
-              className="rounded-md border border-border bg-white px-3 py-1.5 text-sm hover:bg-soft disabled:opacity-50"
-            >
-              {submitting ? ui("syncing") : ui("hotlistSyncNow")}
-            </button>
-          </div>
+          <section className="rounded-lg border border-neutral-100 bg-neutral-50/50 px-3 py-2.5">
+            <label className="flex cursor-pointer items-center gap-2.5">
+              <input
+                type="checkbox"
+                className="h-4 w-4 rounded border-neutral-300"
+                checked={useAiSummary}
+                onChange={(event) => setUseAiSummary(event.target.checked)}
+                disabled={loading || submitting}
+              />
+              <span className="text-sm text-neutral-800">{ui("syncUseAiSummary")}</span>
+            </label>
+          </section>
         </div>
 
-        <div className="mt-5 flex flex-wrap gap-2">
+        <div className="border-t border-neutral-100 px-4 py-3">
           <button
             type="button"
-            onClick={() => void handleSave()}
-            disabled={loading || submitting}
-            className="rounded-md border border-border bg-white px-3 py-1.5 text-sm hover:bg-soft disabled:opacity-50"
+            onClick={() => void handleSync()}
+            disabled={loading || submitting || activePlatforms.length === 0}
+            className="w-full rounded-lg bg-black py-2.5 text-sm font-medium text-white shadow-sm hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-45"
           >
-            {ui("saveSettings")}
-          </button>
-          <button
-            type="button"
-            onClick={() => void handleSync("all")}
-            disabled={loading || submitting}
-            className="rounded-md border border-black bg-black px-3 py-1.5 text-sm text-white hover:bg-neutral-800 disabled:opacity-50"
-          >
-            {submitting ? ui("syncing") : ui("syncAllNow")}
+            {submitting ? ui("syncing") : ui("syncSelectedNow")}
           </button>
         </div>
       </div>
@@ -352,9 +365,8 @@ export function SubscriptionSettingsButton(props: {
   onMessage?: (message: string) => void;
 }): JSX.Element {
   const ui = (key: UiKey): string => t(props.locale, key);
-  const [open, setOpen] = useState<boolean>(false);
-  const syncPollStarted = useRef<boolean>(false);
-  const distillPollStarted = useRef<boolean>(false);
+  const [open, setOpen] = useState(false);
+  const syncPollStarted = useRef(false);
 
   function handleSyncStarted(): void {
     if (syncPollStarted.current || !props.onMessage) {
@@ -362,14 +374,6 @@ export function SubscriptionSettingsButton(props: {
     }
     syncPollStarted.current = true;
     pollSyncUntilDone(props.onMessage, ui);
-  }
-
-  function handleDistillStarted(): void {
-    if (distillPollStarted.current || !props.onMessage) {
-      return;
-    }
-    distillPollStarted.current = true;
-    pollDistillUntilDone(props.onMessage, ui);
   }
 
   return (
@@ -389,7 +393,6 @@ export function SubscriptionSettingsButton(props: {
         onClose={() => setOpen(false)}
         onMessage={props.onMessage}
         onSyncStarted={handleSyncStarted}
-        onDistillStarted={handleDistillStarted}
       />
     </>
   );

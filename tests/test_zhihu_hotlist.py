@@ -41,14 +41,13 @@ def test_sync_zhihu_hotlist_upserts(mock_fetch) -> None:
     ]
 
     storage = MagicMock()
-    storage.get_theme_id_by_slug.return_value = 7
     storage.get_raw_by_url.return_value = None
     storage.upsert_raw_item.return_value = MagicMock(id=100)
 
-    report = sync_zhihu_hotlist(storage)
+    report = sync_zhihu_hotlist(storage, auto_tag=False)
     assert report["fetched"] == 1
     assert report["created"] == 1
     storage.upsert_raw_item.assert_called_once()
-    storage.set_item_theme.assert_called_with(100, 7, source="hotlist")
+    storage.detach_hotlist_item.assert_called_with(100)
     storage.upsert_distilled.assert_called_once()
     storage.set_rss_feed_state.assert_called_once()

@@ -33,3 +33,11 @@ feeds:
   # - url: http://127.0.0.1:1200/github/release/owner/repo
   #   label: local-rsshub
   #   enabled: false
+
+# --- 热榜 · 经济学人周刊（专栏 → 热榜 → 经济学人）---
+# 默认订阅 GitHub 免费分享：hehonghui/awesome-english-ebooks
+# ON1Y_ECONOMIST_HOTLIST_RSS_URL=https://github.com/hehonghui/awesome-english-ebooks/commits/master/01_economist.atom
+# GitHub 超时时与 YTDLP 共用代理: ON1Y_YTDLP_PROXY=http://127.0.0.1:7897
+# PDF 镜像（可选）: ON1Y_ECONOMIST_GITHUB_RAW_BASE=https://ghfast.top/https://raw.githubusercontent.com/hehonghui/awesome-english-ebooks/master
+# 若改用 RSSHub 单篇 RSS：
+# ON1Y_ECONOMIST_HOTLIST_RSS_URL=http://127.0.0.1:1200/economist/latest

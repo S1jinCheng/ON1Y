@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "owner": "default",
+  "kindle": {
+    "enabled": true,
+    "send_to": "chengsijin81_waEOnP@kindle.com"
+  },
+  "economist": {
+    "auto_ingest_enabled": true,
+    "auto_kindle_enabled": true,
+    "last_synced_edition": null,
+    "last_kindle_edition": null
+  },
+  "integrations": {
+    "cookies": {
+      "youtube": "./data/cookies/youtube.json",
+      "bilibili": "./data/cookies/bilibili.json",
+      "zhihu": "./data/cookies/zhihu.json"
+    },
+    "llm": {
+      "source": "ON1Y_LLM_* in .env or data/llm_settings.json",
+      "base_url": "https://api.deepseek.com",
+      "model": "deepseek-v4-flash",
+      "api_key_configured": false
+    },
+    "smtp": {
+      "host": "smtp.gmail.com",
+      "port": 587,
+      "from": "your-approved-email@gmail.com",
+      "user_configured": false
+    }
+  }
+}

@@ -4,7 +4,8 @@ import { CheckCircle2, Circle, Forward, RotateCcw, Star, Trash2 } from "lucide-r
 import { useState } from "react";
 
 import { ThemeMovePopover } from "@/components/theme-move-popover";
-import { formatSourceLine } from "@/lib/format-published-at";
+import { formatHotlistMetaLine, formatSourceLine } from "@/lib/format-published-at";
+import { feedItemListTagClass } from "@/components/tag-chip-editor";
 import { themeDisplayName } from "@/lib/i18n";
 import { platformLabel } from "@/lib/platform-label";
 import type { KnowledgeItem, Locale, ThemeRow } from "@/lib/types";
@@ -22,7 +23,7 @@ type FeedItemCardProps = {
   deleteLabel: string;
   deleteConfirmLabel: string;
   batchSelectLabel: string;
-  authorAvatar: React.ReactNode;
+  authorAvatar?: React.ReactNode;
   onSelect: () => void;
   onMoveTheme: (themeId: number) => void;
   onToggleFavorite: () => void;
@@ -33,6 +34,8 @@ type FeedItemCardProps = {
   trashMode?: boolean;
   restoreLabel?: string;
   onRestore?: () => void;
+  /** Hot list: title (and rank) only — no avatar, author, or summary. */
+  compact?: boolean;
 };
 
 function SearchHtml(props: {
@@ -92,17 +95,33 @@ export function FeedItemCard(props: FeedItemCardProps): JSX.Element {
     onToggleSelected,
     trashMode = false,
     restoreLabel = "Restore",
-    onRestore
+    onRestore,
+    compact = false
   } = props;
 
-  const sourceLine = formatSourceLine({
-    publishedAt: item.published_at ?? item.ingested_at,
-    feedLabel: item.feed_label,
-    source: item.source,
-    hotRank: item.hot_rank,
-    heatText: item.heat_text,
-    locale
-  });
+  const hotlistMetaLine = compact
+    ? item.platform === "economist" && item.heat_text
+      ? locale === "zh"
+        ? `出刊 ${item.heat_text}`
+        : `Edition ${item.heat_text}`
+      : formatHotlistMetaLine({
+          snapshotDate: item.snapshot_date,
+          ingestedAt: item.ingested_at,
+          heatText: item.heat_text,
+          locale
+        })
+    : null;
+
+  const sourceLine = compact
+    ? null
+    : formatSourceLine({
+        publishedAt: item.published_at ?? item.ingested_at,
+        feedLabel: item.feed_label,
+        source: item.source,
+        hotRank: item.hot_rank,
+        heatText: item.heat_text,
+        locale
+      });
 
   const [confirmDelete, setConfirmDelete] = useState(false);
 
@@ -129,47 +148,70 @@ export function FeedItemCard(props: FeedItemCardProps): JSX.Element {
         onClick={handleContentClick}
         className="min-w-0 flex-1 p-3 text-left"
       >
-        <div className="flex gap-3">
-          {authorAvatar}
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-xs font-medium text-neutral-800">
-              {item.author.trim() || unknownAuthorLabel}
-            </div>
-            <div className="mt-0.5 text-sm font-medium leading-snug">
+        {compact ? (
+          <div>
+            <div className="text-sm font-medium leading-snug">
               <SearchHtml
                 html={item.search_title_html}
                 fallback={item.title || item.url}
               />
             </div>
-            {sourceLine ? (
-              <div className="mt-1 text-[11px] text-neutral-500">{sourceLine}</div>
+            {hotlistMetaLine ? (
+              <p className="mt-1 text-[11px] text-neutral-500">{hotlistMetaLine}</p>
             ) : null}
-            <div className="mt-1 text-xs leading-relaxed text-neutral-600">
-              <SearchHtml
-                html={item.search_summary_html}
-                fallback={item.summary || item.search_snippet || noSummaryLabel}
-              />
-            </div>
-            <div className="mt-2 flex flex-wrap items-center gap-1">
-              <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-[10px] text-neutral-600">
-                {platformLabel(item.platform, locale)}
-              </span>
-              {item.theme ? (
-                <span className="rounded border border-black px-1.5 py-0.5 text-[10px] font-medium">
-                  {themeDisplayName(item.theme, locale)}
-                </span>
+            {item.tags.length > 0 ? (
+              <div className="mt-1.5 flex flex-wrap gap-1">
+                {item.tags.slice(0, 6).map((tg) => (
+                  <span key={tg.id} className={feedItemListTagClass}>
+                    #{tg.name}
+                  </span>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : (
+          <div className="flex gap-3">
+            {authorAvatar}
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-xs font-medium text-neutral-800">
+                {item.author.trim() || unknownAuthorLabel}
+              </div>
+              <div className="mt-0.5 text-sm font-medium leading-snug">
+                <SearchHtml
+                  html={item.search_title_html}
+                  fallback={item.title || item.url}
+                />
+              </div>
+              {sourceLine ? (
+                <div className="mt-1 text-[11px] text-neutral-500">{sourceLine}</div>
               ) : null}
-              {item.tags.slice(0, 3).map((tg) => (
-                <span
-                  key={tg.id}
-                  className="rounded bg-neutral-100 px-1.5 py-0.5 text-[10px] text-neutral-700"
-                >
-                  #{tg.name}
+              <div className="mt-1 text-xs leading-relaxed text-neutral-600">
+                <SearchHtml
+                  html={item.search_summary_html}
+                  fallback={item.summary || item.search_snippet || noSummaryLabel}
+                />
+              </div>
+              <div className="mt-2 flex flex-wrap items-center gap-1">
+                <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-[10px] text-neutral-600">
+                  {platformLabel(item.platform, locale)}
                 </span>
-              ))}
+                {item.theme ? (
+                  <span className="rounded border border-black px-1.5 py-0.5 text-[10px] font-medium">
+                    {themeDisplayName(item.theme, locale)}
+                  </span>
+                ) : null}
+                {item.tags.slice(0, 3).map((tg) => (
+                  <span
+                    key={tg.id}
+                    className="rounded bg-neutral-100 px-1.5 py-0.5 text-[10px] text-neutral-700"
+                  >
+                    #{tg.name}
+                  </span>
+                ))}
+              </div>
             </div>
           </div>
-        </div>
+        )}
       </button>
 
       <div

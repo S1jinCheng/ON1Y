@@ -105,7 +105,7 @@ export function OriginalTextPanel(props: OriginalTextPanelProps): JSX.Element {
             <Minimize2 className="h-3.5 w-3.5" />
             {collapseLabel}
           </button>
-        ) : (
+        ) : onExpand ? (
           <button
             type="button"
             onClick={onExpand}
@@ -115,7 +115,7 @@ export function OriginalTextPanel(props: OriginalTextPanelProps): JSX.Element {
             <Maximize2 className="h-3.5 w-3.5" />
             {expandLabel}
           </button>
-        )}
+        ) : null}
       </div>
 
       {isNoSubtitle && noSubtitleNotice ? (

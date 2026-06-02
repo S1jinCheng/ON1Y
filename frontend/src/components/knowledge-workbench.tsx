@@ -5,6 +5,7 @@ import {
   CheckSquare,
   ChevronDown,
   ExternalLink,
+  Flame,
   Forward,
   RefreshCw,
   RotateCcw,
@@ -14,7 +15,7 @@ import {
   Trash2,
   X
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 
@@ -22,26 +23,34 @@ import { FeedItemCard } from "@/components/feed-item-card";
 import { ThemeMovePopover } from "@/components/theme-move-popover";
 import { NotesPanel } from "@/components/notes-panel";
 import { OriginalTextPanel } from "@/components/original-text-panel";
+import { AccountMenu } from "@/components/account-menu";
 import { SubscriptionSettingsButton } from "@/components/subscription-settings-panel";
 import { TagChipEditor } from "@/components/tag-chip-editor";
+import { ThemeSidebar } from "@/components/theme-sidebar";
 import {
   createTheme,
   batchDeleteKnowledgeItems,
   deleteKnowledgeItem,
+  deleteTheme,
+  reorderThemes,
+  runHotlistSync,
   getCollectionCounts,
+  economistEpubDownloadUrl,
+  getEconomistWeeks,
   getKnowledgeItems,
+  type EconomistWeekOption,
+  type HotlistSource,
   getReaderContent,
   getTaxonomy,
   moveItemTheme,
   patchItemClassification,
   saveItemNote,
-  splitTheme,
   restoreKnowledgeItem,
   toggleItemFavorite,
   translateItemTranscript,
   uploadDocument
 } from "@/lib/api";
-import { t, themeDisplayName, type UiKey } from "@/lib/i18n";
+import { t, type UiKey } from "@/lib/i18n";
 import { platformLabel } from "@/lib/platform-label";
 import {
   type DynamicTagRow,
@@ -50,6 +59,7 @@ import {
   type ThemeRow
 } from "@/lib/types";
 import { sortKnowledgeItems, sortOptionsForUi } from "@/lib/sort-knowledge-items";
+import { todayIsoDate } from "@/lib/today-iso-date";
 import {
   ALL_FILTER,
   hydrateKnowledgeSortMode,
@@ -61,21 +71,6 @@ function filterValue(value: string): string | undefined {
   return value === ALL_FILTER || value === "" ? undefined : value;
 }
 
-
-function parseSplitLines(raw: string): Array<{ name_zh: string; description_zh: string }> {
-  return raw
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => {
-      const [name, ...rest] = line.split("|");
-      return {
-        name_zh: (name ?? "").trim(),
-        description_zh: rest.join("|").trim()
-      };
-    })
-    .filter((row) => row.name_zh);
-}
 
 function FilterSelect(props: {
   placeholder: string;
@@ -110,13 +105,25 @@ function FilterSelect(props: {
   );
 }
 
-function ColumnScroll(props: { children: React.ReactNode; className?: string }): JSX.Element {
+function ColumnScroll(props: {
+  children: React.ReactNode;
+  className?: string;
+  onScroll?: (event: React.UIEvent<HTMLDivElement>) => void;
+  scrollRef?: React.Ref<HTMLDivElement>;
+}): JSX.Element {
   return (
-    <div className={`h-full min-h-0 overflow-y-auto scrollbar-thin ${props.className ?? ""}`}>
+    <div
+      ref={props.scrollRef}
+      onScroll={props.onScroll}
+      className={`h-full min-h-0 overflow-y-auto scrollbar-thin ${props.className ?? ""}`}
+    >
       {props.children}
     </div>
   );
 }
+
+/** Per-request batch size (API max 200); scroll loads more until exhausted. */
+const FEED_BATCH_SIZE = 200;
 
 function resolveCover(item: {
   cover_image?: string;
@@ -181,7 +188,6 @@ export default function KnowledgeWorkbench(): JSX.Element {
     source,
     setLocale,
     setTheme,
-    setTag,
     setQuery,
     setPlatform,
     setSource,
@@ -193,6 +199,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
 
   const isTrash = collection === "trash";
   const isFavorites = collection === "favorites";
+  const isHotlist = collection === "hotlist";
 
   const ui = (key: UiKey): string => t(locale, key);
 
@@ -204,20 +211,30 @@ export default function KnowledgeWorkbench(): JSX.Element {
   const [loading, setLoading] = useState<boolean>(false);
   const [message, setMessage] = useState<string>("");
   const [tagList, setTagList] = useState<string[]>([]);
-  const [showThemeManager, setShowThemeManager] = useState<boolean>(false);
-  const [newThemeName, setNewThemeName] = useState<string>("");
-  const [newThemeDesc, setNewThemeDesc] = useState<string>("");
-  const [splitSourceId, setSplitSourceId] = useState<string>("");
-  const [splitLines, setSplitLines] = useState<string>("");
   const [readerExpanded, setReaderExpanded] = useState<boolean>(false);
   const [searchTotal, setSearchTotal] = useState<number | undefined>(undefined);
   const [searchEngine, setSearchEngine] = useState<string | undefined>(undefined);
+  const [itemTotal, setItemTotal] = useState<number | undefined>(undefined);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const loadingMoreRef = useRef(false);
+  const feedScrollRef = useRef<HTMLDivElement | null>(null);
   const [selectionMode, setSelectionMode] = useState<boolean>(false);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [batchDeleteConfirm, setBatchDeleteConfirm] = useState<boolean>(false);
-  const [collectionCounts, setCollectionCounts] = useState<{ favorites: number; trash: number }>({
+  const [hotlistDate, setHotlistDate] = useState<string>(todayIsoDate);
+  const [hotlistSource, setHotlistSource] = useState<HotlistSource>("zhihu");
+  const [economistYear, setEconomistYear] = useState<number>(() => new Date().getFullYear());
+  const [economistWeek, setEconomistWeek] = useState<number>(1);
+  const [economistWeeks, setEconomistWeeks] = useState<EconomistWeekOption[]>([]);
+  const isEconomistHotlist = isHotlist && hotlistSource === "economist";
+  const [collectionCounts, setCollectionCounts] = useState<{
+    favorites: number;
+    trash: number;
+    hotlist: number;
+  }>({
     favorites: 0,
-    trash: 0
+    trash: 0,
+    hotlist: 0
   });
 
   const platformOptions = useMemo(
@@ -234,13 +251,16 @@ export default function KnowledgeWorkbench(): JSX.Element {
   const hasSearch = Boolean(query.trim());
 
   const sortOptions = useMemo(
-    () => sortOptionsForUi(locale, hasSearch),
-    [locale, hasSearch]
+    () => sortOptionsForUi(locale, hasSearch, collection),
+    [locale, hasSearch, collection]
   );
 
   const displayItems = useMemo(
-    () => sortKnowledgeItems(items, sortMode, locale, { hasSearch }),
-    [items, sortMode, locale, hasSearch]
+    () =>
+      isHotlist
+        ? items
+        : sortKnowledgeItems(items, sortMode, locale, { hasSearch }),
+    [items, sortMode, locale, hasSearch, isHotlist]
   );
 
   const allVisibleSelected =
@@ -250,6 +270,33 @@ export default function KnowledgeWorkbench(): JSX.Element {
   useEffect(() => {
     hydrateKnowledgeSortMode();
   }, []);
+
+  useEffect(() => {
+    if (!isHotlist || hotlistSource !== "economist") {
+      return;
+    }
+    let cancelled = false;
+    void getEconomistWeeks(economistYear, locale).then((data) => {
+      if (cancelled) {
+        return;
+      }
+      setEconomistWeeks(data.weeks);
+      if (data.weeks.length === 0) {
+        return;
+      }
+      const preferred =
+        data.weeks.find((w) => w.iso_week === economistWeek) ??
+        data.weeks.find(
+          (w) => w.iso_year === data.current_iso_year && w.iso_week === data.current_iso_week
+        ) ??
+        data.weeks[0];
+      setEconomistWeek(preferred.iso_week);
+      setHotlistDate(preferred.edition_date);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isHotlist, hotlistSource, economistYear, locale]);
 
   const sourceOptions = useMemo(
     () => [
@@ -310,28 +357,101 @@ export default function KnowledgeWorkbench(): JSX.Element {
         : undefined
   } as const;
 
+  function buildItemsQuery(offset: number) {
+    return {
+      locale,
+      themeId: selectedThemeId,
+      tagId: selectedTagId,
+      q: query,
+      platform: filterValue(platform),
+      source: filterValue(source),
+      collection,
+      hotlistDate: isHotlist ? hotlistDate : undefined,
+      hotlistSource: isHotlist ? hotlistSource : undefined,
+      limit: FEED_BATCH_SIZE,
+      offset
+    };
+  }
+
+  const hasMoreItems =
+    itemTotal !== undefined && items.length > 0 && items.length < itemTotal;
+
+  async function loadMoreItems(): Promise<boolean> {
+    if (loadingMoreRef.current || loading || !hasMoreItems) {
+      return false;
+    }
+    loadingMoreRef.current = true;
+    setLoadingMore(true);
+    try {
+      const itemResp = await getKnowledgeItems(buildItemsQuery(items.length));
+      const total = itemResp.total ?? itemResp.count;
+      setItemTotal(total);
+      setItems((prev) => [...prev, ...itemResp.items]);
+      if (query.trim()) {
+        setSearchTotal(itemResp.total);
+        setSearchEngine(itemResp.engine);
+      }
+      return itemResp.items.length > 0;
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "load failed");
+      return false;
+    } finally {
+      loadingMoreRef.current = false;
+      setLoadingMore(false);
+    }
+  }
+
+  function handleFeedScroll(event: React.UIEvent<HTMLDivElement>): void {
+    const node = event.currentTarget;
+    if (node.scrollTop + node.clientHeight < node.scrollHeight - 320) {
+      return;
+    }
+    void loadMoreItems();
+  }
+
+  useEffect(() => {
+    if (loading || loadingMore) {
+      return;
+    }
+    const node = feedScrollRef.current;
+    if (!node) {
+      return;
+    }
+    if (itemTotal !== undefined && items.length >= itemTotal) {
+      return;
+    }
+    if (node.scrollHeight <= node.clientHeight + 64) {
+      void loadMoreItems();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items.length, itemTotal, loading, loadingMore, collection, selectedThemeId]);
+
+  function feedCountLabel(): string {
+    const loaded = String(displayItems.length);
+    if (itemTotal !== undefined) {
+      return ui("feedItemCount").replace("{loaded}", loaded).replace("{total}", String(itemTotal));
+    }
+    return `(${loaded})`;
+  }
+
   async function refreshData(): Promise<void> {
     setLoading(true);
     setMessage("");
+    loadingMoreRef.current = false;
+    setLoadingMore(false);
     try {
       const [taxonomy, itemResp, counts] = await Promise.all([
         getTaxonomy(locale),
-        getKnowledgeItems({
-          locale,
-          themeId: selectedThemeId,
-          tagId: selectedTagId,
-          q: query,
-          platform: filterValue(platform),
-          source: filterValue(source),
-          collection,
-          limit: 80
-        }),
-        getCollectionCounts()
+        getKnowledgeItems(buildItemsQuery(0)),
+        getCollectionCounts(
+          isHotlist ? { hotlistDate, hotlistSource } : undefined
+        )
       ]);
       setThemes(taxonomy.themes);
       setDynamicTags(taxonomy.tags);
       setCollectionCounts(counts);
       setItems(itemResp.items);
+      setItemTotal(itemResp.total ?? itemResp.count);
       setSearchTotal(itemResp.total);
       setSearchEngine(itemResp.engine);
       if (itemResp.items.length > 0) {
@@ -364,7 +484,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
       window.clearTimeout(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [locale, selectedThemeId, selectedTagId, platform, source, query, collection]);
+  }, [locale, selectedThemeId, selectedTagId, platform, source, query, collection, hotlistDate, hotlistSource]);
 
   async function selectItem(item: KnowledgeItem): Promise<void> {
     setReaderExpanded(false);
@@ -481,6 +601,59 @@ export default function KnowledgeWorkbench(): JSX.Element {
   function switchCollection(next: KnowledgeCollection): void {
     exitSelectionMode();
     setCollection(next);
+    if (next === "hotlist") {
+      if (hotlistSource === "zhihu") {
+        setHotlistDate(todayIsoDate());
+      }
+    } else if (sortMode === "hot_rank_asc") {
+      setSortMode("ingested_desc");
+    }
+  }
+
+  function selectEconomistWeek(week: number): void {
+    setEconomistWeek(week);
+    const row = economistWeeks.find((w) => w.iso_week === week);
+    if (row) {
+      setHotlistDate(row.edition_date);
+    }
+  }
+
+  async function goEconomistCurrentWeek(): Promise<void> {
+    const data = await getEconomistWeeks(undefined, locale);
+    setEconomistYear(data.year);
+    setEconomistWeeks(data.weeks);
+    const cur =
+      data.weeks.find(
+        (w) => w.iso_year === data.current_iso_year && w.iso_week === data.current_iso_week
+      ) ?? data.weeks[0];
+    if (cur) {
+      setEconomistWeek(cur.iso_week);
+      setEconomistYear(cur.iso_year);
+      setHotlistDate(cur.edition_date);
+    }
+  }
+
+  async function handleHotlistSync(): Promise<void> {
+    setLoading(true);
+    try {
+      const report = await runHotlistSync({
+        sources: [hotlistSource],
+        snapshot_date: hotlistDate,
+        auto_tag: true
+      });
+      const row = report.results?.[hotlistSource];
+      const tagged = row?.tagged ?? 0;
+      setMessage(
+        `${ui("hotlistSyncDone")}: +${row?.created ?? 0} / ↻${row?.updated ?? 0}${
+          tagged > 0 ? ` · ${ui("hotlistTagged")} ${tagged}` : ""
+        }`
+      );
+      await refreshData();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "hotlist sync failed");
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function handleBatchFavorite(): Promise<void> {
@@ -597,46 +770,39 @@ export default function KnowledgeWorkbench(): JSX.Element {
     await refreshData();
   }
 
-  async function handleAddTheme(): Promise<void> {
-    if (!newThemeName.trim()) {
-      return;
-    }
+  async function handleCreateTheme(name: string, description: string): Promise<void> {
     try {
       await createTheme({
-        name_zh: newThemeName.trim(),
-        name_en: newThemeName.trim(),
-        description_zh: newThemeDesc.trim(),
-        description_en: newThemeDesc.trim()
+        name_zh: name,
+        name_en: name,
+        description_zh: description,
+        description_en: description
       });
-      setNewThemeName("");
-      setNewThemeDesc("");
       await refreshData();
+      setMessage(ui("addTheme"));
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "create theme failed");
     }
   }
 
-  async function handleSplitTheme(): Promise<void> {
-    const sourceId = Number(splitSourceId);
-    const targets = parseSplitLines(splitLines);
-    if (!sourceId || targets.length === 0) {
+  async function handleDeleteTheme(themeId: number): Promise<{ remapped: number }> {
+    const result = await deleteTheme(themeId);
+    if (selectedThemeId === themeId) {
+      setTheme(undefined);
+    }
+    await refreshData();
+    setMessage(ui("themeDeleted").replace("{n}", String(result.remapped)));
+    return { remapped: result.remapped };
+  }
+
+  async function handleReorderThemes(themeIds: number[]): Promise<void> {
+    const before = themes.map((theme) => theme.id).join(",");
+    const after = themeIds.join(",");
+    if (before === after) {
       return;
     }
-    setLoading(true);
-    try {
-      const result = await splitTheme({
-        source_theme_id: sourceId,
-        new_themes: targets,
-        archive_source: true
-      });
-      setMessage(`${ui("splitDone")}: ${result.remapped}`);
-      setSplitLines("");
-      await refreshData();
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "split failed");
-    } finally {
-      setLoading(false);
-    }
+    const result = await reorderThemes(themeIds, locale);
+    setThemes(result.themes);
   }
 
   const tagSuggestions = useMemo(
@@ -688,6 +854,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
               <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
               {ui("refresh")}
             </button>
+            <AccountMenu locale={locale} onMessage={setMessage} />
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -777,55 +944,76 @@ export default function KnowledgeWorkbench(): JSX.Element {
         <PanelGroup key="normal" direction="horizontal" className="min-h-0 flex-1">
         <Panel minSize={15} defaultSize={18} className="min-h-0 overflow-hidden">
           <ColumnScroll className="border-r border-border p-3">
-              <h2 className="mb-2 text-xs font-medium uppercase tracking-wider text-muted">
-                {ui("themes")}
-              </h2>
-              <div className="mb-4 space-y-0.5">
-                <button
-                  type="button"
-                  onClick={() => {
-                    switchCollection("feed");
-                    setTheme(undefined);
-                  }}
-                  className={`w-full rounded px-2 py-1.5 text-left text-sm ${
-                    selectedThemeId === undefined && collection === "feed"
-                      ? "bg-black font-medium text-white"
-                      : "hover:bg-soft"
-                  }`}
-                >
-                  {ui("allThemes")}
-                </button>
-                {themes.map((theme) => (
-                  <button
-                    key={theme.id}
-                    type="button"
-                    onClick={() => {
-                      setCollection("feed");
-                      setTheme(theme.id);
-                    }}
-                    className={`flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-sm ${
-                      selectedThemeId === theme.id && collection === "feed"
-                        ? "bg-black font-medium text-white"
-                        : "hover:bg-soft"
-                    }`}
-                  >
-                    <span>{themeDisplayName(theme, locale)}</span>
-                    <span
-                      className={`text-xs ${
-                        selectedThemeId === theme.id ? "text-neutral-300" : "text-muted"
-                      }`}
-                    >
-                      {theme.item_count}
-                    </span>
-                  </button>
-                ))}
-              </div>
+              <ThemeSidebar
+                locale={locale}
+                themes={themes}
+                selectedThemeId={selectedThemeId}
+                collection={collection}
+                onSelectAll={() => {
+                  switchCollection("feed");
+                  setTheme(undefined);
+                }}
+                onSelectTheme={(themeId) => {
+                  setCollection("feed");
+                  setTheme(themeId);
+                }}
+                onCreateTheme={handleCreateTheme}
+                onDeleteTheme={async (themeId) => {
+                  try {
+                    return await handleDeleteTheme(themeId);
+                  } catch (error) {
+                    setMessage(
+                      error instanceof Error ? error.message : "delete theme failed"
+                    );
+                    throw error;
+                  }
+                }}
+                onReorderThemes={async (themeIds) => {
+                  try {
+                    await handleReorderThemes(themeIds);
+                  } catch (error) {
+                    setMessage(
+                      error instanceof Error ? error.message : "reorder themes failed"
+                    );
+                    throw error;
+                  }
+                }}
+                labels={{
+                  themes: ui("themes"),
+                  allThemes: ui("allThemes"),
+                  addTheme: ui("addTheme"),
+                  themeName: ui("themeName"),
+                  deleteTheme: ui("deleteTheme"),
+                  confirmDeleteTheme: ui("confirmDeleteTheme"),
+                  themeDeleted: ui("themeDeleted"),
+                  cannotDeleteBuiltin: ui("cannotDeleteBuiltin"),
+                  deletingTheme: ui("deletingTheme"),
+                  done: ui("themeEditDone")
+                }}
+              />
 
-              <div className="mb-4 border-t border-border pt-3">
+              <div className="mb-4 mt-4 border-t border-border pt-3">
                 <h2 className="mb-2 text-xs font-medium uppercase tracking-wider text-muted">
                   {locale === "zh" ? "专栏" : "Collections"}
                 </h2>
                 <div className="space-y-0.5">
+                  <button
+                    type="button"
+                    onClick={() => switchCollection("hotlist")}
+                    className={`flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-sm ${
+                      isHotlist ? "bg-black font-medium text-white" : "hover:bg-soft"
+                    }`}
+                  >
+                    <span className="inline-flex items-center gap-1.5">
+                      <Flame className="h-3.5 w-3.5" />
+                      {ui("collectionHotlist")}
+                    </span>
+                    <span
+                      className={`text-xs ${isHotlist ? "text-neutral-300" : "text-muted"}`}
+                    >
+                      {collectionCounts.hotlist}
+                    </span>
+                  </button>
                   <button
                     type="button"
                     onClick={() => switchCollection("favorites")}
@@ -862,114 +1050,146 @@ export default function KnowledgeWorkbench(): JSX.Element {
                   </button>
                 </div>
               </div>
-
-              <button
-                type="button"
-                onClick={() => setShowThemeManager((v) => !v)}
-                className="mb-2 w-full rounded border border-border px-2 py-1.5 text-left text-xs hover:bg-soft"
-              >
-                {ui("manageThemes")} {showThemeManager ? "▾" : "▸"}
-              </button>
-              {showThemeManager ? (
-                <div className="mb-4 space-y-2 rounded border border-border bg-panel p-2">
-                  <p className="text-xs font-medium text-muted">{ui("addTheme")}</p>
-                  <input
-                    value={newThemeName}
-                    onChange={(e) => setNewThemeName(e.target.value)}
-                    placeholder={ui("themeName")}
-                    className="w-full rounded border border-border bg-white px-2 py-1 text-xs"
-                  />
-                  <input
-                    value={newThemeDesc}
-                    onChange={(e) => setNewThemeDesc(e.target.value)}
-                    placeholder={ui("themeDesc")}
-                    className="w-full rounded border border-border bg-white px-2 py-1 text-xs"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => void handleAddTheme()}
-                    className="w-full rounded border border-black bg-black py-1 text-xs text-white"
-                  >
-                    {ui("addTheme")}
-                  </button>
-                  <p className="pt-1 text-xs font-medium text-muted">{ui("splitTheme")}</p>
-                  <select
-                    value={splitSourceId}
-                    onChange={(e) => setSplitSourceId(e.target.value)}
-                    className="w-full rounded border border-border bg-white px-2 py-1 text-xs"
-                  >
-                    <option value="">{ui("splitSource")}</option>
-                    {themes.map((th) => (
-                      <option key={th.id} value={String(th.id)}>
-                        {themeDisplayName(th, locale)} ({th.item_count})
-                      </option>
-                    ))}
-                  </select>
-                  <textarea
-                    value={splitLines}
-                    onChange={(e) => setSplitLines(e.target.value)}
-                    placeholder={ui("splitExample")}
-                    className="h-20 w-full rounded border border-border bg-white px-2 py-1 text-xs"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => void handleSplitTheme()}
-                    className="w-full rounded border border-neutral-600 py-1 text-xs hover:bg-soft"
-                  >
-                    {ui("runSplit")}
-                  </button>
-                </div>
-              ) : null}
-
-              <h2 className="mb-2 text-xs font-medium uppercase tracking-wider text-muted">
-                {ui("tags")}
-              </h2>
-              <div className="space-y-0.5">
-                <button
-                  type="button"
-                  onClick={() => setTag(undefined)}
-                  className={`w-full rounded px-2 py-1.5 text-left text-sm ${
-                    selectedTagId === undefined ? "bg-neutral-100 font-medium" : "hover:bg-soft"
-                  }`}
-                >
-                  {ui("allTags")}
-                </button>
-                {dynamicTags.map((tag) => (
-                  <button
-                    key={tag.id}
-                    type="button"
-                    onClick={() => setTag(tag.id)}
-                    className={`flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-sm ${
-                      selectedTagId === tag.id ? "bg-neutral-100 font-medium" : "hover:bg-soft"
-                    }`}
-                  >
-                    <span className="truncate">#{tag.name}</span>
-                    <span className="ml-2 shrink-0 text-xs text-muted">{tag.item_count}</span>
-                  </button>
-                ))}
-              </div>
           </ColumnScroll>
         </Panel>
 
         <PanelResizeHandle className="w-px bg-border" />
 
         <Panel minSize={20} defaultSize={24} className="min-h-0 overflow-hidden">
-          <ColumnScroll className="border-r border-border p-3">
+          <ColumnScroll
+            className="border-r border-border p-3"
+            scrollRef={feedScrollRef}
+            onScroll={handleFeedScroll}
+          >
               <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                 <h2 className="text-xs font-medium uppercase tracking-wider text-muted">
                   {isFavorites
                     ? ui("collectionFavorites")
                     : isTrash
                       ? ui("collectionTrash")
-                      : ui("feed")}{" "}
-                  ({displayItems.length})
+                      : isHotlist
+                        ? ui("collectionHotlist")
+                        : ui("feed")}{" "}
+                  {feedCountLabel()}
                 </h2>
-                <FilterSelect
-                  placeholder={ui("sortBy")}
-                  value={sortMode}
-                  onChange={(value) => setSortMode(value as typeof sortMode)}
-                  options={sortOptions}
-                />
+                <div className="flex flex-wrap items-center gap-2">
+                {isHotlist ? (
+                  <>
+                    <FilterSelect
+                      placeholder={ui("hotlistSourceLabel")}
+                      value={hotlistSource}
+                      onChange={(value) => {
+                        const next = value as HotlistSource;
+                        setHotlistSource(next);
+                        if (next === "zhihu") {
+                          setHotlistDate(todayIsoDate());
+                        }
+                      }}
+                      options={[
+                        { value: "zhihu", label: ui("hotlistSourceZhihu") },
+                        { value: "economist", label: ui("hotlistSourceEconomist") }
+                      ]}
+                    />
+                    {hotlistSource === "economist" ? (
+                      <>
+                        <label className="flex items-center gap-1.5 text-xs text-muted">
+                          <span>{ui("hotlistYearLabel")}</span>
+                          <select
+                            value={economistYear}
+                            onChange={(e) => setEconomistYear(Number(e.target.value))}
+                            className="rounded border border-border bg-white px-2 py-1 text-xs text-black"
+                          >
+                            {Array.from({ length: 6 }, (_, i) => new Date().getFullYear() - i).map(
+                              (y) => (
+                                <option key={y} value={y}>
+                                  {y}
+                                </option>
+                              )
+                            )}
+                          </select>
+                        </label>
+                        <label className="flex items-center gap-1.5 text-xs text-muted">
+                          <span>{ui("hotlistWeekLabel")}</span>
+                          <select
+                            value={economistWeek}
+                            onChange={(e) => selectEconomistWeek(Number(e.target.value))}
+                            className="max-w-[12rem] rounded border border-border bg-white px-2 py-1 text-xs text-black"
+                          >
+                            {economistWeeks.map((w) => (
+                              <option key={`${w.iso_year}-${w.iso_week}`} value={w.iso_week}>
+                                {w.label}
+                                {w.synced
+                                  ? locale === "zh"
+                                    ? " · 已入库"
+                                    : " · saved"
+                                  : ""}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => void goEconomistCurrentWeek()}
+                          className="rounded border border-border bg-white px-2 py-1 text-xs hover:bg-soft"
+                        >
+                          {ui("hotlistCurrentWeek")}
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <label className="flex items-center gap-1.5 text-xs text-muted">
+                          <span>{ui("hotlistDateLabel")}</span>
+                          <input
+                            type="date"
+                            value={hotlistDate}
+                            max={todayIsoDate()}
+                            onChange={(e) => setHotlistDate(e.target.value || todayIsoDate())}
+                            className="rounded border border-border bg-white px-2 py-1 text-xs text-black"
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => setHotlistDate(todayIsoDate())}
+                          className="rounded border border-border bg-white px-2 py-1 text-xs hover:bg-soft"
+                        >
+                          {ui("hotlistToday")}
+                        </button>
+                      </>
+                    )}
+                    {hotlistSource === "economist" ? (
+                      <span className="hidden text-[10px] text-muted sm:inline">
+                        {ui("hotlistSourceGithubHint")}
+                      </span>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={() => void handleHotlistSync()}
+                      disabled={
+                        loading ||
+                        (hotlistSource === "zhihu" && hotlistDate !== todayIsoDate())
+                      }
+                      title={
+                        hotlistSource === "zhihu" && hotlistDate !== todayIsoDate()
+                          ? ui("hotlistSyncTodayOnly")
+                          : undefined
+                      }
+                      className="inline-flex items-center gap-1 rounded-md border border-border bg-white px-2 py-1 text-xs hover:bg-soft disabled:opacity-50"
+                    >
+                      <Flame className="h-3.5 w-3.5 text-orange-500" />
+                      {hotlistSource === "economist"
+                        ? ui("hotlistSyncEconomist")
+                        : ui("hotlistSyncNow")}
+                    </button>
+                  </>
+                ) : (
+                  <FilterSelect
+                    placeholder={ui("sortBy")}
+                    value={sortMode}
+                    onChange={(value) => setSortMode(value as typeof sortMode)}
+                    options={sortOptions}
+                  />
+                )}
+                </div>
               </div>
               {selectionMode ? (
                 <div className="mb-3 flex items-center justify-between gap-2 rounded-lg border border-border bg-neutral-50 px-2 py-1.5">
@@ -1071,6 +1291,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
                     active={active?.raw_id === item.raw_id}
                     locale={locale}
                     themes={themes}
+                    compact={isHotlist}
                     unknownAuthorLabel={ui("unknownAuthor")}
                     noSummaryLabel={ui("noSummary")}
                     moveThemeLabel={ui("moveTheme")}
@@ -1083,12 +1304,14 @@ export default function KnowledgeWorkbench(): JSX.Element {
                     restoreLabel={ui("restoreItem")}
                     onRestore={() => void handleRestoreItem(item.raw_id)}
                     authorAvatar={
-                      <AuthorAvatar
-                        author={item.author}
-                        authorAvatar={resolveAuthorAvatar(item.author_avatar)}
-                        unknownLabel={ui("unknownAuthor")}
-                        size="md"
-                      />
+                      isHotlist ? undefined : (
+                        <AuthorAvatar
+                          author={item.author}
+                          authorAvatar={resolveAuthorAvatar(item.author_avatar)}
+                          unknownLabel={ui("unknownAuthor")}
+                          size="md"
+                        />
+                      )
                     }
                     selectionMode={selectionMode}
                     selected={selectedIds.has(item.raw_id)}
@@ -1105,8 +1328,15 @@ export default function KnowledgeWorkbench(): JSX.Element {
                       ? ui("trashEmpty")
                       : isFavorites
                         ? ui("favoritesEmpty")
-                        : ui("noItems")}
+                        : isHotlist
+                          ? hotlistSource === "economist"
+                            ? ui("hotlistEmptyEconomist")
+                            : ui("hotlistEmpty")
+                          : ui("noItems")}
                   </div>
+                ) : null}
+                {loadingMore ? (
+                  <p className="py-3 text-center text-xs text-muted">{ui("loadingMore")}</p>
                 ) : null}
               </div>
           </ColumnScroll>
@@ -1119,63 +1349,85 @@ export default function KnowledgeWorkbench(): JSX.Element {
             <ColumnScroll className="border-r border-border bg-white">
               <div className="space-y-0">
               <div className="space-y-3 border-b border-border p-4">
-                {(() => {
-                  const cover = resolveCover({
-                    cover_image: reader?.cover_image ?? active.cover_image,
-                    author_avatar: reader?.author_avatar ?? active.author_avatar
-                  });
-                  return cover ? (
-                    <a
-                      href={active.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="block overflow-hidden rounded-lg border border-border bg-panel"
-                    >
-                      <img
-                        src={cover}
-                        alt=""
-                        className="aspect-video w-full object-cover"
-                        referrerPolicy="no-referrer"
-                      />
-                    </a>
-                  ) : null;
-                })()}
+                {!isHotlist
+                  ? (() => {
+                      const cover = resolveCover({
+                        cover_image: reader?.cover_image ?? active.cover_image,
+                        author_avatar: reader?.author_avatar ?? active.author_avatar
+                      });
+                      return cover ? (
+                        <a
+                          href={active.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="block overflow-hidden rounded-lg border border-border bg-panel"
+                        >
+                          <img
+                            src={cover}
+                            alt=""
+                            className="aspect-video w-full object-cover"
+                            referrerPolicy="no-referrer"
+                          />
+                        </a>
+                      ) : null;
+                    })()
+                  : null}
                 <div>
                   <h3 className="text-base font-semibold leading-snug">{active.title || "—"}</h3>
+                  {isEconomistHotlist ? (
+                    <a
+                      href={economistEpubDownloadUrl(active.raw_id)}
+                      download
+                      className="mt-1.5 inline-flex items-center gap-1 text-xs text-neutral-700 underline-offset-2 hover:text-black hover:underline"
+                    >
+                      {ui("hotlistDownloadEpub")}
+                      <ExternalLink className="h-3 w-3" />
+                    </a>
+                  ) : null}
                   <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
                     <span className="text-xs text-muted">{ui("sourcePlatform")}</span>
                     <span className="rounded bg-neutral-100 px-2 py-0.5 text-xs font-medium">
                       {platformLabel(active.platform, locale)}
                     </span>
-                    <a
-                      href={active.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center gap-1 text-xs text-neutral-700 underline-offset-2 hover:text-black hover:underline"
-                    >
-                      {ui("openLink")}
-                      <ExternalLink className="h-3 w-3" />
-                    </a>
+                    {!isEconomistHotlist ? (
+                      <a
+                        href={active.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1 text-xs text-neutral-700 underline-offset-2 hover:text-black hover:underline"
+                      >
+                        {ui("openLink")}
+                        <ExternalLink className="h-3 w-3" />
+                      </a>
+                    ) : null}
                   </div>
                 </div>
               </div>
 
-              <div className="border-b border-border px-4 py-3">
-                <p className="mb-2 text-xs font-medium uppercase tracking-wider text-muted">
-                  {ui("summary")}
-                </p>
-                <div className="prose prose-sm max-w-none text-black prose-p:my-1 prose-p:text-neutral-800">
-                  <ReactMarkdown>{active.summary || ui("noSummary")}</ReactMarkdown>
+              {!isHotlist || isEconomistHotlist ? (
+                <div className="border-b border-border px-4 py-3">
+                  <p className="mb-2 text-xs font-medium uppercase tracking-wider text-muted">
+                    {ui("summary")}
+                  </p>
+                  <div className="prose prose-sm max-w-none text-black prose-p:my-1 prose-p:text-neutral-800">
+                    <ReactMarkdown>{active.summary || ui("noSummary")}</ReactMarkdown>
+                  </div>
                 </div>
-              </div>
+              ) : null}
 
               <div className="border-b border-border px-4 py-3">
                 <p className="mb-2 text-xs font-medium uppercase tracking-wider text-muted">
-                  {ui("originalText")}
+                  {isHotlist && !isEconomistHotlist
+                    ? ui("hotlistBody")
+                    : ui("originalText")}
                 </p>
                 <OriginalTextPanel
                   {...originalTextPanelProps}
-                  onExpand={() => setReaderExpanded(true)}
+                  onExpand={
+                    isHotlist || isEconomistHotlist
+                      ? undefined
+                      : () => setReaderExpanded(true)
+                  }
                 />
               </div>
 

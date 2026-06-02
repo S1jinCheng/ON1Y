@@ -164,6 +164,9 @@ def _cmd_pipeline_zhihu(args: argparse.Namespace) -> int:
 
 
 def _cmd_hotlist(args: argparse.Namespace) -> int:
+    if getattr(args, "hotlist_action", None) == "auto":
+        return _cmd_hotlist_auto(args)
+
     from on1y.hotlist import sync_hotlists
 
     storage = get_storage()
@@ -172,11 +175,22 @@ def _cmd_hotlist(args: argparse.Namespace) -> int:
             storage,
             sources=args.sources,
             auto_distill=args.auto_distill,
+            auto_tag=not getattr(args, "no_auto_tag", False),
         )
     finally:
         storage.close()
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0
+
+
+def _cmd_hotlist_auto(args: argparse.Namespace) -> int:
+    from on1y.hotlist.economist_auto import run_economist_auto_tick
+
+    report = run_economist_auto_tick(
+        force_edition=(getattr(args, "edition_date", None) or "").strip() or None,
+    )
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 0 if not report.get("errors") else 1
 
 
 def _cmd_subscriptions(args: argparse.Namespace) -> int:
@@ -368,6 +382,22 @@ def _cmd_list(args: argparse.Namespace) -> int:
         for i in items
     ]
     print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def _cmd_user_password(args: argparse.Namespace) -> int:
+    from on1y.user.accounts import UserStore
+
+    storage = get_storage()
+    try:
+        store = UserStore(storage)
+        user = store.set_password(args.username, args.password)
+        print(f"Password updated for user {user.username!r} (id={user.id})")
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    finally:
+        storage.close()
     return 0
 
 
@@ -605,21 +635,36 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_hotlist = sub.add_parser("hotlist", help="Daily hot-list column sync")
     p_hotlist_sub = p_hotlist.add_subparsers(dest="hotlist_action", required=True)
-    p_hotlist_sync = p_hotlist_sub.add_parser("sync", help="Sync hot lists (Zhihu first)")
+    p_hotlist_sync = p_hotlist_sub.add_parser("sync", help="Sync hot lists (zhihu, economist, …)")
     p_hotlist_sync.add_argument(
         "--source",
         action="append",
         dest="sources",
         default=["zhihu"],
-        choices=["zhihu"],
+        choices=["zhihu", "economist"],
         help="Hot-list source (repeatable; default: zhihu)",
     )
     p_hotlist_sync.add_argument(
         "--auto-distill",
         action="store_true",
-        help="Run LLM distill after ingest (optional)",
+        help="Run full LLM distill after ingest (optional)",
+    )
+    p_hotlist_sync.add_argument(
+        "--no-auto-tag",
+        action="store_true",
+        help="Skip LLM research tags (default: tag new/changed items)",
     )
     p_hotlist_sync.set_defaults(func=_cmd_hotlist)
+    p_hotlist_auto = p_hotlist_sub.add_parser(
+        "auto",
+        help="Auto-detect new Economist edition on GitHub; ingest + optional Kindle email",
+    )
+    p_hotlist_auto.add_argument(
+        "--edition-date",
+        default=None,
+        help="Force sync/send this edition (YYYY-MM-DD); default: latest on GitHub only if new",
+    )
+    p_hotlist_auto.set_defaults(func=_cmd_hotlist)
 
     p_rss = sub.add_parser("rss", help="RSS subscriptions (config/feeds.yaml)")
     p_rss.add_argument(
@@ -660,6 +705,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_list.add_argument("--limit", type=int, default=20)
     p_list.add_argument("--offset", type=int, default=0)
     p_list.set_defaults(func=_cmd_list)
+
+    p_user = sub.add_parser("user", help="Multi-user account management")
+    p_user_sub = p_user.add_subparsers(dest="user_action", required=True)
+    p_user_pass = p_user_sub.add_parser("passwd", help="Reset a user's login password")
+    p_user_pass.add_argument("username", help="Username (e.g. admin)")
+    p_user_pass.add_argument("password", help="New password (min 8 characters)")
+    p_user_pass.set_defaults(func=_cmd_user_password)
 
     p_cookies = sub.add_parser("cookies", help="Check login cookie files")
     p_cookies.add_argument("action", choices=["status"], nargs="?", default="status")

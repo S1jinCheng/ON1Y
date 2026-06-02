@@ -34,3 +34,109 @@ mark {
   border-radius: 2px;
   padding: 0 1px;
 }
+
+@keyframes theme-card-jitter {
+  0%,
+  100% {
+    transform: rotate(-0.45deg) translate3d(0, 0, 0);
+  }
+  20% {
+    transform: rotate(0.55deg) translate3d(0.5px, -0.5px, 0);
+  }
+  40% {
+    transform: rotate(-0.35deg) translate3d(-0.5px, 0.5px, 0);
+  }
+  60% {
+    transform: rotate(0.4deg) translate3d(0.5px, 0.5px, 0);
+  }
+  80% {
+    transform: rotate(-0.5deg) translate3d(-0.5px, -0.5px, 0);
+  }
+}
+
+.theme-edit-stack {
+  perspective: 720px;
+}
+
+.theme-edit-list .theme-card-jitter {
+  animation: none;
+  will-change: auto;
+}
+
+.theme-edit-list .theme-sort-card {
+  cursor: default;
+}
+
+.theme-edit-sorting .theme-card-jitter {
+  animation-play-state: paused;
+}
+
+.theme-sort-row {
+  position: relative;
+}
+
+.theme-sort-row-placeholder .theme-sort-card {
+  opacity: 0.28;
+  box-shadow: none;
+  transform: none !important;
+}
+
+.theme-sort-overlay {
+  cursor: default;
+  transform: rotateX(2deg) rotateY(-1deg) scale(1.03);
+  box-shadow:
+    0 2px 4px rgba(0, 0, 0, 0.08),
+    0 12px 28px rgba(0, 0, 0, 0.14);
+}
+
+.theme-edit-sorting .theme-card-3d {
+  transform: none;
+}
+
+.theme-card-3d {
+  transform-style: preserve-3d;
+  transform: rotateX(4deg) rotateY(-1deg);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.9) inset,
+    0 1px 2px rgba(0, 0, 0, 0.06),
+    0 6px 14px rgba(0, 0, 0, 0.08),
+    0 14px 28px rgba(0, 0, 0, 0.05);
+  transition:
+    transform 0.22s ease,
+    box-shadow 0.22s ease,
+    opacity 0.18s ease;
+}
+
+.theme-edit-sorting .theme-sort-card {
+  transition:
+    box-shadow 0.18s ease,
+    opacity 0.18s ease;
+}
+
+.theme-card-3d:hover {
+  transform: rotateX(2deg) rotateY(0deg) translateY(-2px) scale(1.01);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.95) inset,
+    0 2px 4px rgba(0, 0, 0, 0.07),
+    0 10px 22px rgba(0, 0, 0, 0.1),
+    0 18px 36px rgba(0, 0, 0, 0.06);
+}
+
+.theme-edit-sorting .theme-card-3d:hover {
+  transform: none;
+}
+
+.theme-card-jitter {
+  animation: theme-card-jitter 2.6s ease-in-out infinite;
+  will-change: transform;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .theme-card-jitter {
+    animation: none;
+  }
+
+  .theme-card-3d {
+    transform: none;
+  }
+}

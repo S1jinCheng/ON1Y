@@ -40,6 +40,14 @@ const COMMON_TAGS_EN = [
   "advanced"
 ];
 
+/** Gray chips on feed / hot-list column cards (matches theme feed rows). */
+export const feedItemListTagClass =
+  "rounded bg-neutral-100 px-1.5 py-0.5 text-[10px] text-neutral-700";
+
+export function itemTagChipClass(name: string): string {
+  return `rounded border px-1.5 py-0.5 text-[10px] ${tagColorClass(name)}`;
+}
+
 function tagColorClass(name: string): string {
   let hash = 0;
   for (let i = 0; i < name.length; i += 1) {

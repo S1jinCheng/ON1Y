@@ -5,7 +5,12 @@ from __future__ import annotations
 from typing import Any
 
 from on1y.config import Settings, get_settings
-from on1y.hotlist.constants import HOTLIST_ZHIHU, SUPPORTED_HOTLIST_SOURCES
+from on1y.hotlist.constants import (
+    HOTLIST_ECONOMIST,
+    HOTLIST_ZHIHU,
+    SUPPORTED_HOTLIST_SOURCES,
+)
+from on1y.hotlist.economist import sync_economist_hotlist
 from on1y.hotlist.zhihu import sync_zhihu_hotlist
 from on1y.ports.storage import StoragePort
 
@@ -16,6 +21,8 @@ def sync_hotlists(
     sources: list[str] | None = None,
     settings: Settings | None = None,
     auto_distill: bool = False,
+    auto_tag: bool | None = None,
+    snapshot_date: str | None = None,
 ) -> dict[str, Any]:
     settings = settings or get_settings()
     selected = sources or list(SUPPORTED_HOTLIST_SOURCES)
@@ -29,5 +36,15 @@ def sync_hotlists(
             storage,
             settings=settings,
             auto_distill=auto_distill,
+            auto_tag=auto_tag,
+            snapshot_date=snapshot_date,
+        )
+    if HOTLIST_ECONOMIST in selected and settings.economist_hotlist_enabled:
+        report["results"][HOTLIST_ECONOMIST] = sync_economist_hotlist(
+            storage,
+            settings=settings,
+            auto_distill=auto_distill,
+            auto_tag=auto_tag,
+            snapshot_date=snapshot_date,
         )
     return report

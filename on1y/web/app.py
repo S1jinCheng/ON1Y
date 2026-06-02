@@ -8,7 +8,7 @@ from typing import Any
 
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -45,15 +45,18 @@ class SubscriptionSettingsRequest(BaseModel):
     bilibili_sync_since: str | None = None
     youtube_sync_since: str | None = None
     zhihu_sync_since: str | None = None
+    enabled_platforms: list[str] | None = None
 
 
 class SubscriptionSyncRequest(BaseModel):
-    platform: str = "bilibili"
+    platform: str = "all"
+    platforms: list[str] | None = None
     backfill: bool = False
-    ingest: bool = False
-    ingest_limit: int = Field(default=10, ge=1, le=50)
-    subtitle_limit: int = Field(default=10, ge=0, le=50)
-    distill_limit: int = Field(default=10, ge=0, le=50)
+    ingest: bool = True
+    use_ai_summary: bool = True
+    ingest_limit: int = Field(default=30, ge=1, le=50)
+    subtitle_limit: int = Field(default=30, ge=0, le=50)
+    distill_limit: int = Field(default=50, ge=0, le=50)
     refresh_feeds: bool = False
     sync_hotlist: bool = False
 
@@ -67,6 +70,15 @@ class DistillBackfillRequest(BaseModel):
 class HotlistSyncRequest(BaseModel):
     sources: list[str] = Field(default_factory=lambda: ["zhihu"])
     auto_distill: bool = False
+    auto_tag: bool = True
+    snapshot_date: str | None = None
+
+
+class UserProfilePatchRequest(BaseModel):
+    kindle_enabled: bool | None = None
+    kindle_send_to: str | None = None
+    economist_auto_ingest: bool | None = None
+    economist_auto_kindle: bool | None = None
 
 
 class DistillRequest(BaseModel):
@@ -110,6 +122,10 @@ class ThemeUpdateRequest(BaseModel):
     description_zh: str | None = None
     description_en: str | None = None
     sort_order: int | None = None
+
+
+class ThemeReorderRequest(BaseModel):
+    theme_ids: list[int] = Field(min_length=1)
 
 
 class ThemeMoveRequest(BaseModel):
@@ -191,6 +207,11 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    from on1y.web.auth_http import install_auth_middleware, register_auth_routes
+
+    register_auth_routes(app)
+    install_auth_middleware(app)
 
     @app.get("/")
     def index() -> FileResponse:
@@ -305,7 +326,7 @@ def create_app() -> FastAPI:
     def item_detail(item_id: int) -> dict[str, Any]:
         storage = get_storage()
         try:
-            raw = storage.get_raw_by_id(item_id)
+            raw = storage.get_raw_by_id_for_user(item_id)
             if raw is None:
                 raise HTTPException(status_code=404, detail="Not found")
             return {
@@ -408,6 +429,7 @@ def create_app() -> FastAPI:
                 bilibili_sync_since=body.bilibili_sync_since,
                 youtube_sync_since=body.youtube_sync_since,
                 zhihu_sync_since=body.zhihu_sync_since,
+                enabled_platforms=body.enabled_platforms,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -418,39 +440,247 @@ def create_app() -> FastAPI:
         from on1y.config import get_settings
         from on1y.subscriptions.sync_job import start_subscription_sync_job
 
-        allowed = {"bilibili", "youtube", "zhihu", "all"}
-        if body.platform not in allowed:
-            raise HTTPException(status_code=400, detail=f"unsupported platform: {body.platform}")
+        from on1y.subscriptions.sync_job import normalize_sync_platforms
+
+        try:
+            targets = normalize_sync_platforms(
+                platform=body.platform,
+                platforms=body.platforms,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         settings = get_settings()
-        if body.platform in {"bilibili", "all"} and not settings.bilibili_up_sync_enabled:
+        if "bilibili" in targets and not settings.bilibili_up_sync_enabled:
             raise HTTPException(
                 status_code=400,
                 detail="Bilibili UP sync disabled (set ON1Y_BILIBILI_UP_SYNC_ENABLED=true)",
             )
 
+        distill_limit = body.distill_limit if body.use_ai_summary else 0
+
         return start_subscription_sync_job(
-            platform=body.platform,
+            platforms=targets,
             backfill=body.backfill,
             ingest=body.ingest,
             ingest_limit=body.ingest_limit,
             subtitle_limit=body.subtitle_limit,
-            distill_limit=body.distill_limit,
+            distill_limit=distill_limit,
+            use_ai_summary=body.use_ai_summary,
             sync_hotlist=body.sync_hotlist,
             refresh_feeds=body.refresh_feeds or None,
         )
 
     @app.post("/api/hotlist/sync")
     def hotlist_sync(body: HotlistSyncRequest) -> dict[str, Any]:
+        from datetime import date as date_type
+
         from on1y.hotlist import sync_hotlists
+
+        snap = (body.snapshot_date or "").strip() or date_type.today().isoformat()
+        try:
+            parsed = date_type.fromisoformat(snap)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="invalid snapshot_date") from exc
+        if parsed.isoformat() > date_type.today().isoformat():
+            raise HTTPException(status_code=400, detail="snapshot_date cannot be in the future")
+
+        sources = body.sources or ["zhihu"]
+        zhihu_only = "zhihu" in sources and "economist" not in sources
+        if zhihu_only and parsed.isoformat() < date_type.today().isoformat():
+            raise HTTPException(
+                status_code=400,
+                detail="only today's live hot list can be synced; pick a past date to browse",
+            )
 
         storage = get_storage()
         try:
             return sync_hotlists(
                 storage,
-                sources=body.sources or ["zhihu"],
+                sources=sources,
                 auto_distill=body.auto_distill,
+                auto_tag=body.auto_tag,
+                snapshot_date=parsed.isoformat(),
             )
+        finally:
+            storage.close()
+
+    @app.get("/api/hotlist/economist/weeks")
+    def hotlist_economist_weeks(
+        year: int | None = Query(default=None),
+        locale: str = Query(default="zh"),
+    ) -> dict[str, Any]:
+        from on1y.hotlist.economist_preview_store import list_synced_edition_dates
+        from on1y.hotlist.economist_weeks import current_iso_week, list_economist_editions
+
+        y = year if year is not None else current_iso_week()[0]
+        storage = get_storage()
+        try:
+            synced = list_synced_edition_dates(storage)
+            weeks = list_economist_editions(year=y, locale=locale)
+            for row in weeks:
+                row["synced"] = str(row.get("edition_date") or "") in synced
+        finally:
+            storage.close()
+        iso_year, iso_week = current_iso_week()
+        return {
+            "year": y,
+            "weeks": weeks,
+            "synced_dates": sorted(synced, reverse=True),
+            "current_iso_year": iso_year,
+            "current_iso_week": iso_week,
+        }
+
+    @app.get("/api/user/profile")
+    def get_user_profile() -> dict[str, Any]:
+        from on1y.user.profile import public_profile_view
+
+        return public_profile_view()
+
+    def _user_cookie_rows() -> list[dict[str, Any]]:
+        from on1y.auth.context import get_effective_user_id
+        from on1y.cookies.loader import PLATFORM_COOKIE_ATTR
+        from on1y.user.paths import user_cookie_path
+
+        uid = get_effective_user_id()
+        rows: list[dict[str, Any]] = []
+        for platform in PLATFORM_COOKIE_ATTR:
+            path = user_cookie_path(uid, platform)
+            count = 0
+            updated_at: str | None = None
+            if path.is_file():
+                try:
+                    import json as _json
+
+                    blob = _json.loads(path.read_text(encoding="utf-8"))
+                    if isinstance(blob, dict):
+                        count = len(blob.get("cookies") or [])
+                    elif isinstance(blob, list):
+                        count = len(blob)
+                    import datetime as _dt
+
+                    updated_at = _dt.datetime.fromtimestamp(path.stat().st_mtime).isoformat(
+                        timespec="seconds"
+                    )
+                except Exception:
+                    count = 0
+            rows.append(
+                {
+                    "platform": platform,
+                    "exists": path.is_file(),
+                    "count": count,
+                    "updated_at": updated_at,
+                }
+            )
+        return rows
+
+    @app.get("/api/user/cookies")
+    def user_cookies_list() -> dict[str, Any]:
+        return {"platforms": _user_cookie_rows()}
+
+    @app.get("/api/user/cookies/status")
+    def user_cookies_status() -> dict[str, Any]:
+        return {"platforms": _user_cookie_rows()}
+
+    @app.delete("/api/user/cookies/{platform}")
+    def delete_user_cookies(platform: str) -> dict[str, Any]:
+        from on1y.auth.context import get_effective_user_id
+        from on1y.cookies.loader import PLATFORM_COOKIE_ATTR
+        from on1y.user.paths import user_cookie_path
+
+        if platform not in PLATFORM_COOKIE_ATTR:
+            raise HTTPException(status_code=400, detail=f"unknown platform: {platform}")
+        uid = get_effective_user_id()
+        path = user_cookie_path(uid, platform)
+        removed = False
+        if path.is_file():
+            path.unlink()
+            removed = True
+        netscape = path.with_suffix(path.suffix + ".netscape.txt")
+        if netscape.is_file():
+            netscape.unlink()
+        return {"platform": platform, "removed": removed}
+
+    @app.post("/api/user/cookies/{platform}")
+    async def upload_user_cookies(platform: str, file: UploadFile = File(...)) -> dict[str, Any]:
+        import json
+
+        from on1y.auth.context import get_effective_user_id
+        from on1y.browser.cookies import load_cookie_file
+        from on1y.cookies.loader import PLATFORM_COOKIE_ATTR, extract_cookie_list
+        from on1y.user.paths import user_cookie_path
+
+        if platform not in PLATFORM_COOKIE_ATTR:
+            raise HTTPException(status_code=400, detail=f"unknown platform: {platform}")
+        raw = await file.read()
+        try:
+            data = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise HTTPException(status_code=400, detail="invalid JSON cookie file") from exc
+        try:
+            cookies = extract_cookie_list(data if isinstance(data, dict) else data)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not cookies:
+            raise HTTPException(status_code=400, detail="no cookies in file")
+        uid = get_effective_user_id()
+        dest = user_cookie_path(uid, platform)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if isinstance(data, dict) and "cookies" in data:
+            payload = data
+        else:
+            payload = {"cookies": cookies, "origins": []}
+        dest.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        _ = load_cookie_file(dest)
+        return {"platform": platform, "path": str(dest), "count": len(cookies)}
+
+    @app.patch("/api/user/profile")
+    def patch_user_profile_api(body: UserProfilePatchRequest) -> dict[str, Any]:
+        from on1y.user.profile import patch_user_profile, public_profile_view
+
+        sections: dict[str, Any] = {}
+        kindle_patch: dict[str, Any] = {}
+        if body.kindle_enabled is not None:
+            kindle_patch["enabled"] = body.kindle_enabled
+        if body.kindle_send_to is not None:
+            kindle_patch["send_to"] = body.kindle_send_to.strip()
+        if kindle_patch:
+            sections["kindle"] = kindle_patch
+        econ_patch: dict[str, Any] = {}
+        if body.economist_auto_ingest is not None:
+            econ_patch["auto_ingest_enabled"] = body.economist_auto_ingest
+        if body.economist_auto_kindle is not None:
+            econ_patch["auto_kindle_enabled"] = body.economist_auto_kindle
+        if econ_patch:
+            sections["economist"] = econ_patch
+        if sections:
+            patch_user_profile(**sections)
+        return public_profile_view()
+
+    @app.post("/api/hotlist/economist/auto")
+    def hotlist_economist_auto(
+        edition_date: str | None = Query(default=None),
+    ) -> dict[str, Any]:
+        from on1y.hotlist.economist_auto import run_economist_auto_tick
+
+        return run_economist_auto_tick(
+            force_edition=(edition_date or "").strip() or None,
+        )
+
+    @app.get("/api/hotlist/dates")
+    def hotlist_dates(
+        source: str = Query(default="zhihu"),
+        limit: int = Query(default=120, ge=1, le=366),
+    ) -> dict[str, Any]:
+        from datetime import date as date_cls
+
+        storage = get_storage()
+        try:
+            dates = storage.list_hotlist_dates(hotlist_source=source.strip() or "zhihu", limit=limit)
+            today = date_cls.today().isoformat()
+            if today not in dates:
+                dates = [today, *dates]
+            return {"source": source, "dates": dates, "today": today}
         finally:
             storage.close()
 
@@ -593,6 +823,38 @@ def create_app() -> FastAPI:
         finally:
             storage.close()
 
+    @app.post("/api/knowledge/themes/reorder")
+    def knowledge_themes_reorder(
+        body: ThemeReorderRequest,
+        locale: str = Query(default="zh"),
+    ) -> dict[str, Any]:
+        from on1y.exceptions import StorageError
+
+        storage = get_storage()
+        try:
+            storage.reorder_themes(body.theme_ids)
+            themes = _theme_rows_for_api(storage.list_themes_with_counts(), locale)
+            return {"ok": True, "themes": themes}
+        except StorageError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        finally:
+            storage.close()
+
+    @app.delete("/api/knowledge/themes/{theme_id}")
+    def knowledge_themes_delete(theme_id: int) -> dict[str, Any]:
+        from on1y.exceptions import StorageError
+
+        storage = get_storage()
+        try:
+            remapped = storage.archive_theme(theme_id, reassign_to_other=True)
+            return {"ok": True, "theme_id": theme_id, "remapped": remapped}
+        except StorageError as exc:
+            msg = str(exc)
+            status = 404 if "not found" in msg else 400
+            raise HTTPException(status_code=status, detail=msg) from exc
+        finally:
+            storage.close()
+
     @app.patch("/api/knowledge/themes/{theme_id}")
     def knowledge_themes_update(theme_id: int, body: ThemeUpdateRequest) -> dict[str, Any]:
         storage = get_storage()
@@ -652,12 +914,27 @@ def create_app() -> FastAPI:
             storage.close()
 
     @app.get("/api/knowledge/collections")
-    def knowledge_collections() -> dict[str, Any]:
+    def knowledge_collections(
+        hotlist_date: str | None = Query(default=None),
+        hotlist_source: str = Query(default="zhihu"),
+    ) -> dict[str, Any]:
+        from datetime import date as date_cls
+
+        from on1y.hotlist.constants import SUPPORTED_HOTLIST_SOURCES
+
+        src = hotlist_source.strip().lower()
+        if src not in SUPPORTED_HOTLIST_SOURCES:
+            raise HTTPException(status_code=400, detail=f"unsupported hotlist_source: {src}")
+
         storage = get_storage()
         try:
+            hot_day = (hotlist_date or "").strip() or date_cls.today().isoformat()
             return {
                 "favorites": storage.count_collection_items("favorites"),
                 "trash": storage.count_collection_items("trash"),
+                "hotlist": storage.count_collection_items(
+                    "hotlist", hotlist_date=hot_day, hotlist_source=src
+                ),
             }
         finally:
             storage.close()
@@ -673,12 +950,31 @@ def create_app() -> FastAPI:
         tag_id: int | None = Query(default=None),
         include_descendants: bool = Query(default=False),
         collection: str = Query(default="feed"),
+        hotlist_date: str | None = Query(default=None),
+        hotlist_source: str = Query(default="zhihu"),
     ) -> dict[str, Any]:
+        from on1y.hotlist.constants import SUPPORTED_HOTLIST_SOURCES
+
         storage = get_storage()
         try:
             coll = collection.strip().lower()
-            if coll not in {"feed", "favorites", "trash"}:
+            if coll not in {"feed", "favorites", "trash", "hotlist"}:
                 raise HTTPException(status_code=400, detail=f"unsupported collection: {collection}")
+            hot_day: str | None = None
+            hot_src: str | None = None
+            if coll == "hotlist":
+                from datetime import date as date_cls
+
+                hot_src = hotlist_source.strip().lower()
+                if hot_src not in SUPPORTED_HOTLIST_SOURCES:
+                    raise HTTPException(
+                        status_code=400, detail=f"unsupported hotlist_source: {hot_src}"
+                    )
+                hot_day = (hotlist_date or "").strip() or date_cls.today().isoformat()
+                try:
+                    date_cls.fromisoformat(hot_day)
+                except ValueError as exc:
+                    raise HTTPException(status_code=400, detail="invalid hotlist_date") from exc
             tag_ids = [tag_id] if tag_id is not None else None
             if include_descendants and tag_id is not None:
                 tag_ids = [tag_id]
@@ -692,6 +988,8 @@ def create_app() -> FastAPI:
                     tag_ids=tag_ids,
                     theme_id=theme_id,
                     collection=coll,
+                    hotlist_date=hot_day,
+                    hotlist_source=hot_src,
                 )
                 return {
                     "items": result["items"],
@@ -699,6 +997,8 @@ def create_app() -> FastAPI:
                     "total": result["total"],
                     "engine": result.get("engine", "fts5"),
                     "collection": coll,
+                    "hotlist_date": hot_day,
+                    "hotlist_source": hot_src,
                 }
             rows = storage.list_knowledge_items(
                 limit=limit,
@@ -708,8 +1008,26 @@ def create_app() -> FastAPI:
                 tag_ids=tag_ids,
                 theme_id=theme_id,
                 collection=coll,
+                hotlist_date=hot_day,
+                hotlist_source=hot_src,
             )
-            return {"items": rows, "count": len(rows), "collection": coll}
+            total = storage.count_knowledge_items(
+                platform=platform,
+                source=source,
+                tag_ids=tag_ids,
+                theme_id=theme_id,
+                collection=coll,
+                hotlist_date=hot_day,
+                hotlist_source=hot_src,
+            )
+            return {
+                "items": rows,
+                "count": len(rows),
+                "total": total,
+                "collection": coll,
+                "hotlist_date": hot_day,
+                "hotlist_source": hot_src,
+            }
         finally:
             storage.close()
 
@@ -765,7 +1083,7 @@ def create_app() -> FastAPI:
     def patch_item_classification(raw_id: int, body: ClassificationUpdate) -> dict[str, Any]:
         storage = get_storage()
         try:
-            raw = storage.get_raw_by_id(raw_id)
+            raw = storage.get_raw_by_id_for_user(raw_id)
             if raw is None:
                 raise HTTPException(status_code=404, detail="raw item not found")
             storage.set_item_classification(
@@ -786,7 +1104,7 @@ def create_app() -> FastAPI:
     def move_item_theme(raw_id: int, body: ThemeMoveRequest) -> dict[str, Any]:
         storage = get_storage()
         try:
-            raw = storage.get_raw_by_id(raw_id)
+            raw = storage.get_raw_by_id_for_user(raw_id)
             if raw is None:
                 raise HTTPException(status_code=404, detail="raw item not found")
             theme_id = body.theme_id
@@ -800,11 +1118,91 @@ def create_app() -> FastAPI:
         finally:
             storage.close()
 
+    @app.get(
+        "/api/knowledge/items/{raw_id}/economist-epub",
+        response_model=None,
+        responses={404: {"description": "Item not found"}, 502: {"description": "Download failed"}},
+    )
+    def economist_epub_download(raw_id: int) -> Response:
+        from on1y.hotlist.economist_urls import resolve_economist_epub_url
+        from on1y.hotlist.epub_preview import (
+            cache_epub,
+            download_epub,
+            economist_epub_cache_path,
+            load_cached_epub,
+        )
+
+        import logging
+
+        log = logging.getLogger(__name__)
+        storage = get_storage()
+        try:
+            raw = storage.get_raw_by_id_for_user(raw_id)
+            if raw is None:
+                raise HTTPException(status_code=404, detail="raw item not found")
+            if str(raw.platform) != "economist":
+                raise HTTPException(status_code=404, detail="not an Economist item")
+            meta = dict(raw.source_meta or {})
+            epub_url = resolve_economist_epub_url(str(raw.url), meta)
+            if not epub_url:
+                raise HTTPException(status_code=404, detail="epub url missing")
+            edition_date = str(meta.get("edition_date") or meta.get("heat_text") or "").strip()
+            settings = get_settings()
+            filename = Path(epub_url).name or "TheEconomist.epub"
+
+            if edition_date:
+                cached = economist_epub_cache_path(settings, edition_date)
+                if cached.is_file():
+                    return FileResponse(
+                        path=cached,
+                        media_type="application/epub+zip",
+                        filename=filename,
+                    )
+
+            blob = load_cached_epub(settings, edition_date) if edition_date else None
+            if blob is None:
+                try:
+                    blob = download_epub(epub_url, settings=settings)
+                except Exception as exc:
+                    log.warning("EPUB download failed raw_id=%s url=%s: %s", raw_id, epub_url, exc)
+                    raise HTTPException(
+                        status_code=502,
+                        detail=f"cannot download EPUB (check ON1Y_YTDLP_PROXY): {exc}",
+                    ) from exc
+                if edition_date and blob:
+                    try:
+                        cache_epub(blob, settings=settings, edition_date=edition_date)
+                    except OSError as exc:
+                        log.warning("EPUB cache write failed: %s", exc)
+
+            if not blob:
+                raise HTTPException(status_code=502, detail="empty EPUB response")
+
+            return Response(
+                content=blob,
+                media_type="application/epub+zip",
+                headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            log.exception("economist-epub download failed raw_id=%s", raw_id)
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        finally:
+            storage.close()
+
     @app.get("/api/knowledge/items/{raw_id}/reader")
     def knowledge_item_reader(raw_id: int) -> dict[str, Any]:
+        from on1y.hotlist.economist_preview_store import ensure_economist_preview
+
         storage = get_storage()
         try:
             content = storage.get_reader_content(raw_id)
+            if content is None:
+                raise HTTPException(status_code=404, detail="not found")
+            if str(content.get("platform") or "") == "economist":
+                ensure_economist_preview(storage, raw_id)
+                content = storage.get_reader_content(raw_id)
             if content is None:
                 raise HTTPException(status_code=404, detail="not found")
             return content
@@ -856,7 +1254,7 @@ def create_app() -> FastAPI:
     def patch_item_note(raw_id: int, body: ItemNoteUpdate) -> dict[str, Any]:
         storage = get_storage()
         try:
-            raw = storage.get_raw_by_id(raw_id)
+            raw = storage.get_raw_by_id_for_user(raw_id)
             if raw is None:
                 raise HTTPException(status_code=404, detail="raw item not found")
             storage.merge_source_meta(raw_id, {"user_note_html": body.html})
@@ -868,7 +1266,7 @@ def create_app() -> FastAPI:
     def patch_item_annotation(raw_id: int, body: ItemAnnotationUpdate) -> dict[str, Any]:
         storage = get_storage()
         try:
-            raw = storage.get_raw_by_id(raw_id)
+            raw = storage.get_raw_by_id_for_user(raw_id)
             if raw is None:
                 raise HTTPException(status_code=404, detail="raw item not found")
             storage.merge_source_meta(raw_id, {"annotated_body_html": body.html})
@@ -880,7 +1278,7 @@ def create_app() -> FastAPI:
     def patch_item_favorite(raw_id: int, body: FavoriteUpdate) -> dict[str, Any]:
         storage = get_storage()
         try:
-            raw = storage.get_raw_by_id(raw_id)
+            raw = storage.get_raw_by_id_for_user(raw_id)
             if raw is None:
                 raise HTTPException(status_code=404, detail="raw item not found")
             storage.merge_source_meta(raw_id, {"starred": body.starred})
@@ -920,7 +1318,7 @@ def create_app() -> FastAPI:
     def delete_knowledge_item(raw_id: int) -> dict[str, Any]:
         storage = get_storage()
         try:
-            raw = storage.get_raw_by_id(raw_id)
+            raw = storage.get_raw_by_id_for_user(raw_id)
             if raw is None:
                 raise HTTPException(status_code=404, detail="raw item not found")
             storage.delete_raw_item(raw_id)
@@ -1012,11 +1410,14 @@ def create_app() -> FastAPI:
 def run_server(*, host: str | None = None, port: int | None = None) -> None:
     import uvicorn
 
+    from on1y.hotlist.economist_auto import start_economist_auto_loop
     from on1y.subscriptions.auto_sync import start_auto_sync_loop
 
     settings = get_settings()
     settings.ensure_data_dir()
+    get_storage().close()
     start_auto_sync_loop()
+    start_economist_auto_loop()
     uvicorn.run(
         create_app(),
         host=host or settings.web_host,

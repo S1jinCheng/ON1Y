@@ -127,7 +127,8 @@ export function sortKnowledgeItems(
 
 export function sortOptionsForUi(
   locale: Locale,
-  hasSearch: boolean
+  hasSearch: boolean,
+  collection: "feed" | "favorites" | "trash" | "hotlist" = "feed"
 ): Array<{ value: SortMode; label: string }> {
   const zh = locale === "zh";
   const base: Array<{ value: SortMode; label: string }> = [
@@ -141,6 +142,12 @@ export function sortOptionsForUi(
     { value: "author_desc", label: zh ? "作者 Z→A" : "Author Z→A" },
     { value: "hot_rank_asc", label: zh ? "热榜排名" : "Hot rank" }
   ];
+  if (collection === "hotlist") {
+    if (hasSearch) {
+      return [{ value: "relevance", label: zh ? "搜索相关度" : "Relevance" }];
+    }
+    return [];
+  }
   if (hasSearch) {
     return [{ value: "relevance", label: zh ? "搜索相关度" : "Relevance" }, ...base];
   }

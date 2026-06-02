@@ -41,25 +41,47 @@ def stop_auto_sync_loop() -> None:
     _stop.set()
 
 
-def _loop() -> None:
+def _run_auto_sync_tick() -> None:
+    from on1y.auth.context import user_context
     from on1y.config import get_settings
     from on1y.subscriptions.sync_job import run_subscription_sync_blocking
+    from on1y.user.accounts import UserStore
+
+    settings = get_settings()
+    from on1y.adapters.sqlite_storage import get_storage
+
+    storage = get_storage()
+    try:
+        user_ids = UserStore(storage).list_active_user_ids()
+    finally:
+        storage.close()
+
+    for uid in user_ids:
+        with user_context(uid):
+            report = run_subscription_sync_blocking(
+                platform=settings.auto_sync_platform,
+                backfill=False,
+                ingest=settings.auto_sync_ingest,
+                ingest_limit=settings.auto_sync_ingest_limit,
+                subtitle_limit=settings.auto_sync_subtitle_limit,
+                distill_limit=settings.auto_sync_distill_limit,
+            )
+            if report is None:
+                logger.debug("Auto sync skipped for user %s: another sync running", uid)
+            elif report:
+                logger.info("Auto sync completed for user %s", uid)
+
+
+def _loop() -> None:
+    from on1y.config import get_settings
 
     while not _stop.is_set():
+        try:
+            _run_auto_sync_tick()
+        except Exception:
+            logger.exception("Auto subscription sync tick failed")
+
         settings = get_settings()
         interval = settings.auto_sync_interval_minutes * 60
         if _stop.wait(timeout=interval):
             break
-
-        report = run_subscription_sync_blocking(
-            platform=settings.auto_sync_platform,
-            backfill=False,
-            ingest=settings.auto_sync_ingest,
-            ingest_limit=settings.auto_sync_ingest_limit,
-            subtitle_limit=settings.auto_sync_subtitle_limit,
-            distill_limit=settings.auto_sync_distill_limit,
-        )
-        if report is None:
-            logger.debug("Auto sync skipped: another sync is running")
-        elif report:
-            logger.info("Auto sync completed")

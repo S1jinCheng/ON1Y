@@ -6,7 +6,7 @@ import logging
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -24,7 +24,7 @@ from on1y.utils.json_util import dumps_json, dumps_meta, loads_json_list, loads_
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 9
 SCHEMA_PATH = PROJECT_ROOT / "sql" / "schema.sql"
 SCHEMA_V2_PATH = PROJECT_ROOT / "sql" / "schema_v2.sql"
 SCHEMA_V3_PATH = PROJECT_ROOT / "sql" / "schema_v3.sql"
@@ -32,6 +32,8 @@ SCHEMA_V4_PATH = PROJECT_ROOT / "sql" / "schema_v4.sql"
 SCHEMA_V5_PATH = PROJECT_ROOT / "sql" / "schema_v5.sql"
 SCHEMA_V6_PATH = PROJECT_ROOT / "sql" / "schema_v6.sql"
 SCHEMA_V7_PATH = PROJECT_ROOT / "sql" / "schema_v7.sql"
+SCHEMA_V8_PATH = PROJECT_ROOT / "sql" / "schema_v8.sql"
+SCHEMA_V9_PATH = PROJECT_ROOT / "sql" / "schema_v9.sql"
 
 
 class SqliteStorage:
@@ -56,6 +58,10 @@ class SqliteStorage:
         elif self._current_schema_version(conn) >= 4:
             self.seed_default_themes_legacy(conn)
         self._ensure_fts_index(conn)
+        if self._current_schema_version(conn) >= 9:
+            from on1y.user.accounts import bootstrap_default_user
+
+            bootstrap_default_user(self)
         conn.commit()
 
     def _ensure_fts_index(self, conn: sqlite3.Connection) -> None:
@@ -183,18 +189,208 @@ class SqliteStorage:
                 (7,),
             )
             logger.info("Applied schema version 7 to %s", self._db_path)
+            current = 7
+        if current < 8:
+            if not SCHEMA_V8_PATH.is_file():
+                raise StorageError(f"Schema file not found: {SCHEMA_V8_PATH}")
+            conn.executescript(SCHEMA_V8_PATH.read_text(encoding="utf-8"))
+            conn.execute(
+                "INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)",
+                (8,),
+            )
+            logger.info("Applied schema version 8 to %s", self._db_path)
+            current = 8
+        if current < 9:
+            self._apply_schema_v9(conn)
+            conn.execute(
+                "INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)",
+                (9,),
+            )
+            logger.info("Applied schema version 9 to %s", self._db_path)
+
+    def _table_exists(self, conn: sqlite3.Connection, name: str) -> bool:
+        row = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (name,),
+        ).fetchone()
+        return row is not None
+
+    def _column_exists(self, conn: sqlite3.Connection, table: str, column: str) -> bool:
+        rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+        return any(str(r[1]) == column for r in rows)
+
+    def _apply_schema_v9(self, conn: sqlite3.Connection) -> None:
+        if not self._table_exists(conn, "users"):
+            conn.executescript(
+                """
+                CREATE TABLE users (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username        TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                    email           TEXT UNIQUE COLLATE NOCASE,
+                    password_hash   TEXT NOT NULL,
+                    display_name    TEXT NOT NULL DEFAULT '',
+                    is_active       INTEGER NOT NULL DEFAULT 1,
+                    created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+                CREATE TABLE user_profiles (
+                    user_id         INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                    profile_json    TEXT NOT NULL,
+                    updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+                CREATE TABLE user_subscription_settings (
+                    user_id         INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                    settings_json   TEXT NOT NULL,
+                    updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+                """
+            )
+        if not self._column_exists(conn, "raw_items", "user_id"):
+            conn.execute(
+                "ALTER TABLE raw_items ADD COLUMN user_id INTEGER REFERENCES users(id)"
+            )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_raw_items_user_id ON raw_items (user_id)
+            """
+        )
+
+    def _user_scope_parts(self, conn: sqlite3.Connection) -> tuple[str, list[Any]]:
+        if self._current_schema_version(conn) < 9:
+            return "", []
+        from on1y.auth.context import get_current_user_id
+
+        uid = get_current_user_id()
+        if uid is None:
+            return "", []
+        return "r.user_id = ?", [uid]
+
+    def _write_user_id(self, conn: sqlite3.Connection) -> int | None:
+        if self._current_schema_version(conn) < 9:
+            return None
+        from on1y.auth.context import get_effective_user_id
+
+        return get_effective_user_id()
+
+    def _hotlist_query_parts(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        collection: str | None,
+        hotlist_date: str | None,
+        hotlist_source: str | None = None,
+    ) -> tuple[str, str, list[Any]]:
+        """Extra JOIN fragment, WHERE suffix, and params for hot-list by day."""
+        if (collection or "feed").strip().lower() != "hotlist":
+            return ("", "", [])
+        day = (hotlist_date or "").strip() or date.today().isoformat()
+        source = (hotlist_source or "").strip()
+        if self._current_schema_version(conn) >= 8:
+            join_sql = (
+                " INNER JOIN hotlist_snapshots hs ON hs.raw_id = r.id "
+            )
+            where_suffix = " AND hs.snapshot_date = ? "
+            params: list[Any] = [day]
+            if source:
+                where_suffix += " AND hs.hotlist_source = ? "
+                params.append(source)
+            return (join_sql, where_suffix, params)
+        params = [day]
+        where_suffix = " AND json_extract(r.source_meta, '$.snapshot_date') = ? "
+        if source:
+            where_suffix += " AND json_extract(r.source_meta, '$.hotlist_source') = ? "
+            params.append(source)
+        return ("", where_suffix, params)
+
+    def list_hotlist_dates(
+        self,
+        *,
+        hotlist_source: str = "zhihu",
+        limit: int = 120,
+    ) -> list[str]:
+        conn = self._connect()
+        if self._current_schema_version(conn) >= 8:
+            rows = conn.execute(
+                """
+                SELECT DISTINCT snapshot_date AS d
+                FROM hotlist_snapshots
+                WHERE hotlist_source = ?
+                ORDER BY snapshot_date DESC
+                LIMIT ?
+                """,
+                (hotlist_source, limit),
+            ).fetchall()
+            return [str(r["d"]) for r in rows if r["d"]]
+
+        rows = conn.execute(
+            """
+            SELECT DISTINCT json_extract(r.source_meta, '$.snapshot_date') AS d
+            FROM raw_items r
+            WHERE COALESCE(json_extract(r.source_meta, '$.hotlist_source'), '') = ?
+              AND r.deleted_at IS NULL
+              AND d IS NOT NULL AND TRIM(d) != ''
+            ORDER BY d DESC
+            LIMIT ?
+            """,
+            (hotlist_source, limit),
+        ).fetchall()
+        return [str(r["d"]) for r in rows if r["d"]]
+
+    def upsert_hotlist_snapshot(
+        self,
+        *,
+        hotlist_source: str,
+        snapshot_date: str,
+        question_id: str,
+        raw_id: int,
+        heat_text: str | None = None,
+        title: str = "",
+        excerpt: str = "",
+        sort_order: int = 0,
+    ) -> None:
+        conn = self._connect()
+        if self._current_schema_version(conn) < 8:
+            return
+        conn.execute(
+            """
+            INSERT INTO hotlist_snapshots (
+                hotlist_source, snapshot_date, question_id, raw_id,
+                heat_text, title, excerpt, sort_order
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(hotlist_source, snapshot_date, question_id) DO UPDATE SET
+                raw_id = excluded.raw_id,
+                heat_text = excluded.heat_text,
+                title = excluded.title,
+                excerpt = excluded.excerpt,
+                sort_order = excluded.sort_order
+            """,
+            (
+                hotlist_source,
+                snapshot_date,
+                question_id,
+                raw_id,
+                heat_text,
+                title,
+                excerpt,
+                sort_order,
+            ),
+        )
+        conn.commit()
 
     @staticmethod
     def _collection_clause(collection: str | None) -> str:
+        from on1y.hotlist.sql import is_feed_row_sql, is_hotlist_row_sql
+
         key = (collection or "feed").strip().lower()
         if key == "trash":
             return "r.deleted_at IS NOT NULL"
+        if key == "hotlist":
+            return f"r.deleted_at IS NULL AND {is_hotlist_row_sql('r')}"
         if key == "favorites":
             return (
                 "r.deleted_at IS NULL AND "
                 "COALESCE(CAST(json_extract(r.source_meta, '$.starred') AS INTEGER), 0) = 1"
             )
-        return "r.deleted_at IS NULL"
+        return f"r.deleted_at IS NULL AND {is_feed_row_sql('r')}"
 
     def seed_default_themes_legacy(self, conn: sqlite3.Connection | None = None) -> None:
         """Seed for schema v4 without description columns."""
@@ -370,38 +566,74 @@ class SqliteStorage:
 
         word_count = len(item.body_text.split()) if item.body_text else 0
         with self.transaction() as conn:
-            conn.execute(
-                """
-                INSERT INTO raw_items (
-                    url, platform, source, raw_title, body_text,
-                    content_type, extract_status, extract_error,
-                    word_count, source_meta
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(url) DO UPDATE SET
-                    platform = excluded.platform,
-                    source = excluded.source,
-                    raw_title = excluded.raw_title,
-                    body_text = excluded.body_text,
-                    content_type = excluded.content_type,
-                    extract_status = excluded.extract_status,
-                    extract_error = excluded.extract_error,
-                    word_count = excluded.word_count,
-                    source_meta = excluded.source_meta,
-                    updated_at = datetime('now')
-                """,
-                (
-                    item.url,
-                    item.platform,
-                    item.source.value,
-                    item.raw_title,
-                    item.body_text,
-                    item.content_type.value,
-                    item.extract_status.value,
-                    item.extract_error,
-                    word_count,
-                    dumps_meta(item.source_meta),
-                ),
-            )
+            user_id = self._write_user_id(conn)
+            if user_id is not None:
+                conn.execute(
+                    """
+                    INSERT INTO raw_items (
+                        url, platform, source, raw_title, body_text,
+                        content_type, extract_status, extract_error,
+                        word_count, source_meta, user_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(url) DO UPDATE SET
+                        platform = excluded.platform,
+                        source = excluded.source,
+                        raw_title = excluded.raw_title,
+                        body_text = excluded.body_text,
+                        content_type = excluded.content_type,
+                        extract_status = excluded.extract_status,
+                        extract_error = excluded.extract_error,
+                        word_count = excluded.word_count,
+                        source_meta = excluded.source_meta,
+                        updated_at = datetime('now')
+                    """,
+                    (
+                        item.url,
+                        item.platform,
+                        item.source.value,
+                        item.raw_title,
+                        item.body_text,
+                        item.content_type.value,
+                        item.extract_status.value,
+                        item.extract_error,
+                        word_count,
+                        dumps_meta(item.source_meta),
+                        user_id,
+                    ),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO raw_items (
+                        url, platform, source, raw_title, body_text,
+                        content_type, extract_status, extract_error,
+                        word_count, source_meta
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(url) DO UPDATE SET
+                        platform = excluded.platform,
+                        source = excluded.source,
+                        raw_title = excluded.raw_title,
+                        body_text = excluded.body_text,
+                        content_type = excluded.content_type,
+                        extract_status = excluded.extract_status,
+                        extract_error = excluded.extract_error,
+                        word_count = excluded.word_count,
+                        source_meta = excluded.source_meta,
+                        updated_at = datetime('now')
+                    """,
+                    (
+                        item.url,
+                        item.platform,
+                        item.source.value,
+                        item.raw_title,
+                        item.body_text,
+                        item.content_type.value,
+                        item.extract_status.value,
+                        item.extract_error,
+                        word_count,
+                        dumps_meta(item.source_meta),
+                    ),
+                )
             row = conn.execute("SELECT * FROM raw_items WHERE url = ?", (item.url,)).fetchone()
             if row is None:
                 raise StorageError(f"Failed to upsert raw item: {item.url}")
@@ -418,6 +650,51 @@ class SqliteStorage:
         conn = self._connect()
         row = conn.execute("SELECT * FROM raw_items WHERE id = ?", (raw_id,)).fetchone()
         return self._row_to_raw(row) if row else None
+
+    def get_raw_by_id_for_user(self, raw_id: int) -> RawItem | None:
+        conn = self._connect()
+        user_clause, user_params = self._user_scope_parts(conn)
+        if user_clause:
+            row = conn.execute(
+                f"SELECT * FROM raw_items r WHERE r.id = ? AND {user_clause}",
+                (raw_id, *user_params),
+            ).fetchone()
+        else:
+            row = conn.execute("SELECT * FROM raw_items WHERE id = ?", (raw_id,)).fetchone()
+        return self._row_to_raw(row) if row else None
+
+    def update_raw_url(self, raw_id: int, new_url: str) -> RawItem:
+        with self.transaction() as conn:
+            conn.execute(
+                """
+                UPDATE raw_items
+                SET url = ?, updated_at = datetime('now')
+                WHERE id = ?
+                """,
+                (new_url, raw_id),
+            )
+            row = conn.execute("SELECT * FROM raw_items WHERE id = ?", (raw_id,)).fetchone()
+        if row is None:
+            raise StorageError(f"raw item not found: {raw_id}")
+        return self._row_to_raw(row)
+
+    def get_hotlist_raw_id(
+        self,
+        *,
+        hotlist_source: str,
+        question_id: str,
+    ) -> int | None:
+        conn = self._connect()
+        row = conn.execute(
+            """
+            SELECT raw_id FROM hotlist_snapshots
+            WHERE hotlist_source = ? AND question_id = ?
+            ORDER BY snapshot_date DESC
+            LIMIT 1
+            """,
+            (hotlist_source, question_id),
+        ).fetchone()
+        return int(row["raw_id"]) if row else None
 
     def merge_source_meta(self, raw_id: int, patch: dict[str, Any]) -> None:
         raw = self.get_raw_by_id(raw_id)
@@ -1079,8 +1356,12 @@ class SqliteStorage:
         return [dict(r) for r in rows]
 
     def list_themes_with_counts(self, *, include_archived: bool = False) -> list[dict[str, Any]]:
+        from on1y.hotlist.constants import HOTLIST_THEME_SLUG
+        from on1y.hotlist.sql import is_feed_row_sql
+
         conn = self._connect()
         archived_clause = "" if include_archived else "AND t.archived_at IS NULL"
+        feed_only = f"AND r.deleted_at IS NULL AND {is_feed_row_sql('r')}"
         rows = conn.execute(
             f"""
             SELECT
@@ -1095,12 +1376,13 @@ class SqliteStorage:
                 t.archived_at,
                 COUNT(DISTINCT r.id) AS item_count
             FROM themes t
-            LEFT JOIN raw_items r ON r.theme_id = t.id
-            WHERE 1=1 {archived_clause}
+            LEFT JOIN raw_items r ON r.theme_id = t.id {feed_only}
+            WHERE 1=1 {archived_clause} AND t.slug != ?
             GROUP BY t.id, t.slug, t.name_zh, t.name_en, t.description_zh,
                      t.description_en, t.sort_order, t.is_builtin, t.archived_at
             ORDER BY t.sort_order ASC, t.id ASC
-            """
+            """,
+            (HOTLIST_THEME_SLUG,),
         ).fetchall()
         return [dict(r) for r in rows]
 
@@ -1186,24 +1468,71 @@ class SqliteStorage:
             )
         return self.get_theme_by_id(theme_id)
 
-    def archive_theme(self, theme_id: int, *, reassign_to_other: bool = True) -> None:
+    def archive_theme(self, theme_id: int, *, reassign_to_other: bool = True) -> int:
+        """Archive a theme; optionally move its items to「其他」. Returns items remapped."""
         theme = self.get_theme_by_id(theme_id)
         if theme is None:
             raise StorageError(f"theme not found: {theme_id}")
+        if theme.get("archived_at"):
+            raise StorageError(f"theme already archived: {theme_id}")
         if int(theme.get("is_builtin") or 0):
             raise StorageError("cannot archive built-in theme")
-        other_id = self.get_theme_id_by_slug(OTHER_THEME_SLUG)
+        other_id = self.get_theme_id_by_slug(OTHER_THEME_SLUG) if reassign_to_other else None
+        raw_ids = self.list_raw_ids_by_theme(theme_id)
+        remapped = 0
         with self.transaction() as conn:
-            if reassign_to_other and other_id is not None:
-                conn.execute(
+            if reassign_to_other and other_id is not None and raw_ids:
+                cur = conn.execute(
                     "UPDATE raw_items SET theme_id = ?, theme_source = 'remap' "
                     "WHERE theme_id = ?",
                     (other_id, theme_id),
                 )
+                remapped = int(cur.rowcount or 0)
+                conn.execute("DELETE FROM item_themes WHERE theme_id = ?", (theme_id,))
+                for raw_id in raw_ids:
+                    conn.execute(
+                        """
+                        INSERT INTO item_themes (raw_id, theme_id, confidence, source)
+                        VALUES (?, ?, 1.0, 'remap')
+                        ON CONFLICT(raw_id, theme_id) DO UPDATE SET
+                            source = excluded.source,
+                            confidence = excluded.confidence
+                        """,
+                        (raw_id, other_id),
+                    )
+                    self._touch_search_index(conn, raw_id)
+            else:
+                conn.execute("DELETE FROM item_themes WHERE theme_id = ?", (theme_id,))
             conn.execute(
                 "UPDATE themes SET archived_at = datetime('now') WHERE id = ?",
                 (theme_id,),
             )
+        return remapped
+
+    def detach_hotlist_item(self, raw_id: int) -> None:
+        """Keep hot-list rows out of theme taxonomy."""
+        with self.transaction() as conn:
+            conn.execute(
+                "UPDATE raw_items SET theme_id = NULL, theme_source = '' WHERE id = ?",
+                (raw_id,),
+            )
+            conn.execute("DELETE FROM item_themes WHERE raw_id = ?", (raw_id,))
+
+    def reorder_themes(self, theme_ids: list[int]) -> None:
+        """Persist sidebar order; ``theme_ids`` must list every active sidebar theme once."""
+        active_rows = self.list_themes_with_counts()
+        active_ids = sorted(int(r["id"]) for r in active_rows)
+        ids = [int(i) for i in theme_ids]
+        if sorted(ids) != active_ids:
+            raise StorageError(
+                "theme_ids must include every active theme exactly once"
+            )
+        with self.transaction() as conn:
+            for index, theme_id in enumerate(ids):
+                conn.execute(
+                    "UPDATE themes SET sort_order = ?, updated_at = datetime('now') WHERE id = ?",
+                    ((index + 1) * 10, theme_id),
+                )
 
     def list_raw_ids_by_theme(self, theme_id: int) -> list[int]:
         rows = self._connect().execute(
@@ -1357,13 +1686,25 @@ class SqliteStorage:
         meta = loads_meta(row["source_meta"])
         author_info = author_fields_from_meta(meta)
         body_text = row["body_text"]
+        reader_text = row["reader_text"]
         prefer = get_settings().content_locale
-        display_body = pick_single_transcript(body_text or "", prefer_lang=prefer)
+        if str(row["platform"]) == "economist":
+            from on1y.hotlist.economist_urls import strip_legacy_economist_body
+
+            base = (reader_text or body_text or "").strip()
+            display_body = strip_legacy_economist_body(base)
+        else:
+            display_body = pick_single_transcript(body_text or "", prefer_lang=prefer)
         translated_body_text = str(meta.get("translated_body_text") or "").strip() or None
         transcript_kind = classify_transcript(display_body, prefer_lang=prefer)
+        item_url = str(row["url"])
+        if str(row["platform"]) == "economist":
+            from on1y.hotlist.economist_urls import resolve_economist_epub_url
+
+            item_url = resolve_economist_epub_url(item_url, meta)
         return {
             "raw_id": int(row["id"]),
-            "url": str(row["url"]),
+            "url": item_url,
             "title": row["raw_title"],
             "platform": str(row["platform"]),
             "body_text": display_body,
@@ -1503,8 +1844,28 @@ class SqliteStorage:
             self._purge_raw_item_row(conn, raw_id)
             return True
 
-    def count_collection_items(self, collection: str) -> int:
+    def count_collection_items(
+        self,
+        collection: str,
+        *,
+        hotlist_date: str | None = None,
+        hotlist_source: str | None = None,
+    ) -> int:
         conn = self._connect()
+        coll = collection.strip().lower()
+        if coll == "hotlist":
+            join_sql, day_where, day_params = self._hotlist_query_parts(
+                conn,
+                collection="hotlist",
+                hotlist_date=hotlist_date,
+                hotlist_source=hotlist_source,
+            )
+            clause = self._collection_clause(collection)
+            row = conn.execute(
+                f"SELECT COUNT(*) AS n FROM raw_items r {join_sql} WHERE {clause}{day_where}",
+                day_params,
+            ).fetchone()
+            return int(row["n"]) if row else 0
         clause = self._collection_clause(collection)
         row = conn.execute(
             f"SELECT COUNT(*) AS n FROM raw_items r WHERE {clause}",
@@ -1609,6 +1970,8 @@ class SqliteStorage:
         tag_ids: list[int] | None = None,
         theme_id: int | None = None,
         collection: str | None = None,
+        hotlist_date: str | None = None,
+        hotlist_source: str | None = None,
     ) -> dict[str, Any]:
         """BM25-ranked full-text search with snippets."""
         from on1y.search.fts import search_knowledge_fts
@@ -1624,9 +1987,12 @@ class SqliteStorage:
                 tag_ids=tag_ids,
                 theme_id=theme_id,
                 collection=collection,
+                hotlist_date=hotlist_date,
+                hotlist_source=hotlist_source,
             )
             return {"items": items, "total": len(items), "engine": "like"}
 
+        coll_key = (collection or "feed").strip().lower()
         collection_sql = self._collection_clause_for_conn(conn, collection)
         hits, total = search_knowledge_fts(
             conn,
@@ -1635,7 +2001,7 @@ class SqliteStorage:
             offset=offset,
             platform=platform,
             source=source,
-            theme_id=theme_id,
+            theme_id=None if coll_key == "hotlist" else theme_id,
             tag_ids=tag_ids,
             collection_sql=collection_sql,
         )
@@ -1644,6 +2010,8 @@ class SqliteStorage:
 
         raw_ids = [int(h["raw_id"]) for h in hits]
         placeholders = ",".join("?" for _ in raw_ids)
+        user_clause, user_params = self._user_scope_parts(conn)
+        user_filter = f" AND {user_clause}" if user_clause else ""
         rows = conn.execute(
             f"""
             SELECT
@@ -1661,12 +2029,37 @@ class SqliteStorage:
                 d.distill_status
             FROM raw_items r
             LEFT JOIN distilled_items d ON d.raw_id = r.id
-            WHERE r.id IN ({placeholders})
+            WHERE r.id IN ({placeholders}){user_filter}
             """,
-            raw_ids,
+            (*raw_ids, *user_params),
         ).fetchall()
         row_by_id = {int(r["raw_id"]): r for r in rows}
         ordered_rows = [row_by_id[rid] for rid in raw_ids if rid in row_by_id]
+        if coll_key == "hotlist" and hotlist_date:
+            _join_sql, _day_where, day_params = self._hotlist_query_parts(
+                conn,
+                collection="hotlist",
+                hotlist_date=hotlist_date,
+                hotlist_source=hotlist_source,
+            )
+            if day_params:
+                source_clause = ""
+                params = list(day_params)
+                if hotlist_source and hotlist_source.strip():
+                    source_clause = " AND hotlist_source = ? "
+                    params.append(hotlist_source.strip())
+                allowed = {
+                    int(r["raw_id"])
+                    for r in conn.execute(
+                        f"""
+                        SELECT raw_id FROM hotlist_snapshots
+                        WHERE snapshot_date = ?{source_clause}
+                        """,
+                        params,
+                    ).fetchall()
+                }
+                ordered_rows = [row_by_id[rid] for rid in raw_ids if rid in allowed and rid in row_by_id]
+                total = len(ordered_rows)
         items = self._assemble_knowledge_items(ordered_rows)
         hit_map = {int(h["raw_id"]): h for h in hits}
         for item in items:
@@ -1693,6 +2086,109 @@ class SqliteStorage:
             return "1"
         return self._collection_clause(collection)
 
+    def _knowledge_items_filters(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        platform: str | None = None,
+        source: str | None = None,
+        query: str | None = None,
+        tag_ids: list[int] | None = None,
+        theme_id: int | None = None,
+        collection: str | None = None,
+        hotlist_date: str | None = None,
+        hotlist_source: str | None = None,
+    ) -> tuple[str, str, list[Any], bool]:
+        """Return (WHERE sql, JOIN sql, params, needs_distilled_join for COUNT)."""
+        where_parts: list[str] = [self._collection_clause_for_conn(conn, collection)]
+        user_clause, user_params = self._user_scope_parts(conn)
+        if user_clause:
+            where_parts.append(user_clause)
+        join_sql, day_where, day_params = self._hotlist_query_parts(
+            conn,
+            collection=collection,
+            hotlist_date=hotlist_date,
+            hotlist_source=hotlist_source,
+        )
+        params: list[Any] = list(user_params) + list(day_params)
+        if day_where.strip():
+            where_parts.append(day_where.strip().removeprefix("AND").strip())
+        needs_join = False
+        if platform:
+            where_parts.append("r.platform = ?")
+            params.append(platform)
+        if source:
+            where_parts.append("r.source = ?")
+            params.append(source)
+        if query and query.strip() and self._current_schema_version(conn) < 6:
+            needs_join = True
+            where_parts.append(
+                "("
+                "COALESCE(r.raw_title, '') LIKE ? "
+                "OR COALESCE(d.summary, '') LIKE ? "
+                "OR COALESCE(r.body_text, '') LIKE ?"
+                ")"
+            )
+            like = f"%{query.strip()}%"
+            params.extend([like, like, like])
+        coll_key = (collection or "feed").strip().lower()
+        if theme_id is not None and coll_key != "hotlist":
+            where_parts.append("r.theme_id = ?")
+            params.append(theme_id)
+        if tag_ids:
+            placeholders = ",".join("?" for _ in tag_ids)
+            where_parts.append(
+                "EXISTS ("
+                "SELECT 1 FROM item_tags itf "
+                f"WHERE itf.raw_id = r.id AND itf.tag_id IN ({placeholders})"
+                ")"
+            )
+            params.extend(tag_ids)
+        where_sql = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
+        return where_sql, join_sql, params, needs_join
+
+    def count_knowledge_items(
+        self,
+        *,
+        platform: str | None = None,
+        source: str | None = None,
+        query: str | None = None,
+        tag_ids: list[int] | None = None,
+        theme_id: int | None = None,
+        collection: str | None = None,
+        hotlist_date: str | None = None,
+        hotlist_source: str | None = None,
+    ) -> int:
+        conn = self._connect()
+        where_sql, join_sql, params, needs_join = self._knowledge_items_filters(
+            conn,
+            platform=platform,
+            source=source,
+            query=query,
+            tag_ids=tag_ids,
+            theme_id=theme_id,
+            collection=collection,
+            hotlist_date=hotlist_date,
+            hotlist_source=hotlist_source,
+        )
+        if needs_join:
+            row = conn.execute(
+                f"""
+                SELECT COUNT(*) AS n
+                FROM raw_items r
+                {join_sql}
+                LEFT JOIN distilled_items d ON d.raw_id = r.id
+                {where_sql}
+                """,
+                params,
+            ).fetchone()
+        else:
+            row = conn.execute(
+                f"SELECT COUNT(*) AS n FROM raw_items r {join_sql} {where_sql}",
+                params,
+            ).fetchone()
+        return int(row["n"]) if row else 0
+
     def list_knowledge_items(
         self,
         *,
@@ -1704,6 +2200,8 @@ class SqliteStorage:
         tag_ids: list[int] | None = None,
         theme_id: int | None = None,
         collection: str | None = None,
+        hotlist_date: str | None = None,
+        hotlist_source: str | None = None,
     ) -> list[dict[str, Any]]:
         conn = self._connect()
         if query and query.strip() and self._current_schema_version(conn) >= 6:
@@ -1716,45 +2214,35 @@ class SqliteStorage:
                 tag_ids=tag_ids,
                 theme_id=theme_id,
                 collection=collection,
+                hotlist_date=hotlist_date,
+                hotlist_source=hotlist_source,
             )
             return result["items"]
 
-        where_parts: list[str] = [self._collection_clause_for_conn(conn, collection)]
-        params: list[Any] = []
-        if platform:
-            where_parts.append("r.platform = ?")
-            params.append(platform)
-        if source:
-            where_parts.append("r.source = ?")
-            params.append(source)
-        if query and query.strip() and self._current_schema_version(conn) < 6:
-            where_parts.append(
-                "("
-                "COALESCE(r.raw_title, '') LIKE ? "
-                "OR COALESCE(d.summary, '') LIKE ? "
-                "OR COALESCE(r.body_text, '') LIKE ?"
-                ")"
-            )
-            like = f"%{query.strip()}%"
-            params.extend([like, like, like])
-        if tag_ids:
-            placeholders = ",".join("?" for _ in tag_ids)
-            where_parts.append(
-                "EXISTS ("
-                "SELECT 1 FROM item_tags itf "
-                f"WHERE itf.raw_id = r.id AND itf.tag_id IN ({placeholders})"
-                ")"
-            )
-            params.extend(tag_ids)
-        if theme_id is not None:
-            where_parts.append("r.theme_id = ?")
-            params.append(theme_id)
-        where_sql = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
+        where_sql, join_sql, params, _needs_join = self._knowledge_items_filters(
+            conn,
+            platform=platform,
+            source=source,
+            query=query,
+            tag_ids=tag_ids,
+            theme_id=theme_id,
+            collection=collection,
+            hotlist_date=hotlist_date,
+            hotlist_source=hotlist_source,
+        )
         coll = (collection or "feed").strip().lower()
-        order_sql = (
-            "r.deleted_at DESC"
-            if coll == "trash"
-            else "COALESCE(d.distilled_at, r.ingested_at) DESC"
+        if coll == "trash":
+            order_sql = "r.deleted_at DESC"
+        elif coll == "hotlist" and self._current_schema_version(conn) >= 8 and join_sql:
+            order_sql = "hs.sort_order ASC, hs.id ASC"
+        elif coll == "hotlist":
+            order_sql = "r.ingested_at DESC"
+        else:
+            order_sql = "COALESCE(d.distilled_at, r.ingested_at) DESC"
+        snapshot_select = (
+            ", hs.snapshot_date AS hotlist_snapshot_date, hs.heat_text AS hotlist_heat_text"
+            if coll == "hotlist" and join_sql
+            else ""
         )
         rows = conn.execute(
             f"""
@@ -1772,7 +2260,9 @@ class SqliteStorage:
                 d.topics,
                 d.prompt_version,
                 d.distill_status
+                {snapshot_select}
             FROM raw_items r
+            {join_sql}
             LEFT JOIN distilled_items d ON d.raw_id = r.id
             {where_sql}
             ORDER BY {order_sql}
@@ -1781,6 +2271,14 @@ class SqliteStorage:
             (*params, limit, offset),
         ).fetchall()
         items = self._assemble_knowledge_items(rows)
+        if coll == "hotlist":
+            for item, row in zip(items, rows, strict=False):
+                snap = row["hotlist_snapshot_date"] if "hotlist_snapshot_date" in row.keys() else None
+                if snap:
+                    item["snapshot_date"] = str(snap)
+                heat = row["hotlist_heat_text"] if "hotlist_heat_text" in row.keys() else None
+                if heat:
+                    item["heat_text"] = str(heat).strip() or item.get("heat_text")
         if (collection or "feed").strip().lower() == "trash":
             for item in items:
                 item["deleted"] = True
@@ -1841,10 +2339,15 @@ class SqliteStorage:
             tid = row["theme_id"]
             theme_obj = theme_map.get(int(tid)) if tid is not None else None
             themes_list = [theme_obj] if theme_obj else []
+            item_url = str(row["url"])
+            if str(row["platform"]) == "economist":
+                from on1y.hotlist.economist_urls import resolve_economist_epub_url
+
+                item_url = resolve_economist_epub_url(item_url, meta)
             items.append(
                 {
                     "raw_id": raw_id,
-                    "url": str(row["url"]),
+                    "url": item_url,
                     "title": row["raw_title"],
                     "platform": str(row["platform"]),
                     "source": str(row["source"]),
@@ -1853,6 +2356,7 @@ class SqliteStorage:
                     "feed_label": str(meta.get("feed_label") or "").strip() or None,
                     "hot_rank": meta.get("hot_rank"),
                     "heat_text": str(meta.get("heat_text") or "").strip() or None,
+                    "snapshot_date": str(meta.get("snapshot_date") or "").strip() or None,
                     "summary": row["summary"] or meta.get("entry_excerpt"),
                     "topics": topics if isinstance(topics, list) else [],
                     "prompt_version": row["prompt_version"],

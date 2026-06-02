@@ -38,6 +38,8 @@ dependencies = [
     "tenacity>=8.3",
     "uvicorn[standard]>=0.32",
     "yt-dlp>=2024.4",
+    "bcrypt>=4.1",
+    "PyJWT>=2.8",
 ]
 
 [project.optional-dependencies]
@@ -75,7 +77,7 @@ warn_unused_configs = true
 packages = ["on1y"]
 
 [[tool.mypy.overrides]]
-module = ["feedparser.*", "yt_dlp.*", "playwright.*"]
+module = ["feedparser.*", "yt_dlp.*", "playwright.*", "jwt.*", "bcrypt.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

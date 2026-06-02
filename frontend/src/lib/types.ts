@@ -44,6 +44,7 @@ export type KnowledgeItem = {
   feed_label?: string | null;
   hot_rank?: number | null;
   heat_text?: string | null;
+  snapshot_date?: string | null;
   summary: string | null;
   topics: string[];
   prompt_version: string | null;

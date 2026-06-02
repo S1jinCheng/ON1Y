@@ -119,17 +119,30 @@ def _summary_from_excerpt(excerpt: str, *, max_len: int = 280) -> str:
     return text[: max_len - 1].rstrip() + "…"
 
 
+def _normalize_snapshot_date(value: str | date | None) -> str:
+    if value is None:
+        return date.today().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    text = str(value).strip()
+    if not text:
+        return date.today().isoformat()
+    return date.fromisoformat(text).isoformat()
+
+
 def sync_zhihu_hotlist(
     storage: StoragePort,
     *,
     settings: Settings | None = None,
     limit: int | None = None,
     auto_distill: bool = False,
+    auto_tag: bool | None = None,
+    snapshot_date: str | date | None = None,
 ) -> dict[str, Any]:
-    from on1y.hotlist.constants import HOTLIST_THEME_SLUG
-
     settings = settings or get_settings()
-    snapshot_date = date.today().isoformat()
+    if auto_tag is None:
+        auto_tag = settings.zhihu_hotlist_auto_tag
+    snapshot_date = _normalize_snapshot_date(snapshot_date)
     report: dict[str, Any] = {
         "source": HOTLIST_ZHIHU,
         "snapshot_date": snapshot_date,
@@ -138,6 +151,7 @@ def sync_zhihu_hotlist(
         "updated": 0,
         "theme_assigned": 0,
         "distilled": 0,
+        "tagged": 0,
         "errors": [],
     }
 
@@ -149,7 +163,6 @@ def sync_zhihu_hotlist(
         return report
 
     report["fetched"] = len(items)
-    theme_id = storage.get_theme_id_by_slug(HOTLIST_THEME_SLUG)
 
     for item in items:
         url = item["url"]
@@ -164,7 +177,7 @@ def sync_zhihu_hotlist(
             "hotlist_source": HOTLIST_ZHIHU,
             "subscription_source": "zhihu_hotlist",
             "entry_title": item["title"],
-            "entry_excerpt": excerpt[:2000],
+            "entry_excerpt": excerpt,
             "hot_rank": item["rank"],
             "heat_text": item.get("heat_text"),
             "question_id": item["question_id"],
@@ -173,6 +186,7 @@ def sync_zhihu_hotlist(
         }
 
         existing = storage.get_raw_by_url(url)
+        prior_meta = dict(existing.source_meta or {}) if existing else {}
         try:
             raw = storage.upsert_raw_item(
                 RawItemCreate(
@@ -191,15 +205,24 @@ def sync_zhihu_hotlist(
             else:
                 report["updated"] += 1
 
-            if theme_id is not None:
-                storage.set_item_theme(raw.id, theme_id, source="hotlist")
-                report["theme_assigned"] += 1
+            storage.detach_hotlist_item(raw.id)
 
-            summary = _summary_from_excerpt(excerpt)
-            if summary:
+            if hasattr(storage, "upsert_hotlist_snapshot"):
+                storage.upsert_hotlist_snapshot(  # type: ignore[attr-defined]
+                    hotlist_source=HOTLIST_ZHIHU,
+                    snapshot_date=snapshot_date,
+                    question_id=str(item["question_id"]),
+                    raw_id=raw.id,
+                    heat_text=str(item.get("heat_text") or "").strip() or None,
+                    title=item["title"],
+                    excerpt=excerpt,
+                    sort_order=int(item["rank"]),
+                )
+
+            if excerpt.strip():
                 storage.upsert_distilled(
                     raw_id=raw.id,
-                    summary=summary,
+                    summary=excerpt.strip(),
                     key_points=[],
                     topics=[],
                     model=None,
@@ -208,6 +231,23 @@ def sync_zhihu_hotlist(
                     error=None,
                     reader_text=body_text,
                 )
+
+            if auto_tag:
+                from on1y.hotlist.tags import distill_hotlist_tags, needs_hotlist_tags
+
+                if needs_hotlist_tags(prior_meta, snapshot_date=snapshot_date):
+                    try:
+                        distill_hotlist_tags(
+                            storage,
+                            raw.id,
+                            title=item["title"],
+                            excerpt=excerpt,
+                            heat_text=str(item.get("heat_text") or ""),
+                            snapshot_date=snapshot_date,
+                        )
+                        report["tagged"] += 1
+                    except Exception as exc:
+                        report["errors"].append({"url": url, "error": f"tags: {exc}"})
 
             if auto_distill:
                 from on1y.distill.processor import distill_raw_item

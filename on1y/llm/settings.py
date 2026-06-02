@@ -9,6 +9,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from on1y.auth.context import get_effective_user_id
 from on1y.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -30,12 +31,19 @@ class LlmSettings:
         return bool(self.api_key.strip())
 
 
-def settings_file_path() -> Path:
-    return get_settings().data_dir / "llm_settings.json"
+def settings_file_path(*, user_id: int | None = None) -> Path:
+    uid = user_id if user_id is not None else get_effective_user_id()
+    from on1y.user.paths import user_llm_settings_path
+
+    per_user = user_llm_settings_path(uid)
+    if per_user.is_file() or uid != 1:
+        return per_user
+    legacy = get_settings().data_dir / "llm_settings.json"
+    return legacy if legacy.is_file() else per_user
 
 
-def load_file_settings() -> dict[str, Any]:
-    path = settings_file_path()
+def load_file_settings(*, user_id: int | None = None) -> dict[str, Any]:
+    path = settings_file_path(user_id=user_id)
     if not path.is_file():
         return {}
     try:
@@ -52,11 +60,15 @@ def save_file_settings(
     model: str,
     api_key: str | None = None,
     clear_api_key: bool = False,
+    user_id: int | None = None,
 ) -> None:
-    """Persist UI settings. Empty api_key keeps existing key unless clear_api_key."""
-    path = settings_file_path()
+    """Persist per-user UI settings. Empty api_key keeps existing key unless clear_api_key."""
+    from on1y.user.paths import user_llm_settings_path
+
+    uid = user_id if user_id is not None else get_effective_user_id()
+    path = user_llm_settings_path(uid)
     path.parent.mkdir(parents=True, exist_ok=True)
-    current = load_file_settings()
+    current = load_file_settings(user_id=uid)
     payload: dict[str, Any] = {
         "base_url": base_url.rstrip("/"),
         "model": model.strip(),
@@ -70,14 +82,15 @@ def save_file_settings(
 
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     clear_llm_client_cache()
-    logger.info("Saved LLM settings to %s", path)
+    logger.info("Saved LLM settings for user %s", uid)
 
 
-def resolve_llm_settings() -> LlmSettings:
-    """Merge file settings (web UI) over environment defaults."""
+def resolve_llm_settings(*, user_id: int | None = None) -> LlmSettings:
+    """Merge per-user file settings over environment defaults."""
     settings = get_settings()
-    file_cfg = load_file_settings()
-    api_key = str(settings.llm_api_key or file_cfg.get("api_key") or "").strip()
+    file_cfg = load_file_settings(user_id=user_id)
+    # Per-user file key takes precedence; fall back to the shared env key.
+    api_key = str(file_cfg.get("api_key") or settings.llm_api_key or "").strip()
     base_url = str(file_cfg.get("base_url") or settings.llm_base_url or DEFAULT_BASE_URL).rstrip("/")
     model = str(file_cfg.get("model") or settings.llm_model or DEFAULT_MODEL).strip()
     return LlmSettings(
@@ -89,9 +102,9 @@ def resolve_llm_settings() -> LlmSettings:
     )
 
 
-def public_settings_view() -> dict[str, Any]:
+def public_settings_view(*, user_id: int | None = None) -> dict[str, Any]:
     """Safe for API/UI — never returns full api_key."""
-    cfg = resolve_llm_settings()
+    cfg = resolve_llm_settings(user_id=user_id)
     key = cfg.api_key
     preview = ""
     if key:
@@ -109,12 +122,16 @@ def public_settings_view() -> dict[str, Any]:
 
 
 def clear_llm_client_cache() -> None:
-    from on1y.llm.client import get_llm_client
+    from on1y.llm.client import _get_llm_client_cached
 
-    get_llm_client.cache_clear()
-    get_resolved_llm_settings.cache_clear()
+    _get_llm_client_cached.cache_clear()
+    _resolve_llm_settings_cached.cache_clear()
 
 
-@lru_cache
+@lru_cache(maxsize=64)
+def _resolve_llm_settings_cached(user_id: int) -> LlmSettings:
+    return resolve_llm_settings(user_id=user_id)
+
+
 def get_resolved_llm_settings() -> LlmSettings:
-    return resolve_llm_settings()
+    return _resolve_llm_settings_cached(get_effective_user_id())

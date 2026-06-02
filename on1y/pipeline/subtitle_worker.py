@@ -72,9 +72,13 @@ def run_subtitle_batch(
     *,
     close_storage: bool = False,
     platform: str | None = None,
+    auto_distill: bool | None = None,
 ) -> dict[str, int]:
     """Fetch subtitles for queued video items (optionally one platform only)."""
     settings = get_settings()
+    distill_after = (
+        settings.auto_distill_after_subtitles if auto_distill is None else auto_distill
+    )
     processed = 0
     failed = 0
 
@@ -151,7 +155,8 @@ def run_subtitle_batch(
             )
             storage.mark_subtitle_done(job.id)
             processed += 1
-            _maybe_auto_distill(storage, job.raw_id)  # type: ignore[arg-type]
+            if distill_after:
+                _maybe_auto_distill(storage, job.raw_id)  # type: ignore[arg-type]
         except ExtractionError as exc:
             msg = str(exc)
             retry = job.attempts < settings.subtitle_max_retries
