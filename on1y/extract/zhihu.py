@@ -78,11 +78,14 @@ class ZhihuExtractor(PlaywrightExtractor):
         ]
 
     def avatar_selectors(self) -> list[str]:
+        # Answer/文章作者优先；QuestionHeader 仅用于纯问题页。勿用 bare `.Avatar`（顶栏登录用户）。
         return [
+            ".ContentItem .AuthorInfo-avatar img",
+            ".QuestionAnswer-content .AuthorInfo-avatar img",
+            ".Post-Author .AuthorInfo-avatar img",
+            ".QuestionHeader .AuthorInfo-avatar img",
             ".AuthorInfo-avatar img",
             ".AuthorInfo-avatarImg",
-            "img.Avatar",
-            ".Avatar img",
         ]
 
     def author_url_selectors(self) -> list[str]:

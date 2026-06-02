@@ -13,23 +13,11 @@ from on1y.config import get_settings
 from on1y.exceptions import ExtractionError
 from on1y.extract.zhihu import ZhihuExtractor
 from on1y.models.raw import RawItemCreate
-from on1y.utils.author_meta import author_meta_patch, resolve_author_avatar
+from on1y.utils.author_meta import author_meta_patch
 from on1y.utils.platform import PLATFORM_ZHIHU, detect_platform, normalize_url
-from on1y.utils.zhihu_author import fetch_author_meta_for_url
+from on1y.utils.zhihu_author import enrich_zhihu_author_meta
 
 logger = logging.getLogger(__name__)
-
-
-def _ensure_zhihu_author_meta(meta: dict, url: str) -> dict:
-    """Fill missing author fields from Zhihu API when Playwright did not capture them."""
-    name = str(meta.get("author") or "").strip()
-    avatar = resolve_author_avatar(meta)
-    if name and avatar:
-        return meta
-    patch = fetch_author_meta_for_url(url)
-    if patch:
-        meta.update(patch)
-    return meta
 
 
 def run_zhihu_worker_batch(
@@ -88,7 +76,7 @@ def run_zhihu_worker_batch(
                         author_url=result.author_url,
                     )
                 )
-                meta = _ensure_zhihu_author_meta(meta, normalized)
+                meta = enrich_zhihu_author_meta(meta, normalized)
                 create = RawItemCreate(
                     url=normalized,
                     platform=PLATFORM_ZHIHU,

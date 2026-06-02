@@ -24,7 +24,9 @@ def _normalize_avatar_url(url: str | None) -> str:
     if not value:
         return ""
     if value.startswith("//"):
-        return f"https:{value}"
+        value = f"https:{value}"
+    if "{size}" in value:
+        value = value.replace("{size}", "l")
     return value
 
 
@@ -52,6 +54,19 @@ def author_meta_from_content(content: dict[str, Any] | None) -> dict[str, str]:
     if not content:
         return {}
     return author_meta_from_user(content.get("author"))
+
+
+def enrich_zhihu_author_meta(meta: dict[str, Any] | None, url: str) -> dict[str, Any]:
+    """Prefer Zhihu API author fields; Playwright often captures the nav-bar login avatar."""
+    patch = fetch_author_meta_for_url(url)
+    if not patch:
+        return dict(meta or {})
+    out = dict(meta or {})
+    for key in ("author", "author_avatar", "author_url"):
+        value = str(patch.get(key) or "").strip()
+        if value:
+            out[key] = value
+    return out
 
 
 def fetch_author_meta_for_url(
@@ -101,17 +116,25 @@ def fetch_author_meta_for_url(
             return {}
 
         if question_match and not answer_match:
+            qid = question_match.group(1)
+            response = client.get(f"{ZHIHU_API}/questions/{qid}")
+            if response.status_code == 200:
+                payload = response.json()
+                author = payload.get("author")
+                if author:
+                    return author_meta_from_user(author)
+            # /questions/{id} often 403; fall back to top answer author (better than nav-bar avatar).
             response = client.get(
-                f"{ZHIHU_API}/questions/{question_match.group(1)}/feeds",
-                params={"limit": 1},
+                f"{ZHIHU_API}/questions/{qid}/answers",
+                params={"limit": 1, "offset": 0},
             )
-            if response.status_code != 200:
-                return {}
-            batch = response.json().get("data") or []
-            if not batch:
-                return {}
-            target = batch[0].get("target") or batch[0]
-            return author_meta_from_user(target.get("author"))
+            if response.status_code == 200:
+                batch = response.json().get("data") or []
+                if batch:
+                    author = batch[0].get("author")
+                    if author:
+                        return author_meta_from_user(author)
+            return {}
 
         article_id = article_match.group(1) if article_match else ""
         host = urlparse(url).netloc.lower()

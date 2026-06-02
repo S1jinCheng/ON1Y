@@ -10,7 +10,7 @@ from on1y.models.enums import SourceType
 from on1y.models.raw import RawItem, RawItemCreate
 from on1y.ports.storage import StoragePort
 from on1y.utils.author_meta import author_meta_patch
-from on1y.utils.platform import detect_platform, normalize_url
+from on1y.utils.platform import PLATFORM_ZHIHU, detect_platform, normalize_url
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +55,10 @@ def process_url(
             author_url=result.author_url,
         )
     )
+    if platform == PLATFORM_ZHIHU:
+        from on1y.utils.zhihu_author import enrich_zhihu_author_meta
+
+        meta = enrich_zhihu_author_meta(meta, normalized)
 
     create = RawItemCreate(
         url=normalized,
