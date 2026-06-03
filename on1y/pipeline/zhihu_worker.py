@@ -16,6 +16,7 @@ from on1y.models.raw import RawItemCreate
 from on1y.utils.author_meta import author_meta_patch
 from on1y.utils.platform import PLATFORM_ZHIHU, detect_platform, normalize_url
 from on1y.utils.zhihu_author import enrich_zhihu_author_meta
+from on1y.utils.zhihu_title import resolve_zhihu_title
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +82,7 @@ def run_zhihu_worker_batch(
                     url=normalized,
                     platform=PLATFORM_ZHIHU,
                     source=pending.source,
-                    raw_title=result.raw_title,
+                    raw_title=resolve_zhihu_title(normalized, result.raw_title, meta),
                     body_text=result.body_text,
                     content_type=result.content_type,
                     extract_status=result.extract_status,

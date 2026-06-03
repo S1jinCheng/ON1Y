@@ -1,5 +1,6 @@
 import {
   type ClassificationInput,
+  type KnowledgeItem,
   type KnowledgeItemsResponse,
   type Locale,
   type ReaderContent,
@@ -349,6 +350,23 @@ export function getKnowledgeItems(params: {
 
 export function getReaderContent(rawId: number): Promise<ReaderContent> {
   return request<ReaderContent>(`/api/knowledge/items/${rawId}/reader`);
+}
+
+export function getRelatedItems(
+  rawId: number,
+  limit = 6
+): Promise<{ items: KnowledgeItem[]; scope: string }> {
+  const query = new URLSearchParams({ limit: String(limit) });
+  return request(`/api/knowledge/items/${rawId}/related?${query.toString()}`);
+}
+
+export function postRelatedLessRelevant(
+  fromRawId: number,
+  toRawId: number
+): Promise<{ ok: boolean }> {
+  return request(`/api/knowledge/items/${fromRawId}/related/${toRawId}/feedback`, {
+    method: "POST"
+  });
 }
 
 export function translateItemTranscript(rawId: number): Promise<{

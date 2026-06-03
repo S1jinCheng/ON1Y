@@ -57,14 +57,18 @@ def process_url(
     )
     if platform == PLATFORM_ZHIHU:
         from on1y.utils.zhihu_author import enrich_zhihu_author_meta
+        from on1y.utils.zhihu_title import resolve_zhihu_title
 
         meta = enrich_zhihu_author_meta(meta, normalized)
+        resolved_title = resolve_zhihu_title(normalized, result.raw_title, meta)
+    else:
+        resolved_title = result.raw_title
 
     create = RawItemCreate(
         url=normalized,
         platform=platform,
         source=source,
-        raw_title=result.raw_title,
+        raw_title=resolved_title,
         body_text=result.body_text,
         content_type=result.content_type,
         extract_status=result.extract_status,

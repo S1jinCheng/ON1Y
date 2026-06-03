@@ -177,6 +177,7 @@ def search_knowledge_fts(
     theme_id: int | None = None,
     tag_ids: list[int] | None = None,
     collection_sql: str = "r.deleted_at IS NULL",
+    collection_params: list[Any] | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     """
     Ranked FTS search. Returns (hits, total_estimate).
@@ -196,6 +197,7 @@ def search_knowledge_fts(
             theme_id=theme_id,
             tag_ids=tag_ids,
             collection_sql=collection_sql,
+            collection_params=collection_params,
         )
     return _search_fts_bm25(
         conn,
@@ -207,6 +209,7 @@ def search_knowledge_fts(
         theme_id=theme_id,
         tag_ids=tag_ids,
         collection_sql=collection_sql,
+        collection_params=collection_params,
     )
 
 
@@ -221,9 +224,12 @@ def _search_fts_bm25(
     theme_id: int | None,
     tag_ids: list[int] | None,
     collection_sql: str,
+    collection_params: list[Any] | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     where_parts = ["knowledge_fts MATCH ?", collection_sql]
     params: list[Any] = [fts_q]
+    if collection_params:
+        params.extend(collection_params)
 
     if platform:
         where_parts.append("r.platform = ?")
@@ -309,10 +315,11 @@ def _search_hybrid(
     theme_id: int | None,
     tag_ids: list[int] | None,
     collection_sql: str,
+    collection_params: list[Any] | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     """LIKE fallback for terms shorter than trigram minimum (3 chars)."""
     where_parts = ["r.extract_status IN ('ok', 'partial')", collection_sql]
-    params: list[Any] = []
+    params: list[Any] = list(collection_params or [])
     for term in terms:
         like = f"%{term}%"
         where_parts.append(

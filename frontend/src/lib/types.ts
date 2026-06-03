@@ -33,12 +33,15 @@ export type ItemTag = {
   slug: string;
 };
 
+export type ContentTypeValue = "video" | "article" | "unknown";
+
 export type KnowledgeItem = {
   raw_id: number;
   url: string;
   title: string | null;
   platform: string;
   source: string;
+  content_type?: ContentTypeValue | string | null;
   ingested_at: string | null;
   published_at?: string | null;
   feed_label?: string | null;

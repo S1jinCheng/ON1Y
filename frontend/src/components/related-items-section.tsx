@@ -1,0 +1,82 @@
+"use client";
+
+import { ThumbsDown } from "lucide-react";
+
+import { ContentTypeIndicator } from "@/components/content-type-indicator";
+import { feedItemListTagClass } from "@/components/tag-chip-editor";
+import { platformLabel } from "@/lib/platform-label";
+import type { KnowledgeItem, Locale } from "@/lib/types";
+
+type RelatedItemsSectionProps = {
+  items: KnowledgeItem[];
+  locale: Locale;
+  titleLabel: string;
+  lessRelevantLabel: string;
+  onSelect: (rawId: number) => void;
+  onLessRelevant: (toRawId: number) => void;
+};
+
+export function RelatedItemsSection(props: RelatedItemsSectionProps): JSX.Element | null {
+  const { items, locale, titleLabel, lessRelevantLabel, onSelect, onLessRelevant } = props;
+  if (items.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="border-t border-border px-4 py-3">
+      <p className="mb-2 text-xs font-medium uppercase tracking-wider text-muted">
+        {titleLabel}
+      </p>
+      <ul className="space-y-2">
+        {items.map((item) => (
+          <li
+            key={item.raw_id}
+            className="group flex gap-2 rounded-lg border border-border bg-panel/40 p-2 transition-colors hover:border-neutral-300 hover:bg-panel"
+          >
+            <button
+              type="button"
+              onClick={() => onSelect(item.raw_id)}
+              className="min-w-0 flex-1 text-left"
+            >
+              <div className="flex items-start gap-1.5">
+                <p className="min-w-0 flex-1 text-sm font-medium leading-snug text-neutral-900 line-clamp-2">
+                  {item.title || item.url}
+                </p>
+                <ContentTypeIndicator
+                  contentType={item.content_type}
+                  platform={item.platform}
+                  locale={locale}
+                  className="mt-0.5 shrink-0"
+                />
+              </div>
+              {item.summary ? (
+                <p className="mt-1 text-xs leading-relaxed text-neutral-600 line-clamp-2">
+                  {item.summary}
+                </p>
+              ) : null}
+              <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-[10px] font-medium text-neutral-600">
+                  {platformLabel(item.platform, locale)}
+                </span>
+                {item.tags.slice(0, 4).map((tg) => (
+                  <span key={tg.id} className={feedItemListTagClass}>
+                    #{tg.name}
+                  </span>
+                ))}
+              </div>
+            </button>
+            <button
+              type="button"
+              aria-label={lessRelevantLabel}
+              title={lessRelevantLabel}
+              onClick={() => onLessRelevant(item.raw_id)}
+              className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-neutral-400 opacity-0 transition-opacity hover:bg-neutral-100 hover:text-neutral-700 group-hover:opacity-100 focus:opacity-100"
+            >
+              <ThumbsDown className="h-3.5 w-3.5" />
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}

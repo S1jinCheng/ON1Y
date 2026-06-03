@@ -1191,6 +1191,45 @@ def create_app() -> FastAPI:
         finally:
             storage.close()
 
+    @app.get("/api/knowledge/items/{raw_id}/related")
+    def knowledge_item_related(
+        raw_id: int,
+        limit: int = Query(default=6, ge=1, le=12),
+        scope: str = Query(default="library"),
+    ) -> dict[str, Any]:
+        from on1y.recommend.similar import find_related_items
+
+        scope_key = (scope or "library").strip().lower()
+        if scope_key not in {"library", "books"}:
+            raise HTTPException(status_code=400, detail=f"unsupported scope: {scope}")
+
+        storage = get_storage()
+        try:
+            raw = storage.get_raw_by_id_for_user(raw_id)
+            if raw is None:
+                raise HTTPException(status_code=404, detail="not found")
+            items = find_related_items(storage, from_raw_id=raw_id, limit=limit, scope=scope_key)
+            return {"items": items, "scope": scope_key}
+        finally:
+            storage.close()
+
+    @app.post("/api/knowledge/items/{from_raw_id}/related/{to_raw_id}/feedback")
+    def knowledge_item_related_feedback(from_raw_id: int, to_raw_id: int) -> dict[str, Any]:
+        from on1y.recommend.feedback import record_less_relevant
+
+        storage = get_storage()
+        try:
+            for rid in (from_raw_id, to_raw_id):
+                raw = storage.get_raw_by_id_for_user(rid)
+                if raw is None:
+                    raise HTTPException(status_code=404, detail="not found")
+            conn = storage._connect()
+            record_less_relevant(conn, from_raw_id=from_raw_id, to_raw_id=to_raw_id)
+            conn.commit()
+            return {"ok": True}
+        finally:
+            storage.close()
+
     @app.get("/api/knowledge/items/{raw_id}/reader")
     def knowledge_item_reader(raw_id: int) -> dict[str, Any]:
         from on1y.hotlist.economist_preview_store import ensure_economist_preview

@@ -24,7 +24,7 @@ from on1y.utils.json_util import dumps_json, dumps_meta, loads_json_list, loads_
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 SCHEMA_PATH = PROJECT_ROOT / "sql" / "schema.sql"
 SCHEMA_V2_PATH = PROJECT_ROOT / "sql" / "schema_v2.sql"
 SCHEMA_V3_PATH = PROJECT_ROOT / "sql" / "schema_v3.sql"
@@ -34,6 +34,7 @@ SCHEMA_V6_PATH = PROJECT_ROOT / "sql" / "schema_v6.sql"
 SCHEMA_V7_PATH = PROJECT_ROOT / "sql" / "schema_v7.sql"
 SCHEMA_V8_PATH = PROJECT_ROOT / "sql" / "schema_v8.sql"
 SCHEMA_V9_PATH = PROJECT_ROOT / "sql" / "schema_v9.sql"
+SCHEMA_V10_PATH = PROJECT_ROOT / "sql" / "schema_v10.sql"
 
 
 class SqliteStorage:
@@ -207,6 +208,16 @@ class SqliteStorage:
                 (9,),
             )
             logger.info("Applied schema version 9 to %s", self._db_path)
+            current = 9
+        if current < 10:
+            if not SCHEMA_V10_PATH.is_file():
+                raise StorageError(f"Schema file not found: {SCHEMA_V10_PATH}")
+            conn.executescript(SCHEMA_V10_PATH.read_text(encoding="utf-8"))
+            conn.execute(
+                "INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)",
+                (10,),
+            )
+            logger.info("Applied schema version 10 to %s", self._db_path)
 
     def _table_exists(self, conn: sqlite3.Connection, name: str) -> bool:
         row = conn.execute(
@@ -2020,6 +2031,7 @@ class SqliteStorage:
                 r.raw_title,
                 r.platform,
                 r.source,
+                r.content_type,
                 r.ingested_at,
                 r.source_meta,
                 r.theme_id,
@@ -2252,6 +2264,7 @@ class SqliteStorage:
                 r.raw_title,
                 r.platform,
                 r.source,
+                r.content_type,
                 r.ingested_at,
                 r.deleted_at,
                 r.source_meta,
@@ -2351,6 +2364,9 @@ class SqliteStorage:
                     "title": row["raw_title"],
                     "platform": str(row["platform"]),
                     "source": str(row["source"]),
+                    "content_type": str(row["content_type"])
+                    if "content_type" in row.keys() and row["content_type"]
+                    else "unknown",
                     "ingested_at": row["ingested_at"],
                     "published_at": published_at_iso(meta),
                     "feed_label": str(meta.get("feed_label") or "").strip() or None,

@@ -23,6 +23,8 @@ import { FeedItemCard } from "@/components/feed-item-card";
 import { ThemeMovePopover } from "@/components/theme-move-popover";
 import { NotesPanel } from "@/components/notes-panel";
 import { OriginalTextPanel } from "@/components/original-text-panel";
+import { ContentTypeIndicator } from "@/components/content-type-indicator";
+import { RelatedItemsSection } from "@/components/related-items-section";
 import { AccountMenu } from "@/components/account-menu";
 import { SubscriptionSettingsButton } from "@/components/subscription-settings-panel";
 import { TagChipEditor } from "@/components/tag-chip-editor";
@@ -41,6 +43,8 @@ import {
   type EconomistWeekOption,
   type HotlistSource,
   getReaderContent,
+  getRelatedItems,
+  postRelatedLessRelevant,
   getTaxonomy,
   moveItemTheme,
   patchItemClassification,
@@ -211,6 +215,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
   const [loading, setLoading] = useState<boolean>(false);
   const [message, setMessage] = useState<string>("");
   const [tagList, setTagList] = useState<string[]>([]);
+  const [relatedItems, setRelatedItems] = useState<KnowledgeItem[]>([]);
   const [readerExpanded, setReaderExpanded] = useState<boolean>(false);
   const [searchTotal, setSearchTotal] = useState<number | undefined>(undefined);
   const [searchEngine, setSearchEngine] = useState<string | undefined>(undefined);
@@ -315,6 +320,51 @@ export default function KnowledgeWorkbench(): JSX.Element {
       setReader(content);
     } catch {
       setReader(undefined);
+    }
+  }
+
+  const canLoadRelated =
+    !isHotlist &&
+    !!active &&
+    active.distill_status === "ok" &&
+    !!(active.summary && active.summary.trim());
+
+  useEffect(() => {
+    if (!canLoadRelated || !active) {
+      setRelatedItems([]);
+      return;
+    }
+    const rawId = active.raw_id;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void getRelatedItems(rawId)
+        .then((data) => {
+          if (!cancelled) {
+            setRelatedItems(data.items);
+          }
+        })
+        .catch((error) => {
+          if (!cancelled) {
+            setRelatedItems([]);
+            setMessage(error instanceof Error ? error.message : String(error));
+          }
+        });
+    }, 200);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [active?.raw_id, active?.summary, active?.distill_status, canLoadRelated]);
+
+  async function handleRelatedLessRelevant(toRawId: number): Promise<void> {
+    if (!active) {
+      return;
+    }
+    try {
+      await postRelatedLessRelevant(active.raw_id, toRawId);
+      setRelatedItems((prev) => prev.filter((row) => row.raw_id !== toRawId));
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
     }
   }
 
@@ -1373,7 +1423,17 @@ export default function KnowledgeWorkbench(): JSX.Element {
                     })()
                   : null}
                 <div>
-                  <h3 className="text-base font-semibold leading-snug">{active.title || "—"}</h3>
+                  <div className="flex items-start gap-2">
+                    <h3 className="min-w-0 flex-1 text-base font-semibold leading-snug">
+                      {active.title || "—"}
+                    </h3>
+                    <ContentTypeIndicator
+                      contentType={active.content_type}
+                      platform={active.platform}
+                      locale={locale}
+                      className="mt-1 shrink-0"
+                    />
+                  </div>
                   {isEconomistHotlist ? (
                     <a
                       href={economistEpubDownloadUrl(active.raw_id)}
@@ -1442,6 +1502,22 @@ export default function KnowledgeWorkbench(): JSX.Element {
                   onChange={(tags) => void handleTagsChange(tags)}
                 />
               </div>
+
+              {canLoadRelated ? (
+                <RelatedItemsSection
+                  items={relatedItems}
+                  locale={locale}
+                  titleLabel={ui("relatedReading")}
+                  lessRelevantLabel={ui("relatedLessRelevant")}
+                  onSelect={(rawId) => {
+                    const item = relatedItems.find((row) => row.raw_id === rawId);
+                    if (item) {
+                      void selectItem(item);
+                    }
+                  }}
+                  onLessRelevant={(toRawId) => void handleRelatedLessRelevant(toRawId)}
+                />
+              ) : null}
               </div>
             </ColumnScroll>
           ) : (

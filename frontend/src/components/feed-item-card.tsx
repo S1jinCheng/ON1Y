@@ -3,6 +3,7 @@
 import { CheckCircle2, Circle, Forward, RotateCcw, Star, Trash2 } from "lucide-react";
 import { useState } from "react";
 
+import { ContentTypeIndicator } from "@/components/content-type-indicator";
 import { ThemeMovePopover } from "@/components/theme-move-popover";
 import { formatHotlistMetaLine, formatSourceLine } from "@/lib/format-published-at";
 import { feedItemListTagClass } from "@/components/tag-chip-editor";
@@ -150,10 +151,18 @@ export function FeedItemCard(props: FeedItemCardProps): JSX.Element {
       >
         {compact ? (
           <div>
-            <div className="text-sm font-medium leading-snug">
-              <SearchHtml
-                html={item.search_title_html}
-                fallback={item.title || item.url}
+            <div className="flex items-start gap-1.5 text-sm font-medium leading-snug">
+              <div className="min-w-0 flex-1">
+                <SearchHtml
+                  html={item.search_title_html}
+                  fallback={item.title || item.url}
+                />
+              </div>
+              <ContentTypeIndicator
+                contentType={item.content_type}
+                platform={item.platform}
+                locale={locale}
+                className="mt-0.5"
               />
             </div>
             {hotlistMetaLine ? (
@@ -176,10 +185,18 @@ export function FeedItemCard(props: FeedItemCardProps): JSX.Element {
               <div className="truncate text-xs font-medium text-neutral-800">
                 {item.author.trim() || unknownAuthorLabel}
               </div>
-              <div className="mt-0.5 text-sm font-medium leading-snug">
-                <SearchHtml
-                  html={item.search_title_html}
-                  fallback={item.title || item.url}
+              <div className="mt-0.5 flex items-start gap-1.5 text-sm font-medium leading-snug">
+                <div className="min-w-0 flex-1">
+                  <SearchHtml
+                    html={item.search_title_html}
+                    fallback={item.title || item.url}
+                  />
+                </div>
+                <ContentTypeIndicator
+                  contentType={item.content_type}
+                  platform={item.platform}
+                  locale={locale}
+                  className="mt-0.5 shrink-0"
                 />
               </div>
               {sourceLine ? (
