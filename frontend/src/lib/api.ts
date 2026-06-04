@@ -9,6 +9,8 @@ import {
   type ThemeRow,
   type ThemeSplitInput
 } from "@/lib/types";
+import type { StatsDailyDigest, StatsOverview } from "@/lib/stats-types";
+import type { StatsDailyDigest, StatsOverview } from "@/lib/stats-types";
 import { clearAuth, getAuthToken, setAuthToken, type AuthUser } from "@/lib/auth";
 
 const API_BASE =
@@ -263,6 +265,16 @@ export function getCollectionCounts(params?: {
   return request<{ favorites: number; trash: number; hotlist: number }>(
     `/api/knowledge/collections${suffix}`
   );
+}
+
+export function getStatsOverview(days = 90): Promise<StatsOverview> {
+  const query = new URLSearchParams({ days: String(days) });
+  return request<StatsOverview>(`/api/stats/overview?${query.toString()}`);
+}
+
+export function getStatsDaily(day: string): Promise<StatsDailyDigest> {
+  const query = new URLSearchParams({ day });
+  return request<StatsDailyDigest>(`/api/stats/daily?${query.toString()}`);
 }
 
 export function getHotlistDates(source: HotlistSource = "zhihu"): Promise<{

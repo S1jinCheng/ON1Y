@@ -939,6 +939,29 @@ def create_app() -> FastAPI:
         finally:
             storage.close()
 
+    @app.get("/api/stats/overview")
+    def stats_overview(days: int = Query(default=90, ge=7, le=366)) -> dict[str, Any]:
+        from on1y.stats.overview import build_stats_overview
+
+        storage = get_storage()
+        try:
+            return build_stats_overview(storage, days=days)
+        finally:
+            storage.close()
+
+    @app.get("/api/stats/daily")
+    def stats_daily(day: str = Query(..., min_length=10, max_length=10)) -> dict[str, Any]:
+        from on1y.stats.overview import build_daily_digest
+
+        storage = get_storage()
+        try:
+            try:
+                return build_daily_digest(storage, day=day)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        finally:
+            storage.close()
+
     @app.get("/api/knowledge/items")
     def knowledge_items(
         limit: int = Query(default=40, ge=1, le=200),

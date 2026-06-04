@@ -2,6 +2,7 @@
 
 import * as Select from "@radix-ui/react-select";
 import {
+  BarChart3,
   CheckSquare,
   ChevronDown,
   ExternalLink,
@@ -15,6 +16,7 @@ import {
   Trash2,
   X
 } from "lucide-react";
+import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
@@ -896,6 +898,13 @@ export default function KnowledgeWorkbench(): JSX.Element {
               </button>
             </div>
             <SubscriptionSettingsButton locale={locale} onMessage={setMessage} />
+            <Link
+              href="/stats"
+              className="inline-flex items-center gap-2 rounded-md border border-border bg-white px-3 py-1.5 text-sm hover:bg-soft"
+            >
+              <BarChart3 className="h-4 w-4" />
+              {ui("stats")}
+            </Link>
             <button
               type="button"
               onClick={() => void refreshData()}
