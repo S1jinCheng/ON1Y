@@ -16,6 +16,9 @@ class VideoMetadata:
     cover_image: str | None = None
     channel_id: str | None = None
     duration_sec: int | None = None
+    live_status: str | None = None
+    is_live: bool = False
+    was_live: bool = False
 
 
 @dataclass(frozen=True)

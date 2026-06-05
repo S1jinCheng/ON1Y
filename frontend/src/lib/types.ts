@@ -27,6 +27,16 @@ export type ItemTheme = {
   name_en: string;
 };
 
+export type CreatorRow = {
+  key: string;
+  name: string;
+  platform: string;
+  author_url?: string | null;
+  author_avatar?: string | null;
+  item_count: number;
+  feed_labels: string[];
+};
+
 export type ItemTag = {
   id: number;
   name: string;

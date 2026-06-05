@@ -31,6 +31,7 @@ import { AccountMenu } from "@/components/account-menu";
 import { SubscriptionSettingsButton } from "@/components/subscription-settings-panel";
 import { TagChipEditor } from "@/components/tag-chip-editor";
 import { ThemeSidebar } from "@/components/theme-sidebar";
+import { CreatorSidebar } from "@/components/creator-sidebar";
 import {
   createTheme,
   batchDeleteKnowledgeItems,
@@ -39,6 +40,7 @@ import {
   reorderThemes,
   runHotlistSync,
   getCollectionCounts,
+  getCreators,
   economistEpubDownloadUrl,
   getEconomistWeeks,
   getKnowledgeItems,
@@ -59,6 +61,7 @@ import {
 import { t, type UiKey } from "@/lib/i18n";
 import { platformLabel } from "@/lib/platform-label";
 import {
+  type CreatorRow,
   type DynamicTagRow,
   type KnowledgeItem,
   type ReaderContent,
@@ -187,13 +190,19 @@ function AuthorAvatar(props: {
 export default function KnowledgeWorkbench(): JSX.Element {
   const {
     locale,
+    sidebarMode,
     selectedThemeId,
+    selectedCreatorKey,
     selectedTagId,
     query,
     platform,
     source,
     setLocale,
+    setSidebarMode,
     setTheme,
+    setCreator,
+    selectTheme,
+    selectCreator,
     setQuery,
     setPlatform,
     setSource,
@@ -210,6 +219,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
   const ui = (key: UiKey): string => t(locale, key);
 
   const [themes, setThemes] = useState<ThemeRow[]>([]);
+  const [creators, setCreators] = useState<CreatorRow[]>([]);
   const [dynamicTags, setDynamicTags] = useState<DynamicTagRow[]>([]);
   const [items, setItems] = useState<KnowledgeItem[]>([]);
   const [active, setActive] = useState<KnowledgeItem | undefined>(undefined);
@@ -256,6 +266,14 @@ export default function KnowledgeWorkbench(): JSX.Element {
   );
 
   const hasSearch = Boolean(query.trim());
+
+  const selectedCreator = useMemo(
+    () =>
+      selectedCreatorKey
+        ? creators.find((row) => row.key === selectedCreatorKey)
+        : undefined,
+    [creators, selectedCreatorKey]
+  );
 
   const sortOptions = useMemo(
     () => sortOptionsForUi(locale, hasSearch, collection),
@@ -413,6 +431,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
     return {
       locale,
       themeId: selectedThemeId,
+      creatorKey: selectedCreatorKey,
       tagId: selectedTagId,
       q: query,
       platform: filterValue(platform),
@@ -476,7 +495,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
       void loadMoreItems();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [items.length, itemTotal, loading, loadingMore, collection, selectedThemeId]);
+  }, [items.length, itemTotal, loading, loadingMore, collection, selectedThemeId, selectedCreatorKey]);
 
   function feedCountLabel(): string {
     const loaded = String(displayItems.length);
@@ -486,36 +505,62 @@ export default function KnowledgeWorkbench(): JSX.Element {
     return `(${loaded})`;
   }
 
+  async function applyItemResponse(
+    itemResp: Awaited<ReturnType<typeof getKnowledgeItems>>,
+    options?: { loadReader?: boolean }
+  ): Promise<void> {
+    setItems(itemResp.items);
+    setItemTotal(itemResp.total ?? itemResp.count);
+    setSearchTotal(itemResp.total);
+    setSearchEngine(itemResp.engine);
+    if (itemResp.items.length > 0) {
+      const stillExists = itemResp.items.find((x) => x.raw_id === active?.raw_id);
+      const next = stillExists ?? itemResp.items[0];
+      setActive(next);
+      setTagList(next.tags.map((tg) => tg.name));
+      if (options?.loadReader !== false && !stillExists) {
+        await loadReader(next.raw_id);
+      }
+    } else {
+      setActive(undefined);
+      setReader(undefined);
+    }
+  }
+
+  async function refreshFeed(): Promise<void> {
+    setLoading(true);
+    setMessage("");
+    loadingMoreRef.current = false;
+    setLoadingMore(false);
+    try {
+      const itemResp = await getKnowledgeItems(buildItemsQuery(0));
+      await applyItemResponse(itemResp);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "load failed");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function refreshData(): Promise<void> {
     setLoading(true);
     setMessage("");
     loadingMoreRef.current = false;
     setLoadingMore(false);
     try {
-      const [taxonomy, itemResp, counts] = await Promise.all([
+      const [taxonomy, creatorsResp, itemResp, counts] = await Promise.all([
         getTaxonomy(locale),
+        getCreators(),
         getKnowledgeItems(buildItemsQuery(0)),
         getCollectionCounts(
           isHotlist ? { hotlistDate, hotlistSource } : undefined
         )
       ]);
       setThemes(taxonomy.themes);
+      setCreators(creatorsResp.creators);
       setDynamicTags(taxonomy.tags);
       setCollectionCounts(counts);
-      setItems(itemResp.items);
-      setItemTotal(itemResp.total ?? itemResp.count);
-      setSearchTotal(itemResp.total);
-      setSearchEngine(itemResp.engine);
-      if (itemResp.items.length > 0) {
-        const stillExists = itemResp.items.find((x) => x.raw_id === active?.raw_id);
-        const next = stillExists ?? itemResp.items[0];
-        setActive(next);
-        setTagList(next.tags.map((tg) => tg.name));
-        await loadReader(next.raw_id);
-      } else {
-        setActive(undefined);
-        setReader(undefined);
-      }
+      await applyItemResponse(itemResp);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "load failed");
     } finally {
@@ -524,11 +569,21 @@ export default function KnowledgeWorkbench(): JSX.Element {
   }
 
   useEffect(() => {
+    void refreshData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [locale]);
+
+  const feedFiltersReadyRef = useRef(false);
+  useEffect(() => {
+    if (!feedFiltersReadyRef.current) {
+      feedFiltersReadyRef.current = true;
+      return;
+    }
     let cancelled = false;
     const delay = query.trim() ? 300 : 0;
     const timer = window.setTimeout(() => {
       if (!cancelled) {
-        void refreshData();
+        void refreshFeed();
       }
     }, delay);
     return () => {
@@ -536,7 +591,17 @@ export default function KnowledgeWorkbench(): JSX.Element {
       window.clearTimeout(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [locale, selectedThemeId, selectedTagId, platform, source, query, collection, hotlistDate, hotlistSource]);
+  }, [
+    selectedThemeId,
+    selectedCreatorKey,
+    selectedTagId,
+    platform,
+    source,
+    query,
+    collection,
+    hotlistDate,
+    hotlistSource
+  ]);
 
   async function selectItem(item: KnowledgeItem): Promise<void> {
     setReaderExpanded(false);
@@ -1003,18 +1068,44 @@ export default function KnowledgeWorkbench(): JSX.Element {
         <PanelGroup key="normal" direction="horizontal" className="min-h-0 flex-1">
         <Panel minSize={15} defaultSize={18} className="min-h-0 overflow-hidden">
           <ColumnScroll className="border-r border-border p-3">
+              <div className="mb-3 flex rounded-md border border-border bg-white p-0.5">
+                <button
+                  type="button"
+                  onClick={() => setSidebarMode("theme")}
+                  className={`flex-1 rounded px-2 py-1 text-xs font-medium transition-colors ${
+                    sidebarMode === "theme"
+                      ? "bg-black text-white"
+                      : "text-neutral-600 hover:text-black"
+                  }`}
+                >
+                  {ui("sidebarTheme")}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSidebarMode("creator")}
+                  className={`flex-1 rounded px-2 py-1 text-xs font-medium transition-colors ${
+                    sidebarMode === "creator"
+                      ? "bg-black text-white"
+                      : "text-neutral-600 hover:text-black"
+                  }`}
+                >
+                  {ui("sidebarCreator")}
+                </button>
+              </div>
+
+              {sidebarMode === "theme" ? (
               <ThemeSidebar
                 locale={locale}
                 themes={themes}
                 selectedThemeId={selectedThemeId}
                 collection={collection}
                 onSelectAll={() => {
-                  switchCollection("feed");
-                  setTheme(undefined);
+                  exitSelectionMode();
+                  selectTheme(undefined);
                 }}
                 onSelectTheme={(themeId) => {
-                  setCollection("feed");
-                  setTheme(themeId);
+                  exitSelectionMode();
+                  selectTheme(themeId);
                 }}
                 onCreateTheme={handleCreateTheme}
                 onDeleteTheme={async (themeId) => {
@@ -1050,6 +1141,26 @@ export default function KnowledgeWorkbench(): JSX.Element {
                   done: ui("themeEditDone")
                 }}
               />
+              ) : (
+              <CreatorSidebar
+                locale={locale}
+                creators={creators}
+                selectedCreatorKey={selectedCreatorKey}
+                onSelectAll={() => {
+                  exitSelectionMode();
+                  setCreator(undefined);
+                }}
+                onSelectCreator={(key) => {
+                  exitSelectionMode();
+                  selectCreator(key);
+                }}
+                labels={{
+                  creators: ui("creators"),
+                  allCreators: ui("allCreators"),
+                  empty: ui("creatorsEmpty")
+                }}
+              />
+              )}
 
               <div className="mb-4 mt-4 border-t border-border pt-3">
                 <h2 className="mb-2 text-xs font-medium uppercase tracking-wider text-muted">
@@ -1122,13 +1233,15 @@ export default function KnowledgeWorkbench(): JSX.Element {
           >
               <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                 <h2 className="text-xs font-medium uppercase tracking-wider text-muted">
-                  {isFavorites
-                    ? ui("collectionFavorites")
-                    : isTrash
-                      ? ui("collectionTrash")
-                      : isHotlist
-                        ? ui("collectionHotlist")
-                        : ui("feed")}{" "}
+                  {selectedCreator
+                    ? ui("creatorFeed").replace("{name}", selectedCreator.name)
+                    : isFavorites
+                      ? ui("collectionFavorites")
+                      : isTrash
+                        ? ui("collectionTrash")
+                        : isHotlist
+                          ? ui("collectionHotlist")
+                          : ui("feed")}{" "}
                   {feedCountLabel()}
                 </h2>
                 <div className="flex flex-wrap items-center gap-2">
@@ -1432,6 +1545,32 @@ export default function KnowledgeWorkbench(): JSX.Element {
                     })()
                   : null}
                 <div>
+                  {!isHotlist ? (
+                    <div className="mb-2 flex items-center gap-2">
+                      <AuthorAvatar
+                        author={reader?.author ?? active.author}
+                        authorAvatar={resolveAuthorAvatar(
+                          reader?.author_avatar ?? active.author_avatar
+                        )}
+                        unknownLabel={ui("unknownAuthor")}
+                        size="sm"
+                      />
+                      {(reader?.author_url ?? active.author_url)?.trim() ? (
+                        <a
+                          href={reader?.author_url ?? active.author_url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="truncate text-sm font-medium text-neutral-800 underline-offset-2 hover:text-black hover:underline"
+                        >
+                          {(reader?.author ?? active.author).trim() || ui("unknownAuthor")}
+                        </a>
+                      ) : (
+                        <span className="truncate text-sm font-medium text-neutral-800">
+                          {(reader?.author ?? active.author).trim() || ui("unknownAuthor")}
+                        </span>
+                      )}
+                    </div>
+                  ) : null}
                   <div className="flex items-start gap-2">
                     <h3 className="min-w-0 flex-1 text-base font-semibold leading-snug">
                       {active.title || "—"}

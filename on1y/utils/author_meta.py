@@ -13,6 +13,25 @@ def _is_video_thumbnail(url: str) -> bool:
     return _YT_VIDEO_THUMB in url
 
 
+def is_unreliable_avatar_url(url: str | None) -> bool:
+    value = str(url or "").strip().lower()
+    if not value:
+        return True
+    if "unavatar.io" in value:
+        return True
+    return _is_video_thumbnail(value)
+
+
+def pick_better_avatar(current: str | None, candidate: str | None) -> str:
+    cur = str(current or "").strip()
+    cand = str(candidate or "").strip()
+    if not cand or is_unreliable_avatar_url(cand):
+        return cur
+    if not cur or is_unreliable_avatar_url(cur):
+        return cand
+    return cur
+
+
 def resolve_author_avatar(meta: dict[str, Any]) -> str:
     for key in ("author_avatar", "avatar", "avatar_url", "uploader_avatar", "channel_avatar"):
         value = str(meta.get(key) or "").strip()

@@ -7,8 +7,6 @@ export type SortMode =
   | "published_asc"
   | "title_asc"
   | "title_desc"
-  | "author_asc"
-  | "author_desc"
   | "hot_rank_asc"
   | "relevance";
 
@@ -19,8 +17,6 @@ export const SORT_MODES: SortMode[] = [
   "published_asc",
   "title_asc",
   "title_desc",
-  "author_asc",
-  "author_desc",
   "hot_rank_asc",
   "relevance"
 ];
@@ -34,6 +30,9 @@ export function loadSortMode(): SortMode {
     return DEFAULT_SORT_MODE;
   }
   const raw = window.localStorage.getItem(STORAGE_KEY);
+  if (raw === "author_asc" || raw === "author_desc") {
+    return DEFAULT_SORT_MODE;
+  }
   if (raw && SORT_MODES.includes(raw as SortMode)) {
     return raw as SortMode;
   }
@@ -103,12 +102,6 @@ export function sortKnowledgeItems(
         cmp.compare((b.title || b.url || "").trim(), (a.title || a.url || "").trim())
       );
       break;
-    case "author_asc":
-      sorted.sort((a, b) => cmp.compare(a.author.trim(), b.author.trim()));
-      break;
-    case "author_desc":
-      sorted.sort((a, b) => cmp.compare(b.author.trim(), a.author.trim()));
-      break;
     case "hot_rank_asc":
       sorted.sort((a, b) => {
         const ra = a.hot_rank ?? Number.MAX_SAFE_INTEGER;
@@ -138,8 +131,6 @@ export function sortOptionsForUi(
     { value: "published_asc", label: zh ? "发布时间 ↑" : "Published ↑" },
     { value: "title_asc", label: zh ? "标题 A→Z" : "Title A→Z" },
     { value: "title_desc", label: zh ? "标题 Z→A" : "Title Z→A" },
-    { value: "author_asc", label: zh ? "作者 A→Z" : "Author A→Z" },
-    { value: "author_desc", label: zh ? "作者 Z→A" : "Author Z→A" },
     { value: "hot_rank_asc", label: zh ? "热榜排名" : "Hot rank" }
   ];
   if (collection === "hotlist") {

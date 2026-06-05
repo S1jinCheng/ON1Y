@@ -5,15 +5,17 @@ from __future__ import annotations
 from typing import Any
 
 from on1y.models.video_extract import VideoMetadata
+from on1y.utils.youtube_video_filter import live_flags_from_info
 
 _YT_VIDEO_THUMB = "/vi/"
 
 
 def youtube_channel_avatar_url(channel_id: str | None) -> str | None:
+    """Legacy helper — prefer enrich_youtube_author_meta / yt-dlp lookup."""
     cid = (channel_id or "").strip()
     if not cid:
         return None
-    return f"https://unavatar.io/youtube/{cid}"
+    return None
 
 
 def video_metadata_from_info(info: dict[str, Any] | None) -> VideoMetadata:
@@ -25,6 +27,7 @@ def video_metadata_from_info(info: dict[str, Any] | None) -> VideoMetadata:
     uploader_avatar = _uploader_avatar_from_info(info) or youtube_channel_avatar_url(channel_id)
     duration = info.get("duration")
     duration_sec = int(duration) if isinstance(duration, (int, float)) and duration > 0 else None
+    live_status, is_live, was_live = live_flags_from_info(info)
     return VideoMetadata(
         title=info.get("title"),
         description=(info.get("description") or "")[:50_000],
@@ -35,6 +38,9 @@ def video_metadata_from_info(info: dict[str, Any] | None) -> VideoMetadata:
         cover_image=_cover_from_info(info),
         channel_id=channel_id,
         duration_sec=duration_sec,
+        live_status=live_status,
+        is_live=is_live,
+        was_live=was_live,
     )
 
 

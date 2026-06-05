@@ -159,6 +159,13 @@ class Settings(BaseSettings):
     # Optional: refresh feeds.yaml from platform lists before RSS poll
     youtube_auto_refresh_channels: bool = Field(default=False)
     youtube_refresh_max_channels: int = Field(default=50, ge=1, le=500)
+    # Skip YouTube live / upcoming streams and live replays during ingest
+    youtube_skip_live: bool = Field(default=True)
+    youtube_skip_live_replays: bool = Field(default=True)
+    # Skip /shorts/ URLs and videos <= 60s when true
+    youtube_skip_shorts: bool = Field(default=True)
+    # Minimum duration for YouTube ingest (0 = disabled). Default 2 minutes.
+    youtube_min_duration_sec: int = Field(default=120, ge=0, le=86_400)
     zhihu_auto_refresh_follows: bool = Field(default=False)
 
     log_level: str = Field(default="INFO")
@@ -217,6 +224,8 @@ class Settings(BaseSettings):
             "http://127.0.0.1:3000",
             "http://localhost:3001",
             "http://127.0.0.1:3001",
+            "http://localhost:3045",
+            "http://127.0.0.1:3045",
             "http://localhost:8765",
             "http://127.0.0.1:8765",
         ]

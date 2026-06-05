@@ -204,7 +204,7 @@ export function StatsDashboard(props: { locale: Locale }): JSX.Element {
       (overview?.by_theme ?? []).map((r) => ({
         key: r.slug,
         label: themeDisplayName(
-          { slug: r.slug, name_zh: r.name_zh, name_en: r.name_en },
+          { name_zh: r.name_zh, name_en: r.name_en },
           locale
         ),
         count: r.count
@@ -364,7 +364,7 @@ export function StatsDashboard(props: { locale: Locale }): JSX.Element {
                     {overview.timeline_peaks.map((peak) => (
                       <li key={peak.date} className="flex justify-between tabular-nums">
                         <span className="text-neutral-800">{peak.date}</span>
-                        <span className="font-medium">{peak.count}</span>
+                        <span className="font-medium">{peak.total}</span>
                       </li>
                     ))}
                   </ul>

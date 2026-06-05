@@ -18,10 +18,25 @@ from on1y.ingestion.enqueue import enqueue_url
 from on1y.models.enums import ExtractStatus, SourceType
 from on1y.ports.storage import StoragePort
 from on1y.utils.platform import normalize_url
+from on1y.utils.youtube_video_filter import should_skip_youtube_url
 
 logger = logging.getLogger(__name__)
 
 USER_AGENT = "On1y/0.1 (+https://github.com/on1y/on1y; RSS poller)"
+
+
+def _enqueue_feed_entry(
+    storage: StoragePort,
+    link: str,
+    *,
+    source: SourceType,
+    meta: dict[str, Any],
+) -> bool:
+    if should_skip_youtube_url(link):
+        logger.info("Skipped YouTube feed entry (filtered): %s", link)
+        return False
+    enqueue_url(storage, link, source=source, source_meta=meta)
+    return True
 
 
 @dataclass(frozen=True)
@@ -261,8 +276,8 @@ def _poll_single_feed(
             "entry_id": entry_id,
             "published": published,
         }
-        enqueue_url(storage, link, source=SourceType.RSS, source_meta=meta)
-        enqueued += 1
+        if _enqueue_feed_entry(storage, link, source=SourceType.RSS, meta=meta):
+            enqueued += 1
         if _is_newer(entry_id, published, newest_id, newest_pub):
             newest_id = entry_id
             newest_pub = published
@@ -363,8 +378,8 @@ def _backfill_single_feed(
             "published": published,
             "backfill": True,
         }
-        enqueue_url(storage, link, source=SourceType.RSS, source_meta=meta)
-        enqueued += 1
+        if _enqueue_feed_entry(storage, link, source=SourceType.RSS, meta=meta):
+            enqueued += 1
         if _is_newer(entry_id, published, newest_id, newest_pub):
             newest_id = entry_id
             newest_pub = published
@@ -411,6 +426,7 @@ def poll_rss_feeds_initial(
         "entry_id": entry_id,
         "initial_snapshot": True,
     }
-    enqueue_url(storage, link, source=SourceType.RSS, source_meta=meta)
+    if not _enqueue_feed_entry(storage, link, source=SourceType.RSS, meta=meta):
+        return 0
     storage.set_rss_feed_state(feed.url, last_entry_id=entry_id, last_published=published)
     return 1

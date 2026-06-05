@@ -9,7 +9,7 @@ import time
 from on1y.alerts import maybe_alert_from_error
 from on1y.adapters.sqlite_storage import SqliteStorage, get_storage
 from on1y.config import get_settings
-from on1y.exceptions import DuplicateVideoError, ExtractionError
+from on1y.exceptions import DuplicateVideoError, ExtractionError, SkippedVideoError
 from on1y.extract.registry import get_default_registry
 from on1y.logging import setup_logging
 from on1y.pipeline.processor import process_url
@@ -75,6 +75,14 @@ def run_worker(*, once: bool = False, storage: SqliteStorage | None = None) -> N
                 pending.url,
                 exc.preferred_raw_id,
             )
+        except SkippedVideoError as exc:
+            storage.mark_pending_done(pending.id)
+            logger.info(
+                "Skipped filtered video id=%s url=%s reason=%s",
+                pending.id,
+                pending.url,
+                exc.reason,
+            )
         except ExtractionError as exc:
             msg = str(exc)
             retry = pending.attempts < settings.worker_max_retries
@@ -135,6 +143,15 @@ def _process_one_pending(
             pending.id,
             pending.url,
             exc.preferred_raw_id,
+        )
+        return "processed"
+    except SkippedVideoError as exc:
+        storage.mark_pending_done(pending.id)
+        logger.info(
+            "Skipped filtered video id=%s url=%s reason=%s",
+            pending.id,
+            pending.url,
+            exc.reason,
         )
         return "processed"
     except ExtractionError as exc:

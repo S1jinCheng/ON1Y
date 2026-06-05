@@ -39,3 +39,12 @@ class DuplicateVideoError(On1yError):
         super().__init__(message)
         self.url = url
         self.preferred_raw_id = preferred_raw_id
+
+
+class SkippedVideoError(On1yError):
+    """Video intentionally not ingested (live stream, Shorts, too short, etc.)."""
+
+    def __init__(self, message: str, *, url: str, reason: str) -> None:
+        super().__init__(message)
+        self.url = url
+        self.reason = reason

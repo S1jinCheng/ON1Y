@@ -1,5 +1,6 @@
 import {
   type ClassificationInput,
+  type CreatorRow,
   type KnowledgeItem,
   type KnowledgeItemsResponse,
   type Locale,
@@ -9,7 +10,6 @@ import {
   type ThemeRow,
   type ThemeSplitInput
 } from "@/lib/types";
-import type { StatsDailyDigest, StatsOverview } from "@/lib/stats-types";
 import type { StatsDailyDigest, StatsOverview } from "@/lib/stats-types";
 import { clearAuth, getAuthToken, setAuthToken, type AuthUser } from "@/lib/auth";
 
@@ -32,16 +32,21 @@ function authHeaders(extra?: HeadersInit): HeadersInit {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, {
-    ...init,
-    headers: authHeaders(init?.headers),
-    cache: "no-store"
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, {
+      ...init,
+      headers: authHeaders(init?.headers),
+      cache: "no-store"
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error("请求超时，请确认 on1y serve 已启动");
+    }
+    throw new Error("无法连接后端，请确认 on1y serve 已启动");
+  }
   if (response.status === 401) {
     clearAuth();
-    if (typeof window !== "undefined" && !window.location.pathname.startsWith("/login")) {
-      window.location.href = "/login";
-    }
     throw new Error("请先登录");
   }
   if (!response.ok) {
@@ -88,7 +93,18 @@ export function register(input: {
 }
 
 export function fetchCurrentUser(): Promise<{ user: AuthUser }> {
-  return request<{ user: AuthUser }>("/api/auth/me");
+  const controller = new AbortController();
+  const timer =
+    typeof window !== "undefined"
+      ? window.setTimeout(() => controller.abort(), 8000)
+      : undefined;
+  return request<{ user: AuthUser }>("/api/auth/me", { signal: controller.signal }).finally(
+    () => {
+      if (timer !== undefined) {
+        window.clearTimeout(timer);
+      }
+    }
+  );
 }
 
 export function logout(): void {
@@ -315,9 +331,14 @@ export function getEconomistWeeks(
   return request(`/api/hotlist/economist/weeks${suffix}`);
 }
 
+export function getCreators(): Promise<{ creators: CreatorRow[]; count: number }> {
+  return request("/api/knowledge/creators");
+}
+
 export function getKnowledgeItems(params: {
   locale?: Locale;
   themeId?: number;
+  creatorKey?: string;
   tagId?: number;
   q?: string;
   platform?: string;
@@ -338,6 +359,9 @@ export function getKnowledgeItems(params: {
   }
   if (params.themeId !== undefined) {
     query.set("theme_id", String(params.themeId));
+  }
+  if (params.creatorKey) {
+    query.set("creator_key", params.creatorKey);
   }
   if (params.tagId !== undefined) {
     query.set("tag_id", String(params.tagId));

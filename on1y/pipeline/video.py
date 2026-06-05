@@ -15,10 +15,11 @@ from on1y.pipeline.video_meta import (
     with_subtitle_pending,
 )
 from on1y.ports.storage import StoragePort
-from on1y.exceptions import DuplicateVideoError
+from on1y.exceptions import DuplicateVideoError, SkippedVideoError
 from on1y.pipeline.video_author import enrich_video_source_meta
 from on1y.utils.bilibili_url import normalize_bilibili_url
-from on1y.utils.platform import PLATFORM_BILIBILI, YTDLP_VIDEO_PLATFORMS, detect_platform, normalize_url
+from on1y.utils.platform import PLATFORM_BILIBILI, PLATFORM_YOUTUBE, YTDLP_VIDEO_PLATFORMS, detect_platform, normalize_url
+from on1y.utils.youtube_video_filter import should_skip_youtube_url, youtube_ingest_reject_reason
 from on1y.utils.video_dedup import find_youtube_duplicate, remove_bilibili_duplicate_of_youtube
 
 logger = logging.getLogger(__name__)
@@ -41,9 +42,25 @@ def process_video_fast(
     if platform not in YTDLP_VIDEO_PLATFORMS:
         raise ValueError(f"not a yt-dlp video URL: {url}")
 
+    if platform == PLATFORM_YOUTUBE and should_skip_youtube_url(normalized):
+        raise SkippedVideoError(
+            f"skipped YouTube URL pattern: {normalized}",
+            url=normalized,
+            reason="youtube_url_filtered",
+        )
+
     settings = get_settings()
     extractor = get_ytdlp_video_extractor(platform)
     meta = extractor.fetch_metadata(normalized)
+
+    if platform == PLATFORM_YOUTUBE:
+        reject = youtube_ingest_reject_reason(normalized, meta, settings)
+        if reject:
+            raise SkippedVideoError(
+                f"skipped YouTube ingest ({reject}): {normalized}",
+                url=normalized,
+                reason=reject,
+            )
 
     if platform == PLATFORM_BILIBILI:
         dup_yt = find_youtube_duplicate(

@@ -962,6 +962,15 @@ def create_app() -> FastAPI:
         finally:
             storage.close()
 
+    @app.get("/api/knowledge/creators")
+    def knowledge_creators() -> dict[str, Any]:
+        storage = get_storage()
+        try:
+            creators = storage.list_subscribed_creators()
+            return {"creators": creators, "count": len(creators)}
+        finally:
+            storage.close()
+
     @app.get("/api/knowledge/items")
     def knowledge_items(
         limit: int = Query(default=40, ge=1, le=200),
@@ -971,6 +980,7 @@ def create_app() -> FastAPI:
         query: str | None = Query(default=None),
         theme_id: int | None = Query(default=None),
         tag_id: int | None = Query(default=None),
+        creator_key: str | None = Query(default=None),
         include_descendants: bool = Query(default=False),
         collection: str = Query(default="feed"),
         hotlist_date: str | None = Query(default=None),
@@ -1010,6 +1020,7 @@ def create_app() -> FastAPI:
                     source=source,
                     tag_ids=tag_ids,
                     theme_id=theme_id,
+                    creator_key=creator_key,
                     collection=coll,
                     hotlist_date=hot_day,
                     hotlist_source=hot_src,
@@ -1030,6 +1041,7 @@ def create_app() -> FastAPI:
                 source=source,
                 tag_ids=tag_ids,
                 theme_id=theme_id,
+                creator_key=creator_key,
                 collection=coll,
                 hotlist_date=hot_day,
                 hotlist_source=hot_src,
@@ -1039,6 +1051,7 @@ def create_app() -> FastAPI:
                 source=source,
                 tag_ids=tag_ids,
                 theme_id=theme_id,
+                creator_key=creator_key,
                 collection=coll,
                 hotlist_date=hot_day,
                 hotlist_source=hot_src,

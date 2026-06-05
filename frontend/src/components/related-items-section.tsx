@@ -16,6 +16,14 @@ type RelatedItemsSectionProps = {
   onLessRelevant: (toRawId: number) => void;
 };
 
+function tagsWithoutAuthor(item: KnowledgeItem): KnowledgeItem["tags"] {
+  const authorKey = item.author.trim().toLowerCase();
+  if (!authorKey) {
+    return item.tags;
+  }
+  return item.tags.filter((tg) => tg.name.trim().toLowerCase() !== authorKey);
+}
+
 export function RelatedItemsSection(props: RelatedItemsSectionProps): JSX.Element | null {
   const { items, locale, titleLabel, lessRelevantLabel, onSelect, onLessRelevant } = props;
   if (items.length === 0) {
@@ -58,7 +66,7 @@ export function RelatedItemsSection(props: RelatedItemsSectionProps): JSX.Elemen
                 <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-[10px] font-medium text-neutral-600">
                   {platformLabel(item.platform, locale)}
                 </span>
-                {item.tags.slice(0, 4).map((tg) => (
+                {tagsWithoutAuthor(item).slice(0, 4).map((tg) => (
                   <span key={tg.id} className={feedItemListTagClass}>
                     #{tg.name}
                   </span>

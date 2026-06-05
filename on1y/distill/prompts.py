@@ -39,7 +39,7 @@ Rules:
 - theme: exactly ONE slug from the list. Choose by dominant topic weight, not minor mentions.
 - If uncertain, use "other".
 - tags: 3-8 precise flat dynamic labels (like online book tags). No hierarchy.
-- Do NOT put theme names into tags.
+- Do NOT put theme names or author/creator names into tags.
 - summary: MAX 2 sentences.
 - Be factual; do not invent.
 - ALL text fields must be in {lang}."""

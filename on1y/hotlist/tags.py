@@ -22,7 +22,7 @@ Return ONE JSON object (no markdown):
 Rules:
 - 3-6 short flat dynamic tags (domain, method, audience, stance if inferable).
 - Use title and excerpt only; do not invent facts beyond the text (works for Zhihu questions or Economist articles).
-- No theme bucket names; no hashtags; no duplicate tags.
+- No theme bucket names; no author/creator names; no hashtags; no duplicate tags.
 - ALL tag strings must be in {lang}."""
 
 

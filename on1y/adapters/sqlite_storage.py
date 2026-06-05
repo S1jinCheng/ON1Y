@@ -1598,11 +1598,19 @@ class SqliteStorage:
         return [str(r["name"]) for r in rows]
 
     def merge_llm_tags(self, raw_id: int, tag_names: list[str]) -> None:
+        conn = self._connect()
+        row = conn.execute(
+            "SELECT json_extract(source_meta, '$.author') AS author FROM raw_items WHERE id = ?",
+            (raw_id,),
+        ).fetchone()
+        author_key = str(row["author"] or "").strip().casefold() if row else ""
         self.clear_item_tags_by_source(raw_id, "llm")
         seen: set[str] = set()
         for name in tag_names:
             label = name.strip()
             if not label or label in seen:
+                continue
+            if author_key and label.casefold() == author_key:
                 continue
             seen.add(label)
             tag_id = self.ensure_flat_tag(label)
@@ -1980,6 +1988,7 @@ class SqliteStorage:
         source: str | None = None,
         tag_ids: list[int] | None = None,
         theme_id: int | None = None,
+        creator_key: str | None = None,
         collection: str | None = None,
         hotlist_date: str | None = None,
         hotlist_source: str | None = None,
@@ -1997,6 +2006,7 @@ class SqliteStorage:
                 query=query,
                 tag_ids=tag_ids,
                 theme_id=theme_id,
+                creator_key=creator_key,
                 collection=collection,
                 hotlist_date=hotlist_date,
                 hotlist_source=hotlist_source,
@@ -2020,6 +2030,24 @@ class SqliteStorage:
             return {"items": [], "total": 0, "engine": "fts5"}
 
         raw_ids = [int(h["raw_id"]) for h in hits]
+        if creator_key and creator_key.strip() and coll_key != "hotlist":
+            from on1y.knowledge.creators import creator_filter_sql
+
+            clause, creator_params = creator_filter_sql(creator_key.strip())
+            id_ph = ",".join("?" for _ in raw_ids)
+            allowed = {
+                int(r["id"])
+                for r in conn.execute(
+                    f"SELECT r.id FROM raw_items r WHERE r.id IN ({id_ph}) AND {clause}",
+                    (*raw_ids, *creator_params),
+                ).fetchall()
+            }
+            raw_ids = [rid for rid in raw_ids if rid in allowed]
+            hits = [h for h in hits if int(h["raw_id"]) in allowed]
+            total = len(raw_ids)
+        if not raw_ids:
+            return {"items": [], "total": 0, "engine": "fts5"}
+
         placeholders = ",".join("?" for _ in raw_ids)
         user_clause, user_params = self._user_scope_parts(conn)
         user_filter = f" AND {user_clause}" if user_clause else ""
@@ -2084,6 +2112,305 @@ class SqliteStorage:
             item["search_summary_html"] = hit.get("search_summary_html")
         return {"items": items, "total": total, "engine": "fts5"}
 
+    def list_subscribed_creators(self) -> list[dict[str, Any]]:
+        """Creators from subscription feeds + Bilibili follows in the library."""
+        from on1y.knowledge.creators import (
+            discover_zhihu_person_groups,
+            normalize_zhihu_author_url,
+            subscription_feed_groups,
+            zhihu_author_url,
+        )
+        from on1y.utils.author_meta import pick_better_avatar, resolve_author_avatar
+        from on1y.utils.bilibili_author import enrich_bilibili_author_meta
+        from on1y.utils.youtube_author import enrich_youtube_author_meta
+
+        conn = self._connect()
+        groups = subscription_feed_groups()
+        user_clause, user_params = self._user_scope_parts(conn)
+        user_filter = f" AND {user_clause}" if user_clause else ""
+        trash_filter = self._collection_clause_for_conn(conn, "feed")
+        scope_where = f"({trash_filter}){user_filter}"
+
+        feed_count_rows = conn.execute(
+            f"""
+            SELECT
+                json_extract(r.source_meta, '$.feed_label') AS feed_label,
+                COUNT(*) AS item_count,
+                MAX(r.ingested_at) AS latest_at
+            FROM raw_items r
+            WHERE {scope_where}
+              AND COALESCE(json_extract(r.source_meta, '$.feed_label'), '') != ''
+            GROUP BY feed_label
+            """,
+            user_params,
+        ).fetchall()
+        feed_counts: dict[str, int] = {}
+        feed_latest_at: dict[str, str] = {}
+        for row in feed_count_rows:
+            label = str(row["feed_label"] or "").strip()
+            if not label:
+                continue
+            feed_counts[label] = int(row["item_count"])
+            feed_latest_at[label] = str(row["latest_at"] or "")
+
+        feed_latest_meta: dict[str, dict[str, Any]] = {}
+        if feed_counts:
+            latest_rows = conn.execute(
+                f"""
+                WITH ranked AS (
+                    SELECT
+                        json_extract(r.source_meta, '$.feed_label') AS feed_label,
+                        r.source_meta,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY json_extract(r.source_meta, '$.feed_label')
+                            ORDER BY r.ingested_at DESC
+                        ) AS rn
+                    FROM raw_items r
+                    WHERE {scope_where}
+                      AND COALESCE(json_extract(r.source_meta, '$.feed_label'), '') != ''
+                )
+                SELECT feed_label, source_meta FROM ranked WHERE rn = 1
+                """,
+                user_params,
+            ).fetchall()
+            for row in latest_rows:
+                label = str(row["feed_label"] or "").strip()
+                if label:
+                    feed_latest_meta[label] = loads_meta(row["source_meta"])
+
+        bili_rows = conn.execute(
+            f"""
+            SELECT
+                json_extract(r.source_meta, '$.author_url') AS author_url,
+                json_extract(r.source_meta, '$.author') AS author,
+                json_extract(r.source_meta, '$.author_avatar') AS author_avatar,
+                COUNT(*) AS item_count
+            FROM raw_items r
+            WHERE r.platform = 'bilibili'
+              AND ({trash_filter})
+              AND COALESCE(json_extract(r.source_meta, '$.author_url'), '') != ''
+              {user_filter}
+            GROUP BY author_url, author, author_avatar
+            ORDER BY item_count DESC
+            """,
+            user_params,
+        ).fetchall()
+        bili_by_url: dict[str, dict[str, Any]] = {}
+        for row in bili_rows:
+            author_url = str(row["author_url"] or "").strip()
+            if not author_url:
+                continue
+            count = int(row["item_count"])
+            prev = bili_by_url.get(author_url)
+            if prev:
+                prev["count"] += count
+                if not prev.get("author") and row["author"]:
+                    prev["author"] = str(row["author"]).strip()
+                prev["avatar"] = pick_better_avatar(
+                    prev.get("avatar"), str(row["author_avatar"] or "")
+                )
+            else:
+                bili_by_url[author_url] = {
+                    "count": count,
+                    "author": str(row["author"] or "").strip(),
+                    "avatar": str(row["author_avatar"] or "").strip(),
+                }
+            key = f"bili:{author_url}"
+            if key not in groups:
+                groups[key] = {
+                    "key": key,
+                    "platform": "bilibili",
+                    "feed_labels": [],
+                    "name_hint": bili_by_url[author_url]["author"] or author_url,
+                }
+
+        zhihu_rows = conn.execute(
+            f"""
+            SELECT
+                json_extract(r.source_meta, '$.author_url') AS author_url,
+                json_extract(r.source_meta, '$.author') AS author,
+                json_extract(r.source_meta, '$.author_avatar') AS author_avatar,
+                COUNT(*) AS item_count
+            FROM raw_items r
+            WHERE r.platform = 'zhihu'
+              AND ({trash_filter})
+              AND COALESCE(json_extract(r.source_meta, '$.author_url'), '') != ''
+              {user_filter}
+            GROUP BY author_url, author, author_avatar
+            """,
+            user_params,
+        ).fetchall()
+        zhihu_by_url: dict[str, dict[str, Any]] = {}
+        for row in zhihu_rows:
+            author_url = normalize_zhihu_author_url(str(row["author_url"] or ""))
+            if not author_url:
+                continue
+            prev = zhihu_by_url.get(author_url)
+            count = int(row["item_count"])
+            if prev:
+                prev["count"] += count
+                if not prev.get("author") and row["author"]:
+                    prev["author"] = str(row["author"]).strip()
+                prev["avatar"] = pick_better_avatar(
+                    prev.get("avatar"), str(row["author_avatar"] or "")
+                )
+            else:
+                zhihu_by_url[author_url] = {
+                    "count": count,
+                    "author": str(row["author"] or "").strip(),
+                    "avatar": str(row["author_avatar"] or "").strip(),
+                }
+
+        zhihu_latest_meta: dict[str, dict[str, Any]] = {}
+        if zhihu_by_url:
+            latest_zhihu = conn.execute(
+                f"""
+                WITH ranked AS (
+                    SELECT
+                        json_extract(r.source_meta, '$.author_url') AS author_url,
+                        r.source_meta,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY json_extract(r.source_meta, '$.author_url')
+                            ORDER BY r.ingested_at DESC
+                        ) AS rn
+                    FROM raw_items r
+                    WHERE r.platform = 'zhihu'
+                      AND {scope_where}
+                      AND COALESCE(json_extract(r.source_meta, '$.author_url'), '') != ''
+                )
+                SELECT author_url, source_meta FROM ranked WHERE rn = 1
+                """,
+                user_params,
+            ).fetchall()
+            for row in latest_zhihu:
+                author_url = normalize_zhihu_author_url(str(row["author_url"] or ""))
+                if author_url:
+                    zhihu_latest_meta[author_url] = loads_meta(row["source_meta"])
+
+        scoped_rows = conn.execute(
+            f"""
+            SELECT DISTINCT json_extract(r.source_meta, '$.author_url') AS author_url
+            FROM raw_items r
+            WHERE r.platform = 'zhihu'
+              AND {scope_where}
+              AND COALESCE(json_extract(r.source_meta, '$.author_url'), '') != ''
+              AND (
+                json_extract(r.source_meta, '$.feed_label') LIKE 'zhihu-collection-%'
+                OR json_extract(r.source_meta, '$.feed_label') LIKE 'zhihu-activities-%'
+                OR json_extract(r.source_meta, '$.feed_label') LIKE 'zhihu-answers-%'
+              )
+            """,
+            user_params,
+        ).fetchall()
+        scoped_zhihu_urls = {
+            normalize_zhihu_author_url(str(row["author_url"] or ""))
+            for row in scoped_rows
+            if normalize_zhihu_author_url(str(row["author_url"] or ""))
+        }
+
+        for key, meta in discover_zhihu_person_groups(zhihu_by_url).items():
+            if key in groups:
+                continue
+            people_url = normalize_zhihu_author_url(str(meta.get("people_url") or ""))
+            if people_url not in scoped_zhihu_urls:
+                continue
+            groups[key] = meta
+
+        creators: list[dict[str, Any]] = []
+        for key, meta in groups.items():
+            if key.startswith("zhihu-collection:"):
+                continue
+            name = str(meta.get("name_hint") or "").strip()
+            avatar = ""
+            author_url = ""
+            if key.startswith("bili:"):
+                url = key[5:]
+                bili = bili_by_url.get(url)
+                item_count = int(bili["count"]) if bili else 0
+                if bili:
+                    name = bili["author"] or name or url
+                    enriched = enrich_bilibili_author_meta(
+                        {
+                            "author_url": url,
+                            "author": name,
+                            "author_avatar": bili.get("avatar"),
+                        }
+                    )
+                    avatar = resolve_author_avatar(enriched)
+                    author_url = url
+            elif key.startswith("zhihu-person:"):
+                people_url = normalize_zhihu_author_url(
+                    str(meta.get("people_url") or zhihu_author_url(key.split(":", 1)[1]))
+                )
+                zh = zhihu_by_url.get(people_url, {})
+                item_count = int(zh.get("count", 0))
+                latest_meta = zhihu_latest_meta.get(people_url) or {}
+                name = str(zh.get("author") or latest_meta.get("author") or name).strip() or name
+                avatar = resolve_author_avatar(
+                    latest_meta or {"author_avatar": zh.get("avatar")}
+                )
+                author_url = people_url
+            else:
+                labels = meta.get("feed_labels") or []
+                item_count = sum(feed_counts.get(label, 0) for label in labels)
+                best_label = ""
+                best_at = ""
+                avatar = ""
+                channel_id = ""
+                if labels:
+                    label_ph = ",".join("?" for _ in labels)
+                    avatar_rows = conn.execute(
+                        f"""
+                        SELECT
+                            json_extract(r.source_meta, '$.author_avatar') AS avatar,
+                            json_extract(r.source_meta, '$.channel_id') AS channel_id
+                        FROM raw_items r
+                        WHERE {scope_where}
+                          AND json_extract(r.source_meta, '$.feed_label') IN ({label_ph})
+                        """,
+                        (*user_params, *labels),
+                    ).fetchall()
+                    for row in avatar_rows:
+                        avatar = pick_better_avatar(avatar, str(row["avatar"] or ""))
+                        cid = str(row["channel_id"] or "").strip()
+                        if cid:
+                            channel_id = channel_id or cid
+                for label in labels:
+                    at = feed_latest_at.get(label, "")
+                    if at >= best_at:
+                        best_at = at
+                        best_label = label
+                if best_label:
+                    latest_meta = feed_latest_meta.get(best_label) or {}
+                    name = str(latest_meta.get("author") or name).strip() or name
+                    avatar = pick_better_avatar(avatar, resolve_author_avatar(latest_meta))
+                    channel_id = channel_id or str(latest_meta.get("channel_id") or "").strip()
+                    author_url = str(latest_meta.get("author_url") or "").strip()
+                platform_name = str(meta.get("platform") or "").strip().lower()
+                if platform_name == "youtube":
+                    enriched = enrich_youtube_author_meta(
+                        {
+                            "author_avatar": avatar,
+                            "channel_id": channel_id,
+                            "author_url": author_url,
+                            "author": name,
+                        }
+                    )
+                    avatar = resolve_author_avatar(enriched)
+            creators.append(
+                {
+                    "key": key,
+                    "name": name or key,
+                    "platform": meta.get("platform") or "generic",
+                    "author_url": author_url or None,
+                    "author_avatar": avatar or None,
+                    "item_count": item_count,
+                    "feed_labels": meta.get("feed_labels") or [],
+                }
+            )
+        creators.sort(key=lambda row: (-int(row["item_count"]), str(row["name"]).lower()))
+        return [row for row in creators if int(row["item_count"]) > 0]
+
     def _collection_clause_for_conn(
         self, conn: sqlite3.Connection, collection: str | None
     ) -> str:
@@ -2107,6 +2434,7 @@ class SqliteStorage:
         query: str | None = None,
         tag_ids: list[int] | None = None,
         theme_id: int | None = None,
+        creator_key: str | None = None,
         collection: str | None = None,
         hotlist_date: str | None = None,
         hotlist_source: str | None = None,
@@ -2147,6 +2475,12 @@ class SqliteStorage:
         if theme_id is not None and coll_key != "hotlist":
             where_parts.append("r.theme_id = ?")
             params.append(theme_id)
+        if creator_key and creator_key.strip() and coll_key != "hotlist":
+            from on1y.knowledge.creators import creator_filter_sql
+
+            clause, creator_params = creator_filter_sql(creator_key.strip())
+            where_parts.append(clause)
+            params.extend(creator_params)
         if tag_ids:
             placeholders = ",".join("?" for _ in tag_ids)
             where_parts.append(
@@ -2167,6 +2501,7 @@ class SqliteStorage:
         query: str | None = None,
         tag_ids: list[int] | None = None,
         theme_id: int | None = None,
+        creator_key: str | None = None,
         collection: str | None = None,
         hotlist_date: str | None = None,
         hotlist_source: str | None = None,
@@ -2179,6 +2514,7 @@ class SqliteStorage:
             query=query,
             tag_ids=tag_ids,
             theme_id=theme_id,
+            creator_key=creator_key,
             collection=collection,
             hotlist_date=hotlist_date,
             hotlist_source=hotlist_source,
@@ -2211,6 +2547,7 @@ class SqliteStorage:
         query: str | None = None,
         tag_ids: list[int] | None = None,
         theme_id: int | None = None,
+        creator_key: str | None = None,
         collection: str | None = None,
         hotlist_date: str | None = None,
         hotlist_source: str | None = None,
@@ -2225,6 +2562,7 @@ class SqliteStorage:
                 source=source,
                 tag_ids=tag_ids,
                 theme_id=theme_id,
+                creator_key=creator_key,
                 collection=collection,
                 hotlist_date=hotlist_date,
                 hotlist_source=hotlist_source,
@@ -2238,6 +2576,7 @@ class SqliteStorage:
             query=query,
             tag_ids=tag_ids,
             theme_id=theme_id,
+            creator_key=creator_key,
             collection=collection,
             hotlist_date=hotlist_date,
             hotlist_source=hotlist_source,

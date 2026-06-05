@@ -14,9 +14,13 @@ export const ALL_FILTER = "all";
 
 export type KnowledgeCollection = "feed" | "favorites" | "trash" | "hotlist";
 
+export type SidebarMode = "theme" | "creator";
+
 type FilterState = {
   locale: Locale;
+  sidebarMode: SidebarMode;
   selectedThemeId?: number;
+  selectedCreatorKey?: string;
   selectedTagId?: number;
   query: string;
   platform: string;
@@ -24,7 +28,11 @@ type FilterState = {
   collection: KnowledgeCollection;
   sortMode: SortMode;
   setLocale: (locale: Locale) => void;
+  setSidebarMode: (mode: SidebarMode) => void;
   setTheme: (id?: number) => void;
+  setCreator: (key?: string) => void;
+  selectTheme: (id?: number) => void;
+  selectCreator: (key?: string) => void;
   setTag: (id?: number) => void;
   setQuery: (value: string) => void;
   setPlatform: (value: string) => void;
@@ -35,7 +43,9 @@ type FilterState = {
 
 export const useKnowledgeFilterStore = create<FilterState>((set) => ({
   locale: "zh",
+  sidebarMode: "theme",
   selectedThemeId: undefined,
+  selectedCreatorKey: undefined,
   selectedTagId: undefined,
   query: "",
   platform: ALL_FILTER,
@@ -43,13 +53,41 @@ export const useKnowledgeFilterStore = create<FilterState>((set) => ({
   collection: "feed",
   sortMode: DEFAULT_SORT_MODE,
   setLocale: (locale: Locale) => set({ locale }),
-  setTheme: (id?: number) => set({ selectedThemeId: id }),
+  setSidebarMode: (sidebarMode: SidebarMode) =>
+    set((state) =>
+      sidebarMode === "theme"
+        ? { sidebarMode, selectedCreatorKey: undefined }
+        : { sidebarMode, selectedThemeId: undefined }
+    ),
+  setTheme: (id?: number) =>
+    set({ selectedThemeId: id, selectedCreatorKey: undefined }),
+  setCreator: (key?: string) =>
+    set({ selectedCreatorKey: key, selectedThemeId: undefined }),
+  selectTheme: (id?: number) =>
+    set({
+      collection: "feed",
+      selectedThemeId: id,
+      selectedCreatorKey: undefined
+    }),
+  selectCreator: (key?: string) =>
+    set((state) => ({
+      collection: "feed",
+      selectedCreatorKey: key,
+      selectedThemeId: undefined,
+      sortMode:
+        state.sortMode === "hot_rank_asc" ? "ingested_desc" : state.sortMode
+    })),
   setTag: (id?: number) => set({ selectedTagId: id }),
   setQuery: (value: string) => set({ query: value }),
   setPlatform: (value: string) => set({ platform: value }),
   setSource: (value: string) => set({ source: value }),
   setCollection: (collection: KnowledgeCollection) =>
-    set({ collection, selectedThemeId: undefined, selectedTagId: undefined }),
+    set({
+      collection,
+      selectedThemeId: undefined,
+      selectedCreatorKey: undefined,
+      selectedTagId: undefined
+    }),
   setSortMode: (sortMode: SortMode) => {
     persistSortMode(sortMode);
     set({ sortMode });

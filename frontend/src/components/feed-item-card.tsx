@@ -53,6 +53,14 @@ function SearchHtml(props: {
   return <span className={props.className}>{props.fallback}</span>;
 }
 
+function tagsWithoutAuthor(item: KnowledgeItem): KnowledgeItem["tags"] {
+  const authorKey = item.author.trim().toLowerCase();
+  if (!authorKey) {
+    return item.tags;
+  }
+  return item.tags.filter((tg) => tg.name.trim().toLowerCase() !== authorKey);
+}
+
 function ActionBtn(props: {
   label: string;
   onClick: (e: React.MouseEvent) => void;
@@ -99,6 +107,8 @@ export function FeedItemCard(props: FeedItemCardProps): JSX.Element {
     onRestore,
     compact = false
   } = props;
+
+  const visibleTags = tagsWithoutAuthor(item);
 
   const hotlistMetaLine = compact
     ? item.platform === "economist" && item.heat_text
@@ -168,9 +178,9 @@ export function FeedItemCard(props: FeedItemCardProps): JSX.Element {
             {hotlistMetaLine ? (
               <p className="mt-1 text-[11px] text-neutral-500">{hotlistMetaLine}</p>
             ) : null}
-            {item.tags.length > 0 ? (
+            {visibleTags.length > 0 ? (
               <div className="mt-1.5 flex flex-wrap gap-1">
-                {item.tags.slice(0, 6).map((tg) => (
+                {visibleTags.slice(0, 6).map((tg) => (
                   <span key={tg.id} className={feedItemListTagClass}>
                     #{tg.name}
                   </span>
@@ -217,7 +227,7 @@ export function FeedItemCard(props: FeedItemCardProps): JSX.Element {
                     {themeDisplayName(item.theme, locale)}
                   </span>
                 ) : null}
-                {item.tags.slice(0, 3).map((tg) => (
+                {visibleTags.slice(0, 3).map((tg) => (
                   <span
                     key={tg.id}
                     className="rounded bg-neutral-100 px-1.5 py-0.5 text-[10px] text-neutral-700"
