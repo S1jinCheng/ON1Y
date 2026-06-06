@@ -88,9 +88,14 @@ def save_file_settings(
 def resolve_llm_settings(*, user_id: int | None = None) -> LlmSettings:
     """Merge per-user file settings over environment defaults."""
     settings = get_settings()
-    file_cfg = load_file_settings(user_id=user_id)
-    # Per-user file key takes precedence; fall back to the shared env key.
-    api_key = str(file_cfg.get("api_key") or settings.llm_api_key or "").strip()
+    uid = user_id if user_id is not None else get_effective_user_id()
+    file_cfg = load_file_settings(user_id=uid)
+    # User 1 may use legacy env key; user 2+ only use their own llm_settings.json.
+    env_key = str(settings.llm_api_key or "").strip()
+    if uid == 1:
+        api_key = str(file_cfg.get("api_key") or env_key or "").strip()
+    else:
+        api_key = str(file_cfg.get("api_key") or "").strip()
     base_url = str(file_cfg.get("base_url") or settings.llm_base_url or DEFAULT_BASE_URL).rstrip("/")
     model = str(file_cfg.get("model") or settings.llm_model or DEFAULT_MODEL).strip()
     return LlmSettings(

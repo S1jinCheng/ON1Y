@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -24,7 +25,7 @@ from on1y.utils.json_util import dumps_json, dumps_meta, loads_json_list, loads_
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 13
 SCHEMA_PATH = PROJECT_ROOT / "sql" / "schema.sql"
 SCHEMA_V2_PATH = PROJECT_ROOT / "sql" / "schema_v2.sql"
 SCHEMA_V3_PATH = PROJECT_ROOT / "sql" / "schema_v3.sql"
@@ -35,6 +36,7 @@ SCHEMA_V7_PATH = PROJECT_ROOT / "sql" / "schema_v7.sql"
 SCHEMA_V8_PATH = PROJECT_ROOT / "sql" / "schema_v8.sql"
 SCHEMA_V9_PATH = PROJECT_ROOT / "sql" / "schema_v9.sql"
 SCHEMA_V10_PATH = PROJECT_ROOT / "sql" / "schema_v10.sql"
+SCHEMA_V11_PATH = PROJECT_ROOT / "sql" / "schema_v11.sql"
 
 
 class SqliteStorage:
@@ -230,6 +232,31 @@ class SqliteStorage:
                 (10,),
             )
             logger.info("Applied schema version 10 to %s", self._db_path)
+            current = 10
+        if current < 11:
+            self._apply_schema_v11(conn)
+            conn.execute(
+                "INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)",
+                (11,),
+            )
+            logger.info("Applied schema version 11 to %s", self._db_path)
+            current = 11
+        if current < 12:
+            self._apply_schema_v12(conn)
+            conn.execute(
+                "INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)",
+                (12,),
+            )
+            logger.info("Applied schema version 12 to %s", self._db_path)
+            current = 12
+        if current < 13:
+            if not self._raw_items_has_per_user_url_unique(conn):
+                self._apply_schema_v11(conn)
+            conn.execute(
+                "INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)",
+                (13,),
+            )
+            logger.info("Applied schema version 13 to %s", self._db_path)
 
     def _table_exists(self, conn: sqlite3.Connection, name: str) -> bool:
         row = conn.execute(
@@ -276,6 +303,155 @@ class SqliteStorage:
             CREATE INDEX IF NOT EXISTS idx_raw_items_user_id ON raw_items (user_id)
             """
         )
+
+    def _raw_items_has_per_user_url_unique(self, conn: sqlite3.Connection) -> bool:
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='raw_items'"
+        ).fetchone()
+        if not row or not row[0]:
+            return False
+        return bool(re.search(r"UNIQUE\s*\(\s*user_id\s*,\s*url\s*\)", str(row[0]), re.I))
+
+    def _apply_schema_v11(self, conn: sqlite3.Connection) -> None:
+        """Rebuild raw_items: UNIQUE(user_id, url) instead of global UNIQUE(url)."""
+        if self._raw_items_has_per_user_url_unique(conn):
+            return
+
+        has_creator = self._column_exists(conn, "raw_items", "creator_id")
+        creator_def = (
+            ",\n                    creator_id INTEGER REFERENCES creators(id)"
+            if has_creator
+            else ""
+        )
+        creator_cols = ", creator_id" if has_creator else ""
+        creator_select = ", creator_id" if has_creator else ""
+        creator_index = (
+            "\n                CREATE INDEX IF NOT EXISTS idx_raw_items_creator_id"
+            "\n                    ON raw_items (creator_id);"
+            if has_creator
+            else ""
+        )
+
+        conn.execute("UPDATE raw_items SET user_id = COALESCE(user_id, 1) WHERE user_id IS NULL")
+        conn.execute("PRAGMA foreign_keys=OFF")
+        try:
+            conn.executescript(
+                f"""
+                CREATE TABLE raw_items_v11 (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    url             TEXT NOT NULL,
+                    platform        TEXT NOT NULL,
+                    source          TEXT NOT NULL,
+                    raw_title       TEXT,
+                    body_text       TEXT,
+                    content_type    TEXT NOT NULL CHECK (content_type IN ('video', 'article', 'unknown')),
+                    extract_status  TEXT NOT NULL CHECK (extract_status IN ('ok', 'partial', 'failed')),
+                    extract_error   TEXT,
+                    word_count      INTEGER,
+                    source_meta     TEXT,
+                    ingested_at     TEXT NOT NULL DEFAULT (datetime('now')),
+                    updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
+                    theme_id        INTEGER REFERENCES themes(id) ON DELETE SET NULL,
+                    theme_source    TEXT NOT NULL DEFAULT 'llm',
+                    deleted_at      TEXT,
+                    user_id         INTEGER NOT NULL DEFAULT 1 REFERENCES users(id){creator_def},
+                    UNIQUE (user_id, url)
+                );
+
+                INSERT INTO raw_items_v11 (
+                    id, url, platform, source, raw_title, body_text,
+                    content_type, extract_status, extract_error, word_count, source_meta,
+                    ingested_at, updated_at, theme_id, theme_source, deleted_at, user_id{creator_cols}
+                )
+                SELECT
+                    id, url, platform, source, raw_title, body_text,
+                    content_type, extract_status, extract_error, word_count, source_meta,
+                    ingested_at, updated_at, theme_id, theme_source, deleted_at,
+                    COALESCE(user_id, 1){creator_select}
+                FROM raw_items;
+
+                DROP TABLE raw_items;
+                ALTER TABLE raw_items_v11 RENAME TO raw_items;
+
+                CREATE INDEX IF NOT EXISTS idx_raw_items_platform_ingested
+                    ON raw_items (platform, ingested_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_raw_items_source ON raw_items (source);
+                CREATE INDEX IF NOT EXISTS idx_raw_items_theme ON raw_items (theme_id);
+                CREATE INDEX IF NOT EXISTS idx_raw_items_deleted_at ON raw_items (deleted_at);
+                CREATE INDEX IF NOT EXISTS idx_raw_items_user_id ON raw_items (user_id);{creator_index}
+                """
+            )
+        finally:
+            conn.execute("PRAGMA foreign_keys=ON")
+
+    def _per_user_url_unique(self, conn: sqlite3.Connection) -> bool:
+        return self._raw_items_has_per_user_url_unique(conn)
+
+    def _pending_urls_per_user(self, conn: sqlite3.Connection) -> bool:
+        return self._current_schema_version(conn) >= 12
+
+    def _pending_user_id(self, conn: sqlite3.Connection) -> int:
+        if not self._pending_urls_per_user(conn):
+            return 1
+        from on1y.auth.context import get_effective_user_id
+
+        return get_effective_user_id()
+
+    def _pending_user_clause(
+        self, conn: sqlite3.Connection, *, table_alias: str = ""
+    ) -> tuple[str, list[Any]]:
+        if not self._pending_urls_per_user(conn):
+            return "", []
+        prefix = f"{table_alias}." if table_alias else ""
+        return f"{prefix}user_id = ?", [self._pending_user_id(conn)]
+
+    def _apply_schema_v12(self, conn: sqlite3.Connection) -> None:
+        """Rebuild pending_urls: UNIQUE(user_id, url, source) for per-user ingest queues."""
+        if self._column_exists(conn, "pending_urls", "user_id"):
+            return
+
+        conn.execute("PRAGMA foreign_keys=OFF")
+        try:
+            conn.executescript(
+                """
+                CREATE TABLE pending_urls_v12 (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    url         TEXT NOT NULL,
+                    source      TEXT NOT NULL CHECK (source IN (
+                        'rss', 'bilibili_feed', 'youtube_feed', 'manual', 'chrome', 'api'
+                    )),
+                    source_meta TEXT,
+                    status      TEXT NOT NULL DEFAULT 'pending' CHECK (status IN (
+                        'pending', 'processing', 'done', 'failed'
+                    )),
+                    attempts    INTEGER NOT NULL DEFAULT 0,
+                    error       TEXT,
+                    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+                    updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+                    user_id     INTEGER NOT NULL DEFAULT 1 REFERENCES users(id),
+                    UNIQUE (user_id, url, source)
+                );
+
+                INSERT INTO pending_urls_v12 (
+                    id, url, source, source_meta, status, attempts, error,
+                    created_at, updated_at, user_id
+                )
+                SELECT
+                    id, url, source, source_meta, status, attempts, error,
+                    created_at, updated_at, 1
+                FROM pending_urls;
+
+                DROP TABLE pending_urls;
+                ALTER TABLE pending_urls_v12 RENAME TO pending_urls;
+
+                CREATE INDEX IF NOT EXISTS idx_pending_urls_status_created
+                    ON pending_urls (status, created_at);
+                CREATE INDEX IF NOT EXISTS idx_pending_urls_user_status_created
+                    ON pending_urls (user_id, status, created_at);
+                """
+            )
+        finally:
+            conn.execute("PRAGMA foreign_keys=ON")
 
     def _user_scope_parts(self, conn: sqlite3.Connection) -> tuple[str, list[Any]]:
         if self._current_schema_version(conn) < 9:
@@ -463,34 +639,61 @@ class SqliteStorage:
     def enqueue(self, item: QueueEnqueue) -> int:
         url = str(item.url)
         with self.transaction() as conn:
-            conn.execute(
-                """
-                INSERT INTO pending_urls (url, source, source_meta, status)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(url, source) DO UPDATE SET
-                    updated_at = datetime('now'),
-                    source_meta = excluded.source_meta
-                WHERE pending_urls.status IN ('failed', 'pending')
-                """,
-                (url, item.source.value, dumps_meta(item.source_meta), PendingStatus.PENDING.value),
-            )
-            row = conn.execute(
-                "SELECT id FROM pending_urls WHERE url = ? AND source = ?",
-                (url, item.source.value),
-            ).fetchone()
+            user_id = self._pending_user_id(conn)
+            if self._pending_urls_per_user(conn):
+                conn.execute(
+                    """
+                    INSERT INTO pending_urls (url, source, source_meta, status, user_id)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(user_id, url, source) DO UPDATE SET
+                        updated_at = datetime('now'),
+                        source_meta = excluded.source_meta
+                    WHERE pending_urls.status IN ('failed', 'pending')
+                    """,
+                    (
+                        url,
+                        item.source.value,
+                        dumps_meta(item.source_meta),
+                        PendingStatus.PENDING.value,
+                        user_id,
+                    ),
+                )
+                row = conn.execute(
+                    "SELECT id FROM pending_urls WHERE url = ? AND source = ? AND user_id = ?",
+                    (url, item.source.value, user_id),
+                ).fetchone()
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO pending_urls (url, source, source_meta, status)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(url, source) DO UPDATE SET
+                        updated_at = datetime('now'),
+                        source_meta = excluded.source_meta
+                    WHERE pending_urls.status IN ('failed', 'pending')
+                    """,
+                    (url, item.source.value, dumps_meta(item.source_meta), PendingStatus.PENDING.value),
+                )
+                row = conn.execute(
+                    "SELECT id FROM pending_urls WHERE url = ? AND source = ?",
+                    (url, item.source.value),
+                ).fetchone()
             if row is None:
                 raise StorageError(f"Failed to enqueue URL: {url}")
             return int(row["id"])
 
     def claim_next_pending(self) -> PendingUrl | None:
         with self.transaction() as conn:
+            user_clause, user_params = self._pending_user_clause(conn)
+            where_user = f"AND {user_clause}" if user_clause else ""
             row = conn.execute(
-                """
+                f"""
                 SELECT id FROM pending_urls
-                WHERE status = 'pending'
+                WHERE status = 'pending' {where_user}
                 ORDER BY created_at ASC
                 LIMIT 1
-                """
+                """,
+                user_params,
             ).fetchone()
             if row is None:
                 return None
@@ -516,14 +719,16 @@ class SqliteStorage:
 
         clause, params = pending_url_platform_clause(platform)
         with self.transaction() as conn:
+            user_clause, user_params = self._pending_user_clause(conn)
+            user_sql = f"AND {user_clause}" if user_clause else ""
             row = conn.execute(
                 f"""
                 SELECT id FROM pending_urls
-                WHERE status = 'pending' AND {clause}
+                WHERE status = 'pending' AND {clause} {user_sql}
                 ORDER BY created_at ASC
                 LIMIT 1
                 """,
-                params,
+                (*params, *user_params),
             ).fetchone()
             if row is None:
                 return None
@@ -549,9 +754,11 @@ class SqliteStorage:
 
         clause, params = pending_url_platform_clause(platform)
         conn = self._connect()
+        user_clause, user_params = self._pending_user_clause(conn)
+        user_sql = f"AND {user_clause}" if user_clause else ""
         row = conn.execute(
-            f"SELECT COUNT(*) AS n FROM pending_urls WHERE status = ? AND {clause}",
-            (status, *params),
+            f"SELECT COUNT(*) AS n FROM pending_urls WHERE status = ? AND {clause} {user_sql}",
+            (status, *params, *user_params),
         ).fetchone()
         return int(row["n"]) if row else 0
 
@@ -590,15 +797,17 @@ class SqliteStorage:
         word_count = len(item.body_text.split()) if item.body_text else 0
         with self.transaction() as conn:
             user_id = self._write_user_id(conn)
+            per_user_url = self._per_user_url_unique(conn)
             if user_id is not None:
+                conflict = "(user_id, url)" if per_user_url else "(url)"
                 conn.execute(
-                    """
+                    f"""
                     INSERT INTO raw_items (
                         url, platform, source, raw_title, body_text,
                         content_type, extract_status, extract_error,
                         word_count, source_meta, user_id
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(url) DO UPDATE SET
+                    ON CONFLICT {conflict} DO UPDATE SET
                         platform = excluded.platform,
                         source = excluded.source,
                         raw_title = excluded.raw_title,
@@ -657,7 +866,13 @@ class SqliteStorage:
                         dumps_meta(item.source_meta),
                     ),
                 )
-            row = conn.execute("SELECT * FROM raw_items WHERE url = ?", (item.url,)).fetchone()
+            if user_id is not None:
+                row = conn.execute(
+                    "SELECT * FROM raw_items WHERE url = ? AND user_id = ?",
+                    (item.url, user_id),
+                ).fetchone()
+            else:
+                row = conn.execute("SELECT * FROM raw_items WHERE url = ?", (item.url,)).fetchone()
             if row is None:
                 raise StorageError(f"Failed to upsert raw item: {item.url}")
             raw = self._row_to_raw(row)
@@ -666,7 +881,14 @@ class SqliteStorage:
 
     def get_raw_by_url(self, url: str) -> RawItem | None:
         conn = self._connect()
-        row = conn.execute("SELECT * FROM raw_items WHERE url = ?", (url,)).fetchone()
+        user_clause, user_params = self._user_scope_parts(conn)
+        if user_clause:
+            row = conn.execute(
+                f"SELECT * FROM raw_items r WHERE r.url = ? AND {user_clause}",
+                (url, *user_params),
+            ).fetchone()
+        else:
+            row = conn.execute("SELECT * FROM raw_items WHERE url = ?", (url,)).fetchone()
         return self._row_to_raw(row) if row else None
 
     def get_raw_by_id(self, raw_id: int) -> RawItem | None:
@@ -749,8 +971,11 @@ class SqliteStorage:
         offset: int = 0,
     ) -> list[PendingUrl]:
         conn = self._connect()
+        user_clause, user_params = self._pending_user_clause(conn)
         query = "SELECT * FROM pending_urls WHERE 1=1"
-        params: list[Any] = []
+        params: list[Any] = list(user_params)
+        if user_clause:
+            query += f" AND {user_clause}"
         if status:
             query += " AND status = ?"
             params.append(status)
@@ -761,8 +986,11 @@ class SqliteStorage:
 
     def count_pending_by_status(self) -> dict[str, int]:
         conn = self._connect()
+        user_clause, user_params = self._pending_user_clause(conn)
+        where_user = f"WHERE {user_clause}" if user_clause else ""
         rows = conn.execute(
-            "SELECT status, COUNT(*) AS c FROM pending_urls GROUP BY status"
+            f"SELECT status, COUNT(*) AS c FROM pending_urls {where_user} GROUP BY status",
+            user_params,
         ).fetchall()
         counts = {str(r["status"]): int(r["c"]) for r in rows}
         for key in ("pending", "processing", "done", "failed"):
@@ -771,13 +999,32 @@ class SqliteStorage:
 
     def count_raw_items(self) -> int:
         conn = self._connect()
-        row = conn.execute("SELECT COUNT(*) AS c FROM raw_items").fetchone()
+        user_clause, user_params = self._user_scope_parts(conn)
+        if user_clause:
+            row = conn.execute(
+                f"SELECT COUNT(*) AS c FROM raw_items r WHERE {user_clause}",
+                user_params,
+            ).fetchone()
+        else:
+            row = conn.execute("SELECT COUNT(*) AS c FROM raw_items").fetchone()
         return int(row["c"]) if row else 0
 
     def count_distilled_items(self) -> int:
         conn = self._connect()
+        user_clause, user_params = self._user_scope_parts(conn)
         try:
-            row = conn.execute("SELECT COUNT(*) AS c FROM distilled_items").fetchone()
+            if user_clause:
+                row = conn.execute(
+                    f"""
+                    SELECT COUNT(*) AS c
+                    FROM distilled_items d
+                    JOIN raw_items r ON r.id = d.raw_id
+                    WHERE {user_clause}
+                    """,
+                    user_params,
+                ).fetchone()
+            else:
+                row = conn.execute("SELECT COUNT(*) AS c FROM distilled_items").fetchone()
             return int(row["c"]) if row else 0
         except sqlite3.OperationalError:
             return 0
@@ -785,13 +1032,17 @@ class SqliteStorage:
     def url_in_rss_queue(self, url: str) -> bool:
         from on1y.models.enums import SourceType
 
-        row = self._connect().execute(
-            """
+        conn = self._connect()
+        user_clause, user_params = self._pending_user_clause(conn)
+        user_sql = f"AND {user_clause}" if user_clause else ""
+        row = conn.execute(
+            f"""
             SELECT 1 FROM pending_urls
             WHERE url = ? AND source = ? AND status IN ('done', 'pending', 'processing')
+            {user_sql}
             LIMIT 1
             """,
-            (url, SourceType.RSS.value),
+            (url, SourceType.RSS.value, *user_params),
         ).fetchone()
         return row is not None
 
@@ -919,9 +1170,14 @@ class SqliteStorage:
         ).fetchall()
         return [int(r["id"]) for r in rows]
 
-    def _distill_eligibility_sql(self, *, platform: str | None = None) -> tuple[str, list[object]]:
+    def _distill_eligibility_sql(
+        self, conn: sqlite3.Connection, *, platform: str | None = None
+    ) -> tuple[str, list[object]]:
         platform_clause = ""
         params: list[object] = []
+        user_clause, user_params = self._user_scope_parts(conn)
+        user_sql = f"AND {user_clause}" if user_clause else ""
+        params.extend(user_params)
         if platform:
             platform_clause = "AND r.platform = ?"
             params.append(platform)
@@ -929,6 +1185,7 @@ class SqliteStorage:
             r.extract_status IN ('ok', 'partial')
               AND r.body_text IS NOT NULL
               AND length(trim(r.body_text)) > 50
+              {user_sql}
               {platform_clause}
               AND (
                 r.platform NOT IN ('youtube', 'bilibili')
@@ -940,8 +1197,8 @@ class SqliteStorage:
     def list_raw_ids_eligible_for_distill(
         self, *, limit: int = 20, platform: str | None = None
     ) -> list[int]:
-        where, params = self._distill_eligibility_sql(platform=platform)
         conn = self._connect()
+        where, params = self._distill_eligibility_sql(conn, platform=platform)
         rows = conn.execute(
             f"""
             SELECT r.id FROM raw_items r
@@ -961,8 +1218,8 @@ class SqliteStorage:
         platform: str | None = None,
     ) -> list[int]:
         """Undistilled first, then stale prompt_version; skip current version."""
-        where, params = self._distill_eligibility_sql(platform=platform)
         conn = self._connect()
+        where, params = self._distill_eligibility_sql(conn, platform=platform)
         rows = conn.execute(
             f"""
             SELECT r.id FROM raw_items r
@@ -983,8 +1240,8 @@ class SqliteStorage:
     def count_raw_ids_needing_distill(
         self, *, prompt_version: str, platform: str | None = None
     ) -> int:
-        where, params = self._distill_eligibility_sql(platform=platform)
         conn = self._connect()
+        where, params = self._distill_eligibility_sql(conn, platform=platform)
         row = conn.execute(
             f"""
             SELECT COUNT(*) AS n FROM raw_items r
@@ -1385,6 +1642,8 @@ class SqliteStorage:
         conn = self._connect()
         archived_clause = "" if include_archived else "AND t.archived_at IS NULL"
         feed_only = f"AND r.deleted_at IS NULL AND {is_feed_row_sql('r')}"
+        user_clause, user_params = self._user_scope_parts(conn)
+        user_join = f" AND {user_clause}" if user_clause else ""
         rows = conn.execute(
             f"""
             SELECT
@@ -1399,13 +1658,13 @@ class SqliteStorage:
                 t.archived_at,
                 COUNT(DISTINCT r.id) AS item_count
             FROM themes t
-            LEFT JOIN raw_items r ON r.theme_id = t.id {feed_only}
+            LEFT JOIN raw_items r ON r.theme_id = t.id {feed_only}{user_join}
             WHERE 1=1 {archived_clause} AND t.slug != ?
             GROUP BY t.id, t.slug, t.name_zh, t.name_en, t.description_zh,
                      t.description_en, t.sort_order, t.is_builtin, t.archived_at
             ORDER BY t.sort_order ASC, t.id ASC
             """,
-            (HOTLIST_THEME_SLUG,),
+            (*user_params, HOTLIST_THEME_SLUG),
         ).fetchall()
         return [dict(r) for r in rows]
 
@@ -1883,6 +2142,8 @@ class SqliteStorage:
         hotlist_source: str | None = None,
     ) -> int:
         conn = self._connect()
+        user_clause, user_params = self._user_scope_parts(conn)
+        user_filter = f" AND {user_clause}" if user_clause else ""
         coll = collection.strip().lower()
         if coll == "hotlist":
             join_sql, day_where, day_params = self._hotlist_query_parts(
@@ -1893,20 +2154,23 @@ class SqliteStorage:
             )
             clause = self._collection_clause(collection)
             row = conn.execute(
-                f"SELECT COUNT(*) AS n FROM raw_items r {join_sql} WHERE {clause}{day_where}",
-                day_params,
+                f"SELECT COUNT(*) AS n FROM raw_items r {join_sql} WHERE {clause}{day_where}{user_filter}",
+                (*day_params, *user_params),
             ).fetchone()
             return int(row["n"]) if row else 0
         clause = self._collection_clause(collection)
         row = conn.execute(
-            f"SELECT COUNT(*) AS n FROM raw_items r WHERE {clause}",
+            f"SELECT COUNT(*) AS n FROM raw_items r WHERE {clause}{user_filter}",
+            user_params,
         ).fetchone()
         return int(row["n"]) if row else 0
 
     def list_dynamic_tags_with_counts(self, *, limit: int = 200) -> list[dict[str, Any]]:
         conn = self._connect()
+        user_clause, user_params = self._user_scope_parts(conn)
+        user_join = f" AND {user_clause}" if user_clause else ""
         rows = conn.execute(
-            """
+            f"""
             SELECT
                 t.id,
                 t.name,
@@ -1914,11 +2178,12 @@ class SqliteStorage:
                 COUNT(DISTINCT it.raw_id) AS item_count
             FROM tags t
             INNER JOIN item_tags it ON it.tag_id = t.id
+            INNER JOIN raw_items r ON r.id = it.raw_id{user_join}
             GROUP BY t.id, t.name, t.slug
             ORDER BY item_count DESC, t.name ASC
             LIMIT ?
             """,
-            (limit,),
+            (*user_params, limit),
         ).fetchall()
         return [dict(r) for r in rows]
 
@@ -2027,6 +2292,9 @@ class SqliteStorage:
 
         coll_key = (collection or "feed").strip().lower()
         collection_sql = self._collection_clause_for_conn(conn, collection)
+        user_clause, user_params = self._user_scope_parts(conn)
+        if user_clause:
+            collection_sql = f"({collection_sql}) AND {user_clause}"
         hits, total = search_knowledge_fts(
             conn,
             user_query=query,
@@ -2037,6 +2305,7 @@ class SqliteStorage:
             theme_id=None if coll_key == "hotlist" else theme_id,
             tag_ids=tag_ids,
             collection_sql=collection_sql,
+            collection_params=user_params or None,
         )
         if not hits:
             return {"items": [], "total": 0, "engine": "fts5"}
@@ -2127,6 +2396,7 @@ class SqliteStorage:
     def list_subscribed_creators(self, *, enrich_avatars: bool = False) -> list[dict[str, Any]]:
         """Creators from subscription feeds + Bilibili follows in the library."""
         from on1y.knowledge.creators import (
+            bilibili_following_groups,
             discover_zhihu_person_groups,
             normalize_zhihu_author_url,
             subscription_feed_groups,
@@ -2138,6 +2408,19 @@ class SqliteStorage:
 
         conn = self._connect()
         groups = subscription_feed_groups()
+        bili_follow_groups = bilibili_following_groups()
+        bili_subscribed_keys = set(bili_follow_groups)
+        for key, meta in bili_follow_groups.items():
+            if key in groups:
+                row = groups[key]
+                for label in meta.get("feed_labels") or []:
+                    if label not in (row.get("feed_labels") or []):
+                        row.setdefault("feed_labels", []).append(label)
+                if not str(row.get("name_hint") or "").strip():
+                    row["name_hint"] = meta.get("name_hint")
+                row["subscribed"] = True
+            else:
+                groups[key] = meta
         user_clause, user_params = self._user_scope_parts(conn)
         user_filter = f" AND {user_clause}" if user_clause else ""
         trash_filter = self._collection_clause_for_conn(conn, "feed")
@@ -2341,15 +2624,16 @@ class SqliteStorage:
                 item_count = int(bili["count"]) if bili else 0
                 if bili:
                     name = bili["author"] or name or url
-                    bili_meta = {
-                        "author_url": url,
-                        "author": name,
-                        "author_avatar": bili.get("avatar"),
-                    }
-                    if enrich_avatars:
-                        bili_meta = enrich_bilibili_author_meta(bili_meta)
-                    avatar = resolve_author_avatar(bili_meta)
-                    author_url = url
+                bili_meta = {
+                    "author_url": url,
+                    "author": name or url,
+                    "author_avatar": bili.get("avatar") if bili else None,
+                    "up_mid": str(meta.get("up_mid") or "").strip() or None,
+                }
+                if enrich_avatars:
+                    bili_meta = enrich_bilibili_author_meta(bili_meta)
+                avatar = resolve_author_avatar(bili_meta)
+                author_url = url
             elif key.startswith("zhihu-person:"):
                 people_url = normalize_zhihu_author_url(
                     str(meta.get("people_url") or zhihu_author_url(key.split(":", 1)[1]))
@@ -2421,7 +2705,11 @@ class SqliteStorage:
                 }
             )
         creators.sort(key=lambda row: (-int(row["item_count"]), str(row["name"]).lower()))
-        return [row for row in creators if int(row["item_count"]) > 0]
+        return [
+            row
+            for row in creators
+            if int(row["item_count"]) > 0 or row["key"] in bili_subscribed_keys
+        ]
 
     def _collection_clause_for_conn(
         self, conn: sqlite3.Connection, collection: str | None

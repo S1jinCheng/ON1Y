@@ -11,7 +11,6 @@ from typing import Any
 import httpx
 
 from on1y.exceptions import ConfigurationError
-from on1y.llm.settings import get_resolved_llm_settings
 
 logger = logging.getLogger(__name__)
 
@@ -135,7 +134,9 @@ def _parse_json_response(text: str) -> dict[str, Any]:
 
 @lru_cache(maxsize=64)
 def _get_llm_client_cached(user_id: int) -> LlmClient:
-    cfg = get_resolved_llm_settings()
+    from on1y.llm.settings import resolve_llm_settings
+
+    cfg = resolve_llm_settings(user_id=user_id)
     if not cfg.api_key_set:
         raise ConfigurationError(
             "未配置 LLM API Key。请在「设置 → AI 模型」保存 API Key，或设置 ON1Y_LLM_API_KEY"

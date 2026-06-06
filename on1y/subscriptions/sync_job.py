@@ -169,6 +169,7 @@ def start_subscription_sync_job(
     use_ai_summary: bool = True,
     sync_hotlist: bool = False,
     refresh_feeds: bool | None = None,
+    user_id: int | None = None,
 ) -> dict[str, Any]:
     try:
         targets = normalize_sync_platforms(platform=platform, platforms=platforms)
@@ -192,18 +193,25 @@ def start_subscription_sync_job(
             }
         )
 
+    from on1y.auth.context import get_current_user_id, get_effective_user_id, user_context
+
+    uid = user_id if user_id is not None else get_current_user_id()
+    if uid is None:
+        uid = get_effective_user_id()
+
     def _run() -> None:
-        report, error = _execute_subscription_sync(
-            platforms=targets,
-            backfill=backfill,
-            ingest=ingest,
-            ingest_limit=ingest_limit,
-            subtitle_limit=subtitle_limit,
-            distill_limit=distill_limit,
-            use_ai_summary=use_ai_summary,
-            sync_hotlist=sync_hotlist,
-            refresh_feeds=refresh_feeds,
-        )
+        with user_context(uid):
+            report, error = _execute_subscription_sync(
+                platforms=targets,
+                backfill=backfill,
+                ingest=ingest,
+                ingest_limit=ingest_limit,
+                subtitle_limit=subtitle_limit,
+                distill_limit=distill_limit,
+                use_ai_summary=use_ai_summary,
+                sync_hotlist=sync_hotlist,
+                refresh_feeds=refresh_feeds,
+            )
         with _lock:
             _state["running"] = False
             _state["finished_at"] = datetime.now(timezone.utc).isoformat()

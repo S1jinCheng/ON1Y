@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 import httpx
 
 from on1y.config import Settings, get_settings
+from on1y.cookies.loader import resolve_cookie_path
 from on1y.ingestion.zhihu_follow_list import DEFAULT_HEADERS, ZHIHU_API, _cookie_jar
 from on1y.utils.zhihu_author import (
     _ANSWER_ID_RE,
@@ -100,7 +101,7 @@ def fetch_zhihu_title_for_url(
     if not any((answer_match, article_match, pin_match, question_match)):
         return None
 
-    path = cookie_path or settings.zhihu_cookies_path
+    path = cookie_path or resolve_cookie_path("zhihu", settings)
     jar = _cookie_jar(path)
     if not jar:
         return None

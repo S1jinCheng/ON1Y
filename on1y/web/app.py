@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import logging
 import sys
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,8 @@ from on1y.models.raw import RawItemCreate
 from on1y.pipeline.processor import process_url
 from on1y.pipeline.worker import run_worker_batch
 from on1y.utils.platform import PLATFORM_ZHIHU
+
+logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -82,6 +85,7 @@ class UserProfilePatchRequest(BaseModel):
     economist_auto_kindle: bool | None = None
     locale: str | None = Field(default=None, pattern="^(zh|en)$")
     open_browser_on_start: bool | None = None
+    cold_start_onboarding_dismissed: bool | None = None
 
 
 class AutostartRequest(BaseModel):
@@ -223,10 +227,6 @@ def create_app() -> FastAPI:
 
     register_auth_routes(app)
     install_auth_middleware(app)
-
-    @app.get("/")
-    def index() -> FileResponse:
-        return FileResponse(STATIC_DIR / "index.html")
 
     @app.get("/api/overview")
     def overview() -> dict[str, Any]:
@@ -446,6 +446,34 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"saved": True, **public_settings_view()}
 
+    @app.post("/api/sync/full")
+    def full_sync() -> dict[str, Any]:
+        from on1y.auth.context import get_current_user_id, get_effective_user_id
+        from on1y.sync.full_sync import start_full_sync_job
+
+        uid = get_current_user_id()
+        if uid is None:
+            uid = get_effective_user_id()
+        return start_full_sync_job(user_id=uid)
+
+    @app.get("/api/sync/full/status")
+    def full_sync_status_route() -> dict[str, Any]:
+        from on1y.sync.full_sync import full_sync_status
+
+        return full_sync_status()
+
+    @app.get("/api/sync/full/timing")
+    def full_sync_timing_route(limit: int = 20) -> dict[str, Any]:
+        from on1y.sync.full_sync import full_sync_status, full_sync_timing_history
+
+        status = full_sync_status()
+        return {
+            "last_timing": status.get("last_timing"),
+            "current_phase": status.get("current_phase"),
+            "phases_ms": status.get("phases_ms"),
+            "history": full_sync_timing_history(limit=min(max(limit, 1), 50)),
+        }
+
     @app.post("/api/subscriptions/sync")
     def subscription_sync(body: SubscriptionSyncRequest) -> dict[str, Any]:
         from on1y.config import get_settings
@@ -470,6 +498,12 @@ def create_app() -> FastAPI:
 
         distill_limit = body.distill_limit if body.use_ai_summary else 0
 
+        from on1y.auth.context import get_current_user_id, get_effective_user_id
+
+        uid = get_current_user_id()
+        if uid is None:
+            uid = get_effective_user_id()
+
         return start_subscription_sync_job(
             platforms=targets,
             backfill=body.backfill,
@@ -480,6 +514,7 @@ def create_app() -> FastAPI:
             use_ai_summary=body.use_ai_summary,
             sync_hotlist=body.sync_hotlist,
             refresh_feeds=body.refresh_feeds or None,
+            user_id=uid,
         )
 
     @app.post("/api/hotlist/sync")
@@ -700,9 +735,42 @@ def create_app() -> FastAPI:
             app_patch["open_browser_on_start"] = body.open_browser_on_start
         if app_patch:
             sections["app"] = app_patch
+        if body.cold_start_onboarding_dismissed is not None:
+            sections["cold_start"] = {
+                "onboarding_dismissed": body.cold_start_onboarding_dismissed,
+            }
         if sections:
             patch_user_profile(**sections)
         return public_profile_view()
+
+    @app.post("/api/cold-start")
+    def cold_start() -> dict[str, Any]:
+        from on1y.auth.context import get_current_user_id, get_effective_user_id
+        from on1y.sync.full_sync import start_full_sync_job
+
+        uid = get_current_user_id()
+        if uid is None:
+            uid = get_effective_user_id()
+        return start_full_sync_job(user_id=uid)
+
+    @app.get("/api/cold-start/status")
+    def cold_start_status_route() -> dict[str, Any]:
+        from on1y.sync.full_sync import full_sync_status
+
+        return full_sync_status()
+
+    @app.get("/api/cold-start/timing")
+    def cold_start_timing_route(limit: int = 20) -> dict[str, Any]:
+        from on1y.sync.full_sync import full_sync_status, full_sync_timing_history
+
+        status = full_sync_status()
+        return {
+            "last_timing": status.get("last_timing"),
+            "current_phase": status.get("current_phase"),
+            "phases_ms": status.get("phases_ms"),
+            "progress": status.get("progress"),
+            "history": full_sync_timing_history(limit=min(max(limit, 1), 50)),
+        }
 
     @app.post("/api/hotlist/economist/auto")
     def hotlist_economist_auto(
@@ -837,9 +905,11 @@ def create_app() -> FastAPI:
 
     @app.post("/api/distill/backfill")
     def distill_backfill(body: DistillBackfillRequest) -> dict[str, Any]:
+        from on1y.auth.context import get_effective_user_id
         from on1y.distill.batch_job import start_distill_batch_job
 
         return start_distill_batch_job(
+            user_id=get_effective_user_id(),
             platform=body.platform,
             batch_size=body.batch_size,
             max_items=body.max_items,
@@ -1533,6 +1603,19 @@ def create_app() -> FastAPI:
 
     if STATIC_DIR.is_dir():
         app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+    from on1y.web.frontend_static import frontend_out_available, register_frontend_routes
+
+    register_frontend_routes(app)
+    if frontend_out_available():
+        logger.info("Serving Next.js workbench from frontend/out")
+    if not frontend_out_available() and STATIC_DIR.is_dir():
+        legacy_index = STATIC_DIR / "legacy-dashboard.html"
+        if legacy_index.is_file():
+
+            @app.get("/")
+            def legacy_dashboard() -> FileResponse:
+                return FileResponse(legacy_index)
 
     return app
 

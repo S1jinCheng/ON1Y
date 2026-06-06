@@ -8,6 +8,7 @@ from typing import Any
 import yt_dlp
 
 from on1y.config import Settings, get_settings
+from on1y.cookies.loader import resolve_cookie_path
 from on1y.exceptions import ConfigurationError
 from on1y.extract.ytdlp_util import build_ytdlp_opts
 from on1y.ingestion.enqueue import enqueue_url
@@ -27,7 +28,7 @@ SYSTEM_PLAYLISTS: dict[str, tuple[str, str]] = {
 def _should_skip_url(storage: StoragePort, url: str) -> bool:
     normalized = normalize_url(url)
     raw = storage.get_raw_by_url(normalized)
-    if raw is not None and raw.extract_status in (ExtractStatus.OK, ExtractStatus.PARTIAL):
+    if raw is not None:
         return True
     if hasattr(storage, "url_in_rss_queue"):
         return storage.url_in_rss_queue(normalized)
@@ -53,7 +54,7 @@ def fetch_playlist_entries(
     settings = settings or get_settings()
     url = f"https://www.youtube.com/playlist?list={playlist_list_id}"
     opts = build_ytdlp_opts(
-        cookie_path=settings.youtube_cookies_path,
+        cookie_path=resolve_cookie_path("youtube", settings),
         cookies_required=True,
         ignore_no_formats_error=True,
         extract_flat="in_playlist",

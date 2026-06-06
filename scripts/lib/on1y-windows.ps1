@@ -121,7 +121,7 @@ function Get-On1yBackendPort {
 }
 
 function Get-On1yFrontendUrl {
-    return "http://127.0.0.1:3000"
+    return Get-On1yBackendUrl
 }
 
 function Get-On1yBackendUrl {
@@ -246,11 +246,11 @@ function Get-NpmCmd {
 
 function Test-FrontendBuildStale {
     param([string]$FrontendDir)
-    $buildId = Join-Path $FrontendDir ".next\BUILD_ID"
-    if (-not (Test-Path $buildId)) {
+    $outIndex = Join-Path $FrontendDir "out\index.html"
+    if (-not (Test-Path $outIndex)) {
         return $true
     }
-    $buildTime = (Get-Item $buildId).LastWriteTimeUtc
+    $buildTime = (Get-Item $outIndex).LastWriteTimeUtc
     $srcRoot = Join-Path $FrontendDir "src"
     if (-not (Test-Path $srcRoot)) {
         return $false
@@ -266,7 +266,7 @@ function Test-FrontendBuildStale {
 
 function Test-FrontendBuildMissing {
     param([string]$FrontendDir)
-    return -not (Test-Path (Join-Path $FrontendDir ".next\BUILD_ID"))
+    return -not (Test-Path (Join-Path $FrontendDir "out\index.html"))
 }
 
 function Invoke-FrontendBuild {
@@ -275,9 +275,10 @@ function Invoke-FrontendBuild {
         [switch]$Quiet
     )
     $npm = Get-NpmCmd
-    $env:NEXT_PUBLIC_ON1Y_API_BASE = Get-On1yBackendUrl
+    # Same-origin API when UI is served by on1y serve (static export).
+    $env:NEXT_PUBLIC_ON1Y_API_BASE = ""
     if (-not $Quiet) {
-        Write-Host "Building frontend (1-3 min, please wait)..."
+        Write-Host "Building frontend static export (1-3 min, please wait)..."
     }
     Push-Location $FrontendDir
     try {
@@ -298,7 +299,6 @@ function Ensure-FrontendReady {
     $root = Get-On1yRoot
     $frontend = Join-Path $root "frontend"
     $npm = Get-NpmCmd
-    $env:NEXT_PUBLIC_ON1Y_API_BASE = Get-On1yBackendUrl
 
     if (-not (Test-Path (Join-Path $frontend "node_modules"))) {
         if (-not $Quiet) {

@@ -59,7 +59,9 @@ def channels_from_ytdlp(*, max_channels: int, settings: Settings | None = None) 
     import yt_dlp
 
     settings = settings or get_settings()
-    opts = build_ytdlp_opts(cookie_path=settings.youtube_cookies_path)
+    from on1y.cookies.loader import resolve_cookie_path
+
+    opts = build_ytdlp_opts(cookie_path=resolve_cookie_path("youtube", settings))
     opts.update(
         {
             "quiet": True,

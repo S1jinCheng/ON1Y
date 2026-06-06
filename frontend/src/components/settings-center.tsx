@@ -8,25 +8,31 @@ import {
   Loader2,
   Send,
   SlidersHorizontal,
+  Snowflake,
   Trash2,
   Upload,
   UserCircle2,
   X
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { FormEvent, useEffect, useRef, useState } from "react";
 
 import {
   deleteCookieFile,
+  fetchAuthStatus,
+  fetchAuthUsers,
   getCookieStatuses,
   getDesktopAppStatus,
   getLlmSettings,
   getSubscriptionSettings,
   getUserProfile,
   importCookieFromClipboard,
+  logout,
   patchUserProfile,
   saveLlmSettings,
   saveSubscriptionSettings,
   setAutostart,
+  switchAccount,
   testLlmSettings,
   updateAuthProfile,
   uploadCookieFile,
@@ -37,6 +43,7 @@ import {
   type LlmSettingsView,
   type UserProfile
 } from "@/lib/api";
+import { getRecentAuthUsernames } from "@/lib/auth";
 import type { Locale } from "@/lib/i18n";
 import { persistStoredLocale } from "@/lib/locale-preference";
 
@@ -80,7 +87,7 @@ export function SettingsCenter(props: Props): JSX.Element | null {
 
   const tabs: { key: TabKey; label: string; icon: JSX.Element }[] = [
     { key: "general", label: L(locale, "通用", "General"), icon: <SlidersHorizontal className="h-4 w-4" /> },
-    { key: "account", label: L(locale, "个人资料", "Profile"), icon: <UserCircle2 className="h-4 w-4" /> },
+    { key: "account", label: L(locale, "账号", "Account"), icon: <UserCircle2 className="h-4 w-4" /> },
     { key: "platforms", label: L(locale, "订阅", "Subscriptions"), icon: <Send className="h-4 w-4" /> },
     { key: "cookies", label: L(locale, "Cookie", "Cookies"), icon: <Cookie className="h-4 w-4" /> },
     { key: "ai", label: L(locale, "AI", "AI"), icon: <Bot className="h-4 w-4" /> },
@@ -135,6 +142,7 @@ export function SettingsCenter(props: Props): JSX.Element | null {
             {tab === "general" ? (
               <GeneralTab
                 locale={locale}
+                onClose={onClose}
                 onLocaleChange={props.onLocaleChange}
                 onMessage={props.onMessage}
               />
@@ -185,10 +193,12 @@ function ToggleRow(props: {
 
 function GeneralTab(props: {
   locale: Locale;
+  onClose?: () => void;
   onLocaleChange?: (locale: Locale) => void;
   onMessage?: (message: string) => void;
 }): JSX.Element {
   const { locale } = props;
+  const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [language, setLanguage] = useState<Locale>(locale);
@@ -285,25 +295,60 @@ function GeneralTab(props: {
 
       <section className="space-y-3">
         <h3 className="text-xs font-semibold uppercase tracking-wide text-neutral-400">
+          {L(locale, "数据冷启动", "Data cold start")}
+        </h3>
+        <div className="rounded-lg border border-neutral-100 bg-neutral-50/60 px-3 py-3">
+          <p className="text-sm font-medium text-neutral-900">
+            {L(locale, "一键冷启动", "Cold start")}
+          </p>
+          <p className="mt-1 text-xs leading-relaxed text-neutral-500">
+            {L(
+              locale,
+              "全量导入收藏夹与 B 站近 3 天关注动态；入库后可立即浏览，AI 摘要与分类在后台进行。",
+              "Import collections and Bilibili dynamics from the last 3 days; browse right away while AI summaries run in the background."
+            )}
+          </p>
+          <button
+            type="button"
+            onClick={() => {
+              props.onClose?.();
+              try {
+                sessionStorage.setItem("on1y-auto-cold-start", "1");
+                sessionStorage.removeItem("on1y-cold-start-panel-dismissed");
+              } catch {
+                /* ignore */
+              }
+              router.push("/");
+            }}
+            className="mt-3 inline-flex items-center gap-2 rounded-lg bg-black px-3 py-2 text-sm font-medium text-white hover:bg-neutral-800"
+          >
+            <Snowflake className="h-4 w-4" />
+            {L(locale, "开始冷启动", "Start cold start")}
+          </button>
+        </div>
+      </section>
+
+      <section className="space-y-3">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-neutral-400">
           {L(locale, "启动", "Startup")}
         </h3>
         <ToggleRow
           label={L(locale, "登录 Windows 时自动启动 On1y", "Start On1y when I sign in to Windows")}
           description={L(
             locale,
-            "登录时在后台启动后端与前端（窗口最小化）。",
-            "Starts backend and frontend in the background on sign-in (minimized windows)."
+            "登录时在后台启动 On1y（桌面版驻留托盘；浏览器模式为最小化 PowerShell 窗口）。",
+            "Starts On1y in the background on sign-in (desktop: tray; browser mode: minimized PowerShell windows)."
           )}
           checked={autostart}
           disabled={!autostartSupported}
           onChange={(v) => void onAutostartToggle(v)}
         />
         <ToggleRow
-          label={L(locale, "启动时打开浏览器", "Open browser on start")}
+          label={L(locale, "登录自启时显示工作台", "Show workspace on sign-in autostart")}
           description={L(
             locale,
-            "登录自启或双击桌面图标时自动打开工作台；关闭后需手动访问 http://127.0.0.1:3000",
-            "Opens the workspace on sign-in autostart or desktop launch; if off, visit http://127.0.0.1:3000 manually."
+            "登录自启：开启则显示工作台；关闭则仅后台/托盘。桌面版双击图标始终显示窗口；浏览器模式双击是否打开页面也受此开关影响。",
+            "Sign-in autostart: on shows the workspace; off runs in background/tray. Desktop app always shows on double-click; browser mode double-click also follows this toggle."
           )}
           checked={openBrowser}
           onChange={setOpenBrowser}
@@ -339,7 +384,7 @@ function GeneralTab(props: {
           {L(locale, "数据目录", "Data")}: {desktop?.data_dir ?? "—"}
         </p>
         <p>
-          {L(locale, "工作台", "App")}: http://127.0.0.1:3000
+          {L(locale, "工作台", "App")}: {desktop?.web_url ?? "—"}
         </p>
       </section>
     </div>
@@ -363,6 +408,39 @@ function AccountTab(props: {
   const [displayName, setDisplayName] = useState(props.user?.display_name ?? "");
   const [email, setEmail] = useState(props.user?.email ?? "");
   const [savingProfile, setSavingProfile] = useState(false);
+  const [authRequired, setAuthRequired] = useState(false);
+  const [allowRegistration, setAllowRegistration] = useState(true);
+  const [knownUsers, setKnownUsers] = useState<AuthUser[]>([]);
+  const [switchUsername, setSwitchUsername] = useState("");
+  const [switchPassword, setSwitchPassword] = useState("");
+  const [switching, setSwitching] = useState(false);
+  const [recentUsernames, setRecentUsernames] = useState<string[]>([]);
+
+  useEffect(() => {
+    setDisplayName(props.user?.display_name ?? "");
+    setEmail(props.user?.email ?? "");
+  }, [props.user]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const [status, listed] = await Promise.all([fetchAuthStatus(), fetchAuthUsers()]);
+        if (cancelled) {
+          return;
+        }
+        setAuthRequired(status.auth_required);
+        setAllowRegistration(status.allow_registration);
+        setKnownUsers(listed.users);
+        setRecentUsernames(getRecentAuthUsernames());
+      } catch {
+        /* optional for single-user mode */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function saveProfile(): Promise<void> {
     setSavingProfile(true);
@@ -377,11 +455,62 @@ function AccountTab(props: {
     }
   }
 
+  async function handleSwitchAccount(event: FormEvent): Promise<void> {
+    event.preventDefault();
+    const username = switchUsername.trim();
+    if (!username || !switchPassword) {
+      props.onMessage?.(L(locale, "请输入用户名和密码", "Enter username and password"));
+      return;
+    }
+    setSwitching(true);
+    try {
+      await switchAccount(username, switchPassword);
+      props.onMessage?.(L(locale, "已切换账号，正在刷新…", "Switched account, reloading…"));
+      window.location.assign("/");
+    } catch (err) {
+      props.onMessage?.(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSwitching(false);
+    }
+  }
+
+  function goLogin(mode: "login" | "register" = "login"): void {
+    logout();
+    const suffix = mode === "register" ? "?mode=register" : "";
+    window.location.assign(`/login${suffix}`);
+  }
+
+  const currentId = props.user?.id;
+  const otherUsers = knownUsers.filter((u) => u.id !== currentId);
+  const quickNames = [
+    ...recentUsernames,
+    ...otherUsers.map((u) => u.username).filter((name) => !recentUsernames.includes(name))
+  ].filter((name) => name.toLowerCase() !== (props.user?.username ?? "").toLowerCase());
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <section className="space-y-3">
         <h3 className="text-xs font-semibold uppercase tracking-wide text-neutral-400">
-          {L(locale, "基本信息", "Basic info")}
+          {L(locale, "当前账号", "Current account")}
+        </h3>
+        <div className="rounded-lg border border-neutral-100 bg-neutral-50/60 px-3 py-3 text-sm">
+          <div className="font-medium text-neutral-900">
+            {props.user?.display_name || props.user?.username || L(locale, "未登录", "Not signed in")}
+          </div>
+          {props.user ? (
+            <div className="mt-1 space-y-0.5 text-xs text-neutral-500">
+              <div>
+                @{props.user.username} · ID {props.user.id}
+              </div>
+              {props.user.email ? <div>{props.user.email}</div> : null}
+            </div>
+          ) : null}
+        </div>
+      </section>
+
+      <section className="space-y-3">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-neutral-400">
+          {L(locale, "个人资料", "Profile")}
         </h3>
         <div>
           <FieldLabel>{L(locale, "显示名称", "Display name")}</FieldLabel>
@@ -389,7 +518,13 @@ function AccountTab(props: {
         </div>
         <div>
           <FieldLabel>{L(locale, "邮箱", "Email")}</FieldLabel>
-          <input className={inputClass} type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" />
+          <input
+            className={inputClass}
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="you@example.com"
+          />
         </div>
         <div className="flex justify-end">
           <button type="button" className={primaryBtn} disabled={savingProfile} onClick={() => void saveProfile()}>
@@ -397,6 +532,123 @@ function AccountTab(props: {
           </button>
         </div>
       </section>
+
+      {authRequired ? (
+        <section className="space-y-3 border-t border-neutral-100 pt-6">
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-neutral-400">
+            {L(locale, "切换账号", "Switch account")}
+          </h3>
+          <p className="text-xs leading-relaxed text-neutral-500">
+            {L(
+              locale,
+              "切换后将加载该用户独立的知识库、Cookie 与订阅设置。本机共 " +
+                String(knownUsers.length) +
+                " 个账号。",
+              `After switching you will see that user's knowledge base, cookies, and subscriptions. ${knownUsers.length} account(s) on this machine.`
+            )}
+          </p>
+
+          {otherUsers.length > 0 ? (
+            <div className="space-y-2">
+              <FieldLabel>{L(locale, "本机其他账号", "Other accounts on this device")}</FieldLabel>
+              <div className="flex flex-wrap gap-2">
+                {otherUsers.map((u) => (
+                  <button
+                    key={u.id}
+                    type="button"
+                    className={`rounded-full border px-3 py-1 text-xs transition ${
+                      switchUsername === u.username
+                        ? "border-black bg-black text-white"
+                        : "border-neutral-200 bg-white text-neutral-700 hover:border-neutral-400"
+                    }`}
+                    onClick={() => {
+                      setSwitchUsername(u.username);
+                      setSwitchPassword("");
+                    }}
+                  >
+                    {u.display_name || u.username}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {quickNames.length > 0 ? (
+            <div className="space-y-2">
+              <FieldLabel>{L(locale, "最近使用", "Recent")}</FieldLabel>
+              <div className="flex flex-wrap gap-2">
+                {quickNames.map((name) => (
+                  <button
+                    key={name}
+                    type="button"
+                    className="rounded-full border border-neutral-200 bg-white px-3 py-1 text-xs text-neutral-600 hover:border-neutral-400"
+                    onClick={() => {
+                      setSwitchUsername(name);
+                      setSwitchPassword("");
+                    }}
+                  >
+                    @{name}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          <form className="space-y-3" onSubmit={(e) => void handleSwitchAccount(e)}>
+            <div>
+              <FieldLabel>{L(locale, "用户名", "Username")}</FieldLabel>
+              <input
+                className={inputClass}
+                value={switchUsername}
+                onChange={(e) => setSwitchUsername(e.target.value)}
+                autoComplete="username"
+                placeholder="alice"
+              />
+            </div>
+            <div>
+              <FieldLabel>{L(locale, "密码", "Password")}</FieldLabel>
+              <input
+                className={inputClass}
+                type="password"
+                value={switchPassword}
+                onChange={(e) => setSwitchPassword(e.target.value)}
+                autoComplete="current-password"
+              />
+            </div>
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <button
+                type="button"
+                className="rounded-lg border border-neutral-200 px-3 py-2 text-sm text-neutral-600 hover:bg-neutral-50"
+                onClick={() => goLogin("login")}
+              >
+                {L(locale, "退出并登录其他账号", "Sign out & pick account")}
+              </button>
+              {allowRegistration ? (
+                <button
+                  type="button"
+                  className="rounded-lg border border-neutral-200 px-3 py-2 text-sm text-neutral-600 hover:bg-neutral-50"
+                  onClick={() => goLogin("register")}
+                >
+                  {L(locale, "注册新账号", "Register new account")}
+                </button>
+              ) : null}
+              <button type="submit" className={primaryBtn} disabled={switching}>
+                {switching ? L(locale, "切换中…", "Switching…") : L(locale, "切换到此账号", "Switch to this account")}
+              </button>
+            </div>
+          </form>
+        </section>
+      ) : (
+        <section className="space-y-2 border-t border-neutral-100 pt-6 text-xs text-neutral-500">
+          <p>
+            {L(
+              locale,
+              "当前为单用户免登录模式（ON1Y_AUTH_REQUIRED=false）。要测试多用户，请在 .env 中设置 ON1Y_AUTH_REQUIRED=true 并重启 on1y serve。",
+              "Single-user mode (ON1Y_AUTH_REQUIRED=false). Set ON1Y_AUTH_REQUIRED=true in .env and restart on1y serve to test multi-user."
+            )}
+          </p>
+        </section>
+      )}
     </div>
   );
 }

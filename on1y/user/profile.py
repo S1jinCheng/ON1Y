@@ -25,6 +25,18 @@ def example_profile_path() -> Path:
     return get_settings().data_dir.parent / "config" / "user_profile.json.example"
 
 
+def _llm_integration_defaults(*, user_id: int | None = None) -> dict[str, Any]:
+    from on1y.llm.settings import public_settings_view
+
+    pub = public_settings_view(user_id=user_id)
+    return {
+        "source": "per-user data/users/<id>/llm_settings.json",
+        "base_url": pub["base_url"],
+        "model": pub["model"],
+        "api_key_configured": pub["api_key_set"],
+    }
+
+
 def _default_payload(settings: Settings | None = None, *, user_id: int | None = None) -> dict[str, Any]:
     settings = settings or get_settings()
     uid = user_id if user_id is not None else get_effective_user_id()
@@ -49,14 +61,13 @@ def _default_payload(settings: Settings | None = None, *, user_id: int | None = 
             "last_synced_edition": None,
             "last_kindle_edition": None,
         },
+        "cold_start": {
+            "onboarding_dismissed": False,
+            "last_completed_at": None,
+        },
         "integrations": {
             "cookies": cookies,
-            "llm": {
-                "source": "env and/or per-user llm_settings.json",
-                "base_url": settings.llm_base_url,
-                "model": settings.llm_model,
-                "api_key_configured": bool(settings.llm_api_key),
-            },
+            "llm": _llm_integration_defaults(user_id=uid),
             "smtp": {
                 "host": settings.smtp_host or "",
                 "port": settings.smtp_port,
@@ -90,6 +101,12 @@ def _normalize_profile(data: dict[str, Any], *, user_id: int | None = None) -> d
     for key in ("last_synced_edition", "last_kindle_edition"):
         raw = econ_in.get(key)
         base["economist"][key] = str(raw).strip() if raw else None
+    cold_in = data.get("cold_start") if isinstance(data.get("cold_start"), dict) else {}
+    base["cold_start"]["onboarding_dismissed"] = bool(
+        cold_in.get("onboarding_dismissed", base["cold_start"]["onboarding_dismissed"])
+    )
+    completed = cold_in.get("last_completed_at")
+    base["cold_start"]["last_completed_at"] = str(completed).strip() if completed else None
     if isinstance(data.get("integrations"), dict):
         base["integrations"] = {**base["integrations"], **data["integrations"]}
     uid = user_id if user_id is not None else get_effective_user_id()
@@ -179,6 +196,9 @@ def patch_user_profile(*, user_id: int | None = None, **sections: Any) -> dict[s
             write_launch_prefs(
                 open_browser_on_start=bool(current["app"]["open_browser_on_start"]),
             )
+    if "cold_start" in sections and isinstance(sections["cold_start"], dict):
+        current.setdefault("cold_start", _default_payload(user_id=uid)["cold_start"])
+        current["cold_start"].update(sections["cold_start"])
     save_user_profile(current, user_id=uid)
     return current
 
@@ -189,7 +209,7 @@ def public_profile_view(user_id: int | None = None) -> dict[str, Any]:
 
     profile = load_user_profile(user_id)
     integrations = profile.get("integrations") or {}
-    llm = integrations.get("llm") if isinstance(integrations.get("llm"), dict) else {}
+    llm = _llm_integration_defaults(user_id=user_id)
     smtp = integrations.get("smtp") if isinstance(integrations.get("smtp"), dict) else {}
     cookies = integrations.get("cookies") if isinstance(integrations.get("cookies"), dict) else {}
     cookie_status = {}
@@ -214,6 +234,7 @@ def public_profile_view(user_id: int | None = None) -> dict[str, Any]:
             "send_to": profile["kindle"]["send_to"],
         },
         "economist": dict(profile["economist"]),
+        "cold_start": dict(profile.get("cold_start") or {}),
         "integrations": {
             "cookies": cookie_status,
             "llm": {

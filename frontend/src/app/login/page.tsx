@@ -8,6 +8,7 @@ import { fetchAuthStatus, login, register } from "@/lib/api";
 export default function LoginPage(): JSX.Element {
   const router = useRouter();
   const [mode, setMode] = useState<"login" | "register">("login");
+  const [firstRun, setFirstRun] = useState(false);
   const [checking, setChecking] = useState(true);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -16,10 +17,19 @@ export default function LoginPage(): JSX.Element {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("mode") === "register") {
+      setMode("register");
+    }
     void fetchAuthStatus()
       .then((status) => {
         if (!status.auth_required) {
           router.replace("/");
+          return;
+        }
+        if (status.user_count === 0 && status.allow_registration) {
+          setFirstRun(true);
+          setMode("register");
         }
       })
       .finally(() => {
@@ -66,7 +76,11 @@ export default function LoginPage(): JSX.Element {
           </div>
           <h1 className="text-xl font-semibold tracking-tight text-neutral-900">On1y 知识库</h1>
           <p className="mt-1 text-sm text-neutral-500">
-            {mode === "login" ? "登录你的个人知识工作台" : "创建一个新账号"}
+            {firstRun
+              ? "欢迎使用 On1y，先创建你的第一个账号"
+              : mode === "login"
+                ? "登录你的个人知识工作台"
+                : "创建一个新账号"}
           </p>
         </div>
 
@@ -127,16 +141,18 @@ export default function LoginPage(): JSX.Element {
             {loading ? "请稍候…" : mode === "login" ? "登录" : "注册并登录"}
           </button>
 
-          <button
-            type="button"
-            className="w-full text-center text-xs text-neutral-500 transition hover:text-neutral-900"
-            onClick={() => {
-              setError(null);
-              setMode(mode === "login" ? "register" : "login");
-            }}
-          >
-            {mode === "login" ? "没有账号？注册一个" : "已有账号？返回登录"}
-          </button>
+          {firstRun ? null : (
+            <button
+              type="button"
+              className="w-full text-center text-xs text-neutral-500 transition hover:text-neutral-900"
+              onClick={() => {
+                setError(null);
+                setMode(mode === "login" ? "register" : "login");
+              }}
+            >
+              {mode === "login" ? "没有账号？注册一个" : "已有账号？返回登录"}
+            </button>
+          )}
         </form>
 
         <p className="mt-6 text-center text-[11px] leading-relaxed text-neutral-400">

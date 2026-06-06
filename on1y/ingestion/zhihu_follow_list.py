@@ -9,7 +9,7 @@ from typing import Any
 import httpx
 
 from on1y.config import Settings, get_settings
-from on1y.cookies.loader import extract_cookie_list, load_cookie_file
+from on1y.cookies.loader import extract_cookie_list, load_cookie_file, resolve_cookie_path
 from on1y.exceptions import ConfigurationError
 
 logger = logging.getLogger(__name__)
@@ -36,7 +36,7 @@ def _cookie_jar(cookie_path: Path) -> dict[str, str]:
 
 def fetch_zhihu_me(*, cookie_path: Path | None = None, settings: Settings | None = None) -> dict[str, Any]:
     settings = settings or get_settings()
-    path = cookie_path or settings.zhihu_cookies_path
+    path = cookie_path or resolve_cookie_path("zhihu", settings)
     jar = _cookie_jar(path)
     if not jar:
         raise ConfigurationError(f"No zhihu.com cookies in {path}")
@@ -62,7 +62,7 @@ def fetch_zhihu_followees(
     Uses the logged-in account from zhihu cookies.
     """
     settings = settings or get_settings()
-    path = cookie_path or settings.zhihu_cookies_path
+    path = cookie_path or resolve_cookie_path("zhihu", settings)
     me = fetch_zhihu_me(cookie_path=path, settings=settings)
     member_token = str(me["url_token"])
     feed_type = settings.zhihu_follow_feed_type.strip().lower() or "activities"
@@ -115,7 +115,7 @@ def fetch_zhihu_favlists(
     Return the logged-in user's 收藏夹 as {id, name, feed_type=collection} dicts.
     """
     settings = settings or get_settings()
-    path = cookie_path or settings.zhihu_cookies_path
+    path = cookie_path or resolve_cookie_path("zhihu", settings)
     me = fetch_zhihu_me(cookie_path=path, settings=settings)
     member_token = str(me["url_token"])
     jar = _cookie_jar(path)

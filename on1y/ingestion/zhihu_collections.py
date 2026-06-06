@@ -9,6 +9,7 @@ from urllib.parse import urlparse, urlunparse
 import httpx
 
 from on1y.config import Settings, get_settings
+from on1y.cookies.loader import resolve_cookie_path
 from on1y.exceptions import ConfigurationError
 from on1y.ingestion.enqueue import enqueue_url
 from on1y.ingestion.zhihu_follow_list import (
@@ -54,7 +55,7 @@ def fetch_collection_items(
 ) -> list[dict[str, Any]]:
     """Return collection items as {url, content_type, title, collection_id, collection_name}."""
     settings = settings or get_settings()
-    path = cookie_path or settings.zhihu_cookies_path
+    path = cookie_path or resolve_cookie_path("zhihu", settings)
     jar = _cookie_jar(path)
     if not jar:
         raise ConfigurationError(f"No zhihu.com cookies in {path}")
@@ -116,7 +117,7 @@ def _item_title(content: dict[str, Any]) -> str | None:
 def _should_skip_url(storage: StoragePort, url: str) -> bool:
     normalized = normalize_zhihu_item_url(url)
     raw = storage.get_raw_by_url(normalized)
-    if raw is not None and raw.extract_status in (ExtractStatus.OK, ExtractStatus.PARTIAL):
+    if raw is not None:
         return True
     if hasattr(storage, "url_in_rss_queue"):
         return storage.url_in_rss_queue(normalized)
@@ -145,7 +146,7 @@ def backfill_zhihu_collections(
         if not favlists:
             raise ConfigurationError(f"No matching favlists for ids: {sorted(wanted)}")
 
-    path = settings.zhihu_cookies_path
+    path = resolve_cookie_path("zhihu", settings)
     jar = _cookie_jar(path)
     if not jar:
         raise ConfigurationError(f"No zhihu.com cookies in {path}")

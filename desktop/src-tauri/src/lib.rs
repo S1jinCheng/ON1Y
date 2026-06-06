@@ -22,10 +22,13 @@ pub fn run() {
     let root = find_on1y_root();
     std::env::set_var("ON1Y_ROOT", &root);
 
+    // Manual launch always shows the window; login autostart follows the settings toggle.
+    let show_pref = read_open_window_pref(&root);
+    let open_window = if autostart { show_pref } else { true };
+
     let boot_config = BootConfig {
         root: root.clone(),
-        autostart,
-        open_window: read_open_window_pref(&root),
+        open_window,
     };
 
     tauri::Builder::default()
@@ -39,13 +42,17 @@ pub fn run() {
             frontend_url: Mutex::new(None),
         })
         .setup(move |app| {
-            create_main_window(app.handle())?;
             setup_tray(app.handle())?;
+            create_splash_window(app.handle())?;
             let handle = app.handle().clone();
             let cfg = boot_config.clone();
             std::thread::spawn(move || {
                 if let Err(err) = run_boot_sequence(&handle, &cfg) {
-                    show_boot_error(&handle, &err.to_string());
+                    let message = err.to_string();
+                    let handle_for_err = handle.clone();
+                    let _ = handle.run_on_main_thread(move || {
+                        show_boot_error(&handle_for_err, &message);
+                    });
                 }
             });
             Ok(())
@@ -65,21 +72,55 @@ pub fn run() {
         });
 }
 
-fn create_main_window(app: &AppHandle) -> tauri::Result<()> {
-    let app_for_nav = app.clone();
-    let app_for_popup = app.clone();
-    let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+const SPLASH_LABEL: &str = "splash";
+const MAIN_LABEL: &str = "main";
+
+fn create_splash_window(app: &AppHandle) -> tauri::Result<()> {
+    let _window = WebviewWindowBuilder::new(app, SPLASH_LABEL, WebviewUrl::App("index.html".into()))
         .title("On1y")
         .inner_size(1320.0, 880.0)
         .min_inner_size(960.0, 640.0)
         .center()
+        .build()?;
+    Ok(())
+}
+
+fn dismiss_splash(app: &AppHandle) {
+    if let Some(splash) = app.get_webview_window(SPLASH_LABEL) {
+        let _ = splash.destroy();
+    }
+}
+
+fn create_workbench_window(app: &AppHandle, frontend_url: &str, show: bool) -> Result<(), String> {
+    let boot_ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let target = format!("{frontend_url}/?on1y_boot={boot_ts}");
+    let parsed = Url::parse(&target).map_err(|e| e.to_string())?;
+    let webview_url = WebviewUrl::External(parsed);
+
+    dismiss_splash(app);
+
+    let app_for_nav = app.clone();
+    let app_for_popup = app.clone();
+    let window = WebviewWindowBuilder::new(app, MAIN_LABEL, webview_url)
+        .title("On1y")
+        .inner_size(1320.0, 880.0)
+        .min_inner_size(960.0, 640.0)
+        .center()
+        .visible(show)
         .on_navigation(move |url| handle_navigation(&app_for_nav, &url))
         .on_new_window(move |url, _features| {
             open_url_in_browser(&app_for_popup, &url);
             NewWindowResponse::Deny
         })
-        .build()?;
+        .build()
+        .map_err(|e| format!("无法创建工作台窗口: {e}"))?;
     attach_hide_on_close(&window);
+    if show {
+        let _ = window.set_focus();
+    }
     Ok(())
 }
 
@@ -145,20 +186,7 @@ fn run_boot_sequence(app: &AppHandle, config: &BootConfig) -> Result<(), Box<dyn
 }
 
 fn open_workspace(app: &AppHandle, frontend_url: &str, show: bool) -> Result<(), String> {
-    let parsed = Url::parse(frontend_url).map_err(|e| e.to_string())?;
-    let window = app
-        .get_webview_window("main")
-        .ok_or_else(|| "主窗口未创建".to_string())?;
-    window
-        .navigate(parsed)
-        .map_err(|e| format!("无法打开工作台: {e}"))?;
-    if show {
-        let _ = window.show();
-        let _ = window.set_focus();
-    } else {
-        let _ = window.hide();
-    }
-    Ok(())
+    create_workbench_window(app, frontend_url, show)
 }
 
 fn attach_hide_on_close(window: &tauri::WebviewWindow) {
@@ -178,14 +206,17 @@ fn show_boot_error(app: &AppHandle, message: &str) {
         .replace('\r', " ")
         .replace('\n', "\\n");
     let script = format!("window.__ON1Y_SHOW_ERROR__ && window.__ON1Y_SHOW_ERROR__('{escaped}');");
-    if let Some(window) = app.get_webview_window("main") {
+    if let Some(window) = app
+        .get_webview_window(SPLASH_LABEL)
+        .or_else(|| app.get_webview_window(MAIN_LABEL))
+    {
         let _ = window.show();
         let _ = window.eval(&script);
     }
 }
 
 fn focus_main_window(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
+    if let Some(window) = app.get_webview_window(MAIN_LABEL) {
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();

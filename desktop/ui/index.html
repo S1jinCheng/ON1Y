@@ -14,8 +14,8 @@
         display: grid;
         place-items: center;
         font-family: "Segoe UI", system-ui, sans-serif;
-        background: #0a0a0a;
-        color: #f5f5f5;
+        background: #fafafa;
+        color: #171717;
       }
       .card {
         text-align: center;
@@ -27,9 +27,12 @@
         height: 56px;
         margin: 0 auto 1.25rem;
         border-radius: 14px;
-        background: #111;
-        border: 2px solid #fff;
-        box-shadow: inset 0 0 0 10px #0a0a0a;
+        background: #000;
+        color: #fff;
+        display: grid;
+        place-items: center;
+        font-weight: 600;
+        font-size: 1.25rem;
       }
       h1 {
         margin: 0 0 0.5rem;
@@ -38,7 +41,7 @@
       }
       p {
         margin: 0;
-        color: #a3a3a3;
+        color: #737373;
         font-size: 0.95rem;
         line-height: 1.5;
       }
@@ -46,8 +49,8 @@
         width: 28px;
         height: 28px;
         margin: 1.5rem auto 0;
-        border: 2px solid #333;
-        border-top-color: #fff;
+        border: 2px solid #e5e5e5;
+        border-top-color: #171717;
         border-radius: 50%;
         animation: spin 0.8s linear infinite;
       }
@@ -68,9 +71,9 @@
   </head>
   <body>
     <div class="card">
-      <div class="logo" aria-hidden="true"></div>
-      <h1>On1y</h1>
-      <p id="status">正在启动本地服务…</p>
+      <div class="logo" aria-hidden="true">O</div>
+      <h1>On1y 知识库</h1>
+      <p id="status">正在启动并加载工作台…</p>
       <div class="spinner" id="spinner"></div>
       <pre id="error"></pre>
     </div>

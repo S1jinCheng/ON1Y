@@ -1,4 +1,6 @@
 const AUTH_TOKEN_KEY = "on1y_auth_token";
+const RECENT_USERNAMES_KEY = "on1y_recent_usernames";
+const RECENT_USERNAMES_MAX = 8;
 
 export type AuthUser = {
   id: number;
@@ -28,4 +30,36 @@ export function setAuthToken(token: string | null): void {
 
 export function clearAuth(): void {
   setAuthToken(null);
+}
+
+export function rememberAuthUsername(username: string): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  const name = username.trim();
+  if (!name) {
+    return;
+  }
+  const prev = getRecentAuthUsernames().filter((u) => u.toLowerCase() !== name.toLowerCase());
+  const next = [name, ...prev].slice(0, RECENT_USERNAMES_MAX);
+  localStorage.setItem(RECENT_USERNAMES_KEY, JSON.stringify(next));
+}
+
+export function getRecentAuthUsernames(): string[] {
+  if (typeof window === "undefined") {
+    return [];
+  }
+  try {
+    const raw = localStorage.getItem(RECENT_USERNAMES_KEY);
+    if (!raw) {
+      return [];
+    }
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed.map((v) => String(v).trim()).filter(Boolean);
+  } catch {
+    return [];
+  }
 }

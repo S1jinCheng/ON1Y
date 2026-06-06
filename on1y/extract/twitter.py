@@ -22,7 +22,9 @@ class TwitterExtractor(PlaywrightExtractor):
         return detect_platform(url) == PLATFORM_TWITTER
 
     def cookie_path(self, settings: Settings) -> Path:
-        return settings.twitter_cookies_path
+        from on1y.cookies.loader import resolve_cookie_path
+
+        return resolve_cookie_path("twitter", settings)
 
     def seed_domain(self) -> str:
         return ".x.com"

@@ -6,6 +6,7 @@ import logging
 from typing import Any
 
 from on1y.config import Settings, get_settings
+from on1y.user.feeds_config import resolve_feeds_config_path
 from on1y.exceptions import ConfigurationError
 from on1y.ingestion.rss import (
     _backfill_single_feed,
@@ -31,6 +32,7 @@ def sync_rss_subscriptions(
     platform: str,
     backfill: bool = False,
     sync_since_ts: int | None = None,
+    max_items_per_feed: int | None = None,
     settings: Settings | None = None,
 ) -> dict[str, Any]:
     """
@@ -58,13 +60,17 @@ def sync_rss_subscriptions(
     }
 
     try:
-        feeds = _select_feeds(settings.rss_config_path, label_prefix=label_prefix)
+        feeds = _select_feeds(resolve_feeds_config_path(settings), label_prefix=label_prefix)
     except ConfigurationError:
         report["skipped_no_feeds"] = True
         return report
 
     report["feeds_matched"] = len(feeds)
-    max_items = settings.rss_backfill_max_items_per_feed
+    max_items = (
+        max_items_per_feed
+        if max_items_per_feed is not None
+        else settings.rss_backfill_max_items_per_feed
+    )
 
     for feed in feeds:
         try:

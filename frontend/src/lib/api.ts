@@ -11,10 +11,16 @@ import {
   type ThemeSplitInput
 } from "@/lib/types";
 import type { StatsDailyDigest, StatsOverview } from "@/lib/stats-types";
-import { clearAuth, getAuthToken, setAuthToken, type AuthUser } from "@/lib/auth";
+import {
+  clearAuth,
+  getAuthToken,
+  rememberAuthUsername,
+  setAuthToken,
+  type AuthUser
+} from "@/lib/auth";
 
-const API_BASE =
-  process.env.NEXT_PUBLIC_ON1Y_API_BASE?.replace(/\/$/, "") ?? "http://127.0.0.1:8765";
+/** Empty = same-origin when UI is served by `on1y serve` (static export). */
+const API_BASE = process.env.NEXT_PUBLIC_ON1Y_API_BASE?.replace(/\/$/, "") ?? "";
 
 export function economistEpubDownloadUrl(rawId: number): string {
   const token = getAuthToken();
@@ -84,6 +90,7 @@ export function login(username: string, password: string): Promise<{ token: stri
     body: JSON.stringify({ username, password })
   }).then((data) => {
     setAuthToken(data.token);
+    rememberAuthUsername(data.user.username);
     return data;
   });
 }
@@ -99,8 +106,17 @@ export function register(input: {
     body: JSON.stringify(input)
   }).then((data) => {
     setAuthToken(data.token);
+    rememberAuthUsername(data.user.username);
     return data;
   });
+}
+
+export function fetchAuthUsers(): Promise<{ users: AuthUser[]; multi_user: boolean }> {
+  return request<{ users: AuthUser[]; multi_user: boolean }>("/api/auth/users");
+}
+
+export function switchAccount(username: string, password: string): Promise<{ user: AuthUser }> {
+  return login(username, password).then((data) => data);
 }
 
 export function fetchCurrentUser(): Promise<{ user: AuthUser }> {
@@ -169,6 +185,10 @@ export type UserProfile = {
     last_synced_edition: string | null;
     last_kindle_edition: string | null;
   };
+  cold_start?: {
+    onboarding_dismissed: boolean;
+    last_completed_at: string | null;
+  };
   integrations: {
     cookies: Record<string, { path: string; exists: boolean }>;
     llm: { base_url: string; model: string; api_key_configured: boolean };
@@ -208,6 +228,7 @@ export function patchUserProfile(input: {
   economist_auto_kindle?: boolean;
   locale?: "zh" | "en";
   open_browser_on_start?: boolean;
+  cold_start_onboarding_dismissed?: boolean;
 }): Promise<UserProfile> {
   return request<UserProfile>("/api/user/profile", {
     method: "PATCH",
@@ -714,6 +735,78 @@ export type DistillBackfillStatus = {
 
 export function getDistillBackfillStatus(): Promise<DistillBackfillStatus> {
   return request<DistillBackfillStatus>("/api/distill/backfill/status");
+}
+
+export type FullSyncTiming = {
+  user_id: number;
+  started_at: string;
+  finished_at: string;
+  total_ms: number;
+  total_human: string;
+  phases_ms: Record<string, number>;
+  phases_human: Record<string, string>;
+  detail?: Record<string, unknown>;
+  error?: string | null;
+  recorded_at?: string;
+};
+
+export type ColdStartProgressView = {
+  phase?: string | null;
+  elapsed_ms?: number;
+  counters?: Record<string, number>;
+  events?: Array<{
+    id: number;
+    ts: string;
+    kind: string;
+    status: string;
+    phase: string;
+    title: string;
+    platform?: string | null;
+    detail?: string | null;
+    url?: string | null;
+  }>;
+  event_total?: number;
+};
+
+export type FullSyncStatus = {
+  running: boolean;
+  active?: boolean;
+  distill_running?: boolean;
+  started_at: string | null;
+  finished_at: string | null;
+  elapsed_ms?: number | null;
+  last_report: Record<string, unknown> | null;
+  last_timing: FullSyncTiming | null;
+  current_phase: string | null;
+  phases_ms: Record<string, number>;
+  progress: ColdStartProgressView | null;
+  background_distill?: DistillBackfillStatus | null;
+  error: string | null;
+  user_id: number | null;
+};
+
+export type FullSyncTimingResponse = {
+  last_timing: FullSyncTiming | null;
+  current_phase: string | null;
+  phases_ms: Record<string, number>;
+  history: FullSyncTiming[];
+};
+
+export function runFullSync(): Promise<{ started: boolean; running: boolean; message: string }> {
+  return request<{ started: boolean; running: boolean; message: string }>("/api/cold-start", {
+    method: "POST"
+  });
+}
+
+export function getFullSyncStatus(): Promise<FullSyncStatus> {
+  return request<FullSyncStatus>("/api/cold-start/status");
+}
+
+export const runColdStart = runFullSync;
+export const getColdStartStatus = getFullSyncStatus;
+
+export function getFullSyncTiming(limit = 20): Promise<FullSyncTimingResponse> {
+  return request<FullSyncTimingResponse>(`/api/sync/full/timing?limit=${limit}`);
 }
 
 export function runSubscriptionSync(payload?: {

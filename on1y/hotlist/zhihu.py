@@ -65,7 +65,9 @@ def fetch_zhihu_hotlist(
 ) -> list[dict[str, Any]]:
     settings = settings or get_settings()
     fetch_limit = limit if limit is not None else settings.zhihu_hotlist_limit
-    path = settings.zhihu_cookies_path
+    from on1y.cookies.loader import resolve_cookie_path
+
+    path = resolve_cookie_path("zhihu", settings)
     jar = _cookie_jar(path)
     if not jar:
         raise ConfigurationError(f"No zhihu.com cookies in {path}")

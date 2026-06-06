@@ -91,6 +91,9 @@ class Settings(BaseSettings):
     bilibili_dynamic_poll_max_pages: int = Field(default=5, ge=1, le=50)
     bilibili_dynamic_poll_backfill_max_pages: int = Field(default=20, ge=1, le=100)
     bilibili_dynamic_poll_page_interval_seconds: float = Field(default=1.0, ge=0.0, le=30.0)
+    # Cold start: pull Bilibili following dynamics instead of per-UP space API
+    cold_start_bilibili_dynamic_days: int = Field(default=3, ge=1, le=30)
+    cold_start_bilibili_dynamic_max_pages: int = Field(default=50, ge=1, le=200)
     # Feed type written when syncing Zhihu follow list (activities | answers)
     zhihu_follow_feed_type: str = Field(default="activities")
     # Zhihu daily hot list (questions + excerpt + link)
@@ -196,7 +199,7 @@ class Settings(BaseSettings):
     auth_secret_key: str = Field(default="change-me-in-production")
     auth_token_ttl_hours: int = Field(default=168, ge=1, le=24 * 30)
     # Local single-user desktop: False skips login UI; user profile/settings still use user id=1.
-    auth_required: bool = Field(default=False)
+    auth_required: bool = Field(default=True)
     auth_allow_registration: bool = Field(default=True)
     bootstrap_username: str = Field(default="admin")
     bootstrap_password: str | None = Field(default=None)

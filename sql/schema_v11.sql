@@ -1,0 +1,1 @@
+-- Schema v11: per-user URL uniqueness on raw_items (rebuild table; applied via sqlite_storage)

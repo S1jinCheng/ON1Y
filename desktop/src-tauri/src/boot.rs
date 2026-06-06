@@ -7,28 +7,47 @@ use std::time::{Duration, Instant};
 use reqwest::blocking::Client;
 use serde::Deserialize;
 
-const BACKEND_PORT: u16 = 8765;
-const FRONTEND_PORT: u16 = 3000;
+const DEFAULT_BACKEND_PORT: u16 = 8765;
+
+fn backend_port(root: &Path) -> u16 {
+    if let Ok(port_str) = std::env::var("ON1Y_WEB_PORT") {
+        if let Ok(port) = port_str.trim().parse::<u16>() {
+            return port;
+        }
+    }
+    let env_path = root.join(".env");
+    if let Ok(text) = fs::read_to_string(env_path) {
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let Some((key, value)) = line.split_once('=') else {
+                continue;
+            };
+            if key.trim() == "ON1Y_WEB_PORT" {
+                if let Ok(port) = value.trim().parse::<u16>() {
+                    return port;
+                }
+            }
+        }
+    }
+    DEFAULT_BACKEND_PORT
+}
 
 #[derive(Clone)]
 pub struct BootConfig {
     pub root: PathBuf,
-    pub autostart: bool,
     pub open_window: bool,
 }
 
 pub struct ManagedServers {
     pub backend: Option<Child>,
-    pub frontend: Option<Child>,
     pub started_backend: bool,
-    pub started_frontend: bool,
 }
 
 impl ManagedServers {
     pub fn stop_started(&mut self) {
-        if self.started_frontend {
-            stop_child(&mut self.frontend);
-        }
         if self.started_backend {
             stop_child(&mut self.backend);
         }
@@ -63,61 +82,61 @@ impl std::fmt::Display for BootError {
 impl std::error::Error for BootError {}
 
 pub fn boot(config: &BootConfig) -> Result<(ManagedServers, String), BootError> {
-    let backend_url = format!("http://127.0.0.1:{BACKEND_PORT}");
-    let frontend_url = format!("http://127.0.0.1:{FRONTEND_PORT}");
+    let backend_port = backend_port(&config.root);
+    let app_url = format!("http://127.0.0.1:{backend_port}");
     let data_dir = config.root.join("data");
-    let frontend_dir = config.root.join("frontend");
+    let frontend_out = config.root.join("frontend").join("out").join("index.html");
 
     let on1y_exe = find_on1y_exe(&config.root)?;
-    let npm_cmd = find_npm_cmd()?;
 
-    if !frontend_dir.join(".next").join("BUILD_ID").is_file() {
+    if !frontend_out.is_file() {
         return Err(BootError::msg(format!(
-            "前端尚未构建。请在 PowerShell 中运行:\n  powershell -ExecutionPolicy Bypass -File \"{}\"",
+            "前端尚未构建（需要 static export）。请在 PowerShell 中运行:\n  powershell -ExecutionPolicy Bypass -File \"{}\"",
             config.root.join("scripts").join("build-frontend.ps1").display()
         )));
     }
 
     let mut servers = ManagedServers {
         backend: None,
-        frontend: None,
         started_backend: false,
-        started_frontend: false,
     };
 
-    if is_port_listening(BACKEND_PORT) {
-        log_line(&config.root, "backend already listening");
+    if is_port_listening(backend_port) {
+        log_line(&config.root, "on1y serve already listening");
     } else {
-        servers.backend = Some(spawn_backend(&on1y_exe, &config.root, &data_dir)?);
+        servers.backend = Some(spawn_backend(
+            &on1y_exe,
+            &config.root,
+            &data_dir,
+            backend_port,
+        )?);
         servers.started_backend = true;
         if !wait_http_ok(
-            &format!("{backend_url}/api/auth/status"),
+            &format!("{app_url}/api/auth/status"),
             Duration::from_secs(120),
         ) {
             servers.stop_started();
             return Err(BootError::msg(format!(
-                "后端未在 120 秒内就绪: {backend_url}\n请检查 conda 环境 on1y 与 data/ 目录权限。"
+                "on1y serve 未在 120 秒内就绪: {app_url}\n请检查 conda 环境 on1y 与 data/ 目录权限。"
             )));
         }
     }
 
-    if is_port_listening(FRONTEND_PORT) {
-        log_line(&config.root, "frontend already listening");
-    } else {
-        servers.frontend = Some(spawn_frontend(&npm_cmd, &frontend_dir, &backend_url)?);
-        servers.started_frontend = true;
-        if !wait_http_ok(&frontend_url, Duration::from_secs(90)) {
-            servers.stop_started();
-            return Err(BootError::msg(format!(
-                "前端未在 90 秒内就绪: {frontend_url}"
-            )));
-        }
+    if !wait_http_ok(&app_url, Duration::from_secs(30)) {
+        return Err(BootError::msg(format!(
+            "工作台页面未就绪: {app_url}\n请重新运行 scripts\\build-frontend.ps1"
+        )));
     }
 
-    Ok((servers, frontend_url))
+    Ok((servers, app_url))
 }
 
-fn spawn_backend(on1y_exe: &Path, root: &Path, data_dir: &Path) -> Result<Child, BootError> {
+fn spawn_backend(
+    on1y_exe: &Path,
+    root: &Path,
+    data_dir: &Path,
+    backend_port: u16,
+) -> Result<Child, BootError> {
     let db_path = data_dir.join("on1y.db");
     let mut cmd = Command::new(on1y_exe);
     cmd.arg("serve")
@@ -125,27 +144,12 @@ fn spawn_backend(on1y_exe: &Path, root: &Path, data_dir: &Path) -> Result<Child,
         .env("ON1Y_ROOT", root)
         .env("ON1Y_DATA_DIR", data_dir)
         .env("ON1Y_DB_PATH", &db_path)
+        .env("ON1Y_WEB_PORT", backend_port.to_string())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     hide_console(&mut cmd);
     cmd.spawn()
         .map_err(|e| BootError::msg(format!("无法启动 on1y serve: {e}\n路径: {}", on1y_exe.display())))
-}
-
-fn spawn_frontend(
-    npm_cmd: &Path,
-    frontend_dir: &Path,
-    backend_url: &str,
-) -> Result<Child, BootError> {
-    let mut cmd = Command::new(npm_cmd);
-    cmd.args(["run", "start"])
-        .current_dir(frontend_dir)
-        .env("NEXT_PUBLIC_ON1Y_API_BASE", backend_url)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    hide_console(&mut cmd);
-    cmd.spawn()
-        .map_err(|e| BootError::msg(format!("无法启动前端: {e}\nnpm: {}", npm_cmd.display())))
 }
 
 #[cfg(windows)]
@@ -278,40 +282,6 @@ fn which_on1y_from_path() -> Result<PathBuf, BootError> {
         }
     }
     Err(BootError::msg("on1y.exe not on PATH"))
-}
-
-pub fn find_npm_cmd() -> Result<PathBuf, BootError> {
-    if let Ok(cmd) = std::env::var("ON1Y_NPM_CMD") {
-        let path = PathBuf::from(&cmd);
-        if path.is_file() {
-            return Ok(path);
-        }
-    }
-
-    let candidates = [
-        r"D:\npm.cmd",
-        r"C:\Program Files\nodejs\npm.cmd",
-        r"C:\Program Files (x86)\nodejs\npm.cmd",
-    ];
-    for c in candidates {
-        let path = PathBuf::from(c);
-        if path.is_file() {
-            return Ok(path);
-        }
-    }
-
-    if let Ok(path_var) = std::env::var("PATH") {
-        for dir in std::env::split_paths(&path_var) {
-            let candidate = dir.join("npm.cmd");
-            if candidate.is_file() {
-                return Ok(candidate);
-            }
-        }
-    }
-
-    Err(BootError::msg(
-        "找不到 npm.cmd。请安装 Node.js LTS，或设置 ON1Y_NPM_CMD",
-    ))
 }
 
 #[derive(Deserialize)]

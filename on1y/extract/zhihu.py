@@ -22,7 +22,9 @@ class ZhihuExtractor(PlaywrightExtractor):
         return detect_platform(url) == PLATFORM_ZHIHU
 
     def cookie_path(self, settings: Settings) -> Path:
-        return settings.zhihu_cookies_path
+        from on1y.cookies.loader import resolve_cookie_path
+
+        return resolve_cookie_path("zhihu", settings)
 
     def seed_domain(self) -> str:
         return ".zhihu.com"

@@ -1,5 +1,6 @@
 from on1y.ingestion.rss import FeedConfig
 from on1y.knowledge.creators import (
+    bilibili_following_groups,
     creator_filter_sql,
     creator_key_from_feed,
     creator_key_from_feed_label,
@@ -26,6 +27,25 @@ def test_zhihu_collection_feed_not_sidebar_creator():
     )
     assert is_zhihu_collection_feed(feed)
     assert not is_sidebar_creator_feed(feed)
+
+
+def test_bilibili_following_groups_from_feeds(monkeypatch):
+    from on1y.ingestion.rss import FeedConfig
+
+    feeds = [
+        FeedConfig(
+            url="https://rsshub.app/bilibili/user/video/12345",
+            label="bili-up-test-up",
+            display_name="测试UP",
+        )
+    ]
+    monkeypatch.setattr("on1y.knowledge.creators.load_feeds", lambda: feeds)
+    groups = bilibili_following_groups()
+    key = "bili:https://space.bilibili.com/12345"
+    assert key in groups
+    assert groups[key]["name_hint"] == "测试UP"
+    assert groups[key]["subscribed"] is True
+    assert "feed:bili-up-test-up" not in subscription_feed_groups()
 
 
 def test_bilibili_rss_feed_not_sidebar_creator():

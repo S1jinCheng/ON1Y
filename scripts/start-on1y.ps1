@@ -1,7 +1,8 @@
-# Start On1y as a local desktop app (backend + frontend + optional browser).
+# Start On1y (on1y serve serves API + static UI; optional browser / desktop).
 # Usage:
 #   powershell -ExecutionPolicy Bypass -File scripts\start-on1y.ps1
-#   powershell -ExecutionPolicy Bypass -File scripts\start-on1y.ps1 -Quiet   # login autostart (minimized windows)
+#   powershell -ExecutionPolicy Bypass -File scripts\start-on1y.ps1 -Quiet
+#   powershell -ExecutionPolicy Bypass -File scripts\start-on1y.ps1 -Dev   # next dev on :3000
 param(
     [switch]$Quiet,
     [switch]$NoBrowser,
@@ -15,7 +16,7 @@ $root = Get-On1yRoot
 $env:ON1Y_ROOT = $root
 $backendPort = Get-On1yBackendPort
 $backendUrl = Get-On1yBackendUrl
-$frontendUrl = Get-On1yFrontendUrl
+$appUrl = if ($Dev) { "http://127.0.0.1:3000" } else { $backendUrl }
 $launchPrefsPath = Join-Path $root "data\app-launch.json"
 $prefOpenBrowser = $true
 if (Test-Path $launchPrefsPath) {
@@ -29,22 +30,29 @@ if (Test-Path $launchPrefsPath) {
         # keep default
     }
 }
-# Quiet only minimizes worker windows; browser follows data/app-launch.json (settings toggle).
 $openBrowser = -not $NoBrowser -and $prefOpenBrowser
 $windowStyle = if ($Quiet) { "Minimized" } else { "Normal" }
 
 try {
     $backendUp = Test-PortListening -Port $backendPort
-    $frontendUp = Test-PortListening -Port 3000
+    $devFrontendUp = $Dev -and (Test-PortListening -Port 3000)
 
-    if ($backendUp -and $frontendUp) {
-        if ($openBrowser) {
-            Open-On1yBrowser -Url $frontendUrl
-        }
-        elseif (-not $Quiet) {
+    if ($backendUp -and (-not $Dev -or $devFrontendUp)) {
+        if (-not $Quiet) {
             Write-Host "On1y is already running."
-            Write-Host "  Frontend: $frontendUrl"
-            Write-Host "  Backend:  $backendUrl"
+            Write-Host "  App: $appUrl"
+        }
+        if (-not $Dev) {
+            $desktopExe = Get-On1yDesktopExe
+            if ($desktopExe) {
+                Start-Process -FilePath $desktopExe -WorkingDirectory $root | Out-Null
+            }
+            elseif ($openBrowser) {
+                Open-On1yBrowser -Url $appUrl
+            }
+        }
+        elseif ($openBrowser) {
+            Open-On1yBrowser -Url $appUrl
         }
         exit 0
     }
@@ -56,13 +64,13 @@ try {
     $backendScript = Join-Path $root "scripts\run-on1y-backend.ps1"
     $frontendScript = Join-Path $root "scripts\run-on1y-frontend.ps1"
 
-    if (-not $frontendUp -and -not $Dev) {
-        Ensure-FrontendReady -Dev:$Dev -Quiet:$Quiet
+    if (-not $Dev) {
+        Ensure-FrontendReady -Quiet:$Quiet
     }
 
     if (-not $backendUp) {
         if (-not $Quiet) {
-            Write-Host "Starting backend..."
+            Write-Host "Starting on1y serve..."
         }
         Start-Process powershell.exe `
             -WorkingDirectory $root `
@@ -75,55 +83,67 @@ try {
         Start-Sleep -Seconds 2
     }
 
-    if (-not $frontendUp) {
+    if ($Dev -and -not $devFrontendUp) {
         if (-not $Quiet) {
-            Write-Host "Starting frontend..."
-        }
-        $frontendArgs = @(
-            "-NoExit",
-            "-ExecutionPolicy", "Bypass",
-            "-File", $frontendScript
-        )
-        if ($Dev) {
-            $frontendArgs += "-Dev"
+            Write-Host "Starting frontend dev server..."
         }
         Start-Process powershell.exe `
             -WorkingDirectory $root `
             -WindowStyle $windowStyle `
-            -ArgumentList $frontendArgs
+            -ArgumentList @(
+                "-NoExit",
+                "-ExecutionPolicy", "Bypass",
+                "-File", $frontendScript,
+                "-Dev"
+            )
     }
 
     if (-not $backendUp) {
         if (-not (Wait-ForHttpOk -Url "$backendUrl/api/auth/status" -TimeoutSeconds 120)) {
-            throw "Backend did not become ready at $backendUrl (check the On1y Backend window)"
+            throw "on1y serve did not become ready at $backendUrl"
         }
     }
 
-    if (-not $frontendUp) {
-        $frontendTimeout = if ($Dev) { 120 } else { 60 }
-        if (-not (Wait-ForHttpOk -Url $frontendUrl -TimeoutSeconds $frontendTimeout)) {
-            throw "Frontend did not become ready at $frontendUrl (check the On1y Frontend window)"
+    if ($Dev) {
+        if (-not $devFrontendUp) {
+            if (-not (Wait-ForHttpOk -Url "http://127.0.0.1:3000" -TimeoutSeconds 120)) {
+                throw "Frontend dev server did not become ready at http://127.0.0.1:3000"
+            }
         }
     }
-
-    if ($openBrowser) {
-        Start-Sleep -Milliseconds 400
-        Open-On1yBrowser -Url $frontendUrl
+    else {
+        if (-not (Wait-ForHttpOk -Url $backendUrl -TimeoutSeconds 60)) {
+            throw "Workbench UI not ready at $backendUrl (run scripts\build-frontend.ps1)"
+        }
     }
 
     if (-not $Quiet) {
         Write-Host ""
         Write-Host "On1y is ready."
-        Write-Host "  Open:     $frontendUrl"
-        Write-Host "  Backend:  $backendUrl"
-        Write-Host "  Stop:     powershell -ExecutionPolicy Bypass -File scripts\stop-on1y.ps1"
+        Write-Host "  Open:  $appUrl"
+        Write-Host "  Stop:  powershell -ExecutionPolicy Bypass -File scripts\stop-on1y.ps1"
+    }
+
+    if (-not $Dev) {
+        Start-Sleep -Milliseconds 400
+        $desktopExe = Get-On1yDesktopExe
+        if ($desktopExe) {
+            Start-Process -FilePath $desktopExe -WorkingDirectory $root | Out-Null
+        }
+        elseif ($openBrowser) {
+            Open-On1yBrowser -Url $appUrl
+        }
+    }
+    elseif ($openBrowser) {
+        Start-Sleep -Milliseconds 400
+        Open-On1yBrowser -Url $appUrl
     }
 }
 catch {
     Write-On1yStartLog -Message $_.Exception.Message
     Write-Host "ERROR: $($_.Exception.Message)" -ForegroundColor Red
     Write-Host "Log: $(Join-Path $root 'data\on1y-start.log')"
-  if (-not $Quiet) {
+    if (-not $Quiet) {
         Read-Host "Press Enter to close"
     }
     exit 1

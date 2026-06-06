@@ -1,10 +1,10 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "remote-frontend",
-  "description": "Allow the Next.js workbench on localhost to open external URLs",
+  "description": "Allow the workbench on on1y serve to open external URLs",
   "windows": ["main"],
   "remote": {
-    "urls": ["http://127.0.0.1:3000", "http://localhost:3000"]
+    "urls": ["http://127.0.0.1:8765", "http://localhost:8765"]
   },
   "permissions": [
     "opener:default",

@@ -44,11 +44,17 @@ class FeedConfig:
     url: str
     label: str
     enabled: bool = True
+    display_name: str | None = None
 
 
 def load_feeds(config_path: Path | None = None) -> list[FeedConfig]:
     settings = get_settings()
-    path = config_path or settings.rss_config_path
+    if config_path is None:
+        from on1y.user.feeds_config import resolve_feeds_config_path
+
+        path = resolve_feeds_config_path(settings)
+    else:
+        path = config_path
     if not path.is_file():
         raise ConfigurationError(
             f"RSS config not found: {path}. "
@@ -62,11 +68,13 @@ def load_feeds(config_path: Path | None = None) -> list[FeedConfig]:
     for entry in raw["feeds"]:
         if not isinstance(entry, dict) or "url" not in entry:
             continue
+        display_name = entry.get("display_name") or entry.get("uname")
         feeds.append(
             FeedConfig(
                 url=str(entry["url"]),
                 label=str(entry.get("label", entry["url"])),
                 enabled=bool(entry.get("enabled", True)),
+                display_name=str(display_name).strip() if display_name else None,
             )
         )
     return feeds

@@ -29,7 +29,7 @@ function AuthLoading(): JSX.Element {
 function BackendUnavailable(): JSX.Element {
   return (
     <div className="flex min-h-screen flex-col items-center justify-center gap-2 bg-neutral-50 px-6 text-center text-sm text-neutral-500">
-      <p>无法连接 On1y 后端（127.0.0.1:8765）。</p>
+      <p>无法连接 On1y 服务，请确认 on1y serve 已启动。</p>
       <p>请双击桌面 On1y 图标，或运行 scripts\start-on1y.cmd。</p>
     </div>
   );

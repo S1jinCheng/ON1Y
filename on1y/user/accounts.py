@@ -70,6 +70,19 @@ class UserStore:
         ).fetchall()
         return [int(r["id"]) for r in rows]
 
+    def list_users_public(self) -> list[UserRow]:
+        if not self._schema_has_users():
+            return []
+        rows = self._conn().execute(
+            """
+            SELECT id, username, email, display_name, is_active, created_at
+            FROM users
+            WHERE is_active = 1
+            ORDER BY username COLLATE NOCASE ASC
+            """
+        ).fetchall()
+        return [_row_to_user(row) for row in rows]
+
     def get_user_by_id(self, user_id: int) -> UserRow | None:
         if not self._schema_has_users():
             return None
@@ -124,14 +137,17 @@ class UserStore:
             if row is None:
                 raise RuntimeError("failed to create user")
             user = _row_to_user(row)
-            profile = _default_payload()
+            profile = _default_payload(user_id=user.id)
             profile["owner"] = name
             conn.execute(
                 """
                 INSERT INTO user_profiles (user_id, profile_json, updated_at)
                 VALUES (?, ?, datetime('now'))
                 """,
-                (user.id, json.dumps(_normalize_profile(profile), ensure_ascii=False)),
+                (
+                    user.id,
+                    json.dumps(_normalize_profile(profile, user_id=user.id), ensure_ascii=False),
+                ),
             )
             from on1y.subscriptions.settings import _empty_payload
 
@@ -308,8 +324,14 @@ def bootstrap_default_user(storage: Any, *, settings: Settings | None = None) ->
         return user
 
     legacy = migrate_legacy_files_to_user(1, settings=settings)
+    has_legacy = bool(legacy.get("profile") or legacy.get("subscription"))
     username = (settings.bootstrap_username or "admin").strip()
     password = (settings.bootstrap_password or "").strip()
+    if settings.auth_required and not password and not has_legacy:
+        logger.info(
+            "Skipping bootstrap user: set ON1Y_BOOTSTRAP_PASSWORD or register the first account"
+        )
+        return None
     if not password:
         import secrets
 
@@ -329,9 +351,12 @@ def bootstrap_default_user(storage: Any, *, settings: Settings | None = None) ->
             """,
             (username, email, hash_password(password), username),
         )
-        profile = _default_payload(settings)
+        profile = _default_payload(settings, user_id=1)
         if legacy.get("profile") and isinstance(legacy.get("profile_payload"), dict):
-            profile = _normalize_profile({**profile, **legacy["profile_payload"]})
+            profile = _normalize_profile(
+                {**profile, **legacy["profile_payload"]},
+                user_id=1,
+            )
         profile["owner"] = username
         from on1y.user.paths import COOKIE_PLATFORMS, user_cookie_path
 

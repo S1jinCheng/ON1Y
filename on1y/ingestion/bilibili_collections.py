@@ -17,7 +17,7 @@ from on1y.ingestion.bilibili_api import (
     iter_favlist_items,
 )
 from on1y.ingestion.enqueue import enqueue_url
-from on1y.models.enums import ExtractStatus, SourceType
+from on1y.models.enums import SourceType
 from on1y.ports.storage import StoragePort
 from on1y.utils.author_meta import author_meta_patch
 from on1y.utils.bilibili_url import bilibili_video_url, normalize_bilibili_url
@@ -63,7 +63,7 @@ def author_meta_from_media(media: dict[str, Any]) -> dict[str, str]:
 def _should_skip_url(storage: StoragePort, url: str) -> bool:
     normalized = normalize_bilibili_url(url)
     raw = storage.get_raw_by_url(normalized)
-    if raw is not None and raw.extract_status in (ExtractStatus.OK, ExtractStatus.PARTIAL):
+    if raw is not None:
         return True
     if hasattr(storage, "url_in_rss_queue"):
         return storage.url_in_rss_queue(normalized)
@@ -127,10 +127,18 @@ def backfill_bilibili_collections(
             }
             existing_streak = 0
             scanned = 0
+            from on1y.sync.progress import get_cold_start_progress
+
+            progress = get_cold_start_progress()
             for media in iter_favlist_items(folder_id, settings=settings, client=client):
                 scanned += 1
                 if scanned > max_scan_per_folder:
                     coll_stats["stopped_early"] = True
+                    progress and progress.log_step(
+                        phase="collections",
+                        title=f"收藏夹「{folder_name}」已达扫描上限",
+                        detail=f"已扫描 {max_scan_per_folder} 条（可在 .env 提高 COLLECTIONS_MAX_ITEMS_PER_SOURCE）",
+                    )
                     break
                 if int(media.get("type") or 2) != 2:
                     coll_stats["skipped_non_video"] += 1
@@ -170,12 +178,18 @@ def backfill_bilibili_collections(
                         report["skipped_duplicate_deleted"] += 1
                     continue
 
+                title = str(media.get("title") or url).strip()
                 if _should_skip_url(storage, url):
                     coll_stats["skipped_existing"] += 1
                     report["skipped_existing"] += 1
                     existing_streak += 1
                     if existing_streak >= early_stop_existing_streak:
                         coll_stats["stopped_early"] = True
+                        progress and progress.log_step(
+                            phase="collections",
+                            title=f"收藏夹「{folder_name}」连续命中已存在",
+                            detail=f"已连续跳过 {early_stop_existing_streak} 条，停止本夹扫描",
+                        )
                         break
                     continue
 
@@ -200,14 +214,25 @@ def backfill_bilibili_collections(
                 coll_stats["enqueued"] += 1
                 report["enqueued"] += 1
 
+            coll_stats["scanned_api"] = scanned
             logger.info(
-                "Bilibili folder %s (%s): total=%s enqueued=%s skip=%s dup=%s",
+                "Bilibili folder %s (%s): scanned=%s total=%s enqueued=%s skip=%s dup=%s stopped_early=%s",
                 folder_name,
                 folder_id,
+                scanned,
                 coll_stats["total"],
                 coll_stats["enqueued"],
                 coll_stats["skipped_existing"],
                 coll_stats["skipped_duplicate"],
+                coll_stats["stopped_early"],
+            )
+            progress and progress.log_step(
+                phase="collections",
+                title=f"收藏夹「{folder_name}」扫描完成",
+                detail=(
+                    f"API {scanned} 条 · 视频 {coll_stats['total']} · "
+                    f"新入队 {coll_stats['enqueued']} · 跳过 {coll_stats['skipped_existing']}"
+                ),
             )
             report["folders"].append(coll_stats)
 

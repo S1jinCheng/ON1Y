@@ -29,6 +29,7 @@ def distill_batch_status() -> dict[str, Any]:
 
 def start_distill_batch_job(
     *,
+    user_id: int | None = None,
     platform: str | None = "bilibili",
     batch_size: int = 10,
     max_items: int = 500,
@@ -45,6 +46,7 @@ def start_distill_batch_job(
                 "running": True,
                 "started_at": datetime.now(timezone.utc).isoformat(),
                 "finished_at": None,
+                "user_id": user_id,
                 "platform": platform,
                 "distilled": 0,
                 "failed": 0,
@@ -55,6 +57,7 @@ def start_distill_batch_job(
 
     def _run() -> None:
         from on1y.adapters.sqlite_storage import get_storage
+        from on1y.auth.context import user_context
         from on1y.distill.processor import run_distill_batch
         from on1y.distill.prompts import PROMPT_VERSION
 
@@ -62,27 +65,34 @@ def start_distill_batch_job(
         storage = get_storage()
         total_distilled = 0
         total_failed = 0
+        uid = user_id if user_id is not None else 1
         try:
-            while total_distilled + total_failed < max_items:
-                remaining = storage.count_raw_ids_needing_distill(
-                    prompt_version=PROMPT_VERSION,
-                    platform=platform,
-                )
-                with _lock:
-                    _state["remaining"] = remaining
-                if remaining <= 0:
-                    break
-                limit = min(batch_size, max_items - total_distilled - total_failed, remaining)
-                result = run_distill_batch(storage, limit, platform=platform)
-                total_distilled += int(result.get("distilled", 0))
-                total_failed += int(result.get("failed", 0))
-                with _lock:
-                    _state["distilled"] = total_distilled
-                    _state["failed"] = total_failed
-                if result.get("distilled", 0) == 0 and result.get("failed", 0) == 0:
-                    break
+            with user_context(uid):
+                while total_distilled + total_failed < max_items:
+                    remaining = storage.count_raw_ids_needing_distill(
+                        prompt_version=PROMPT_VERSION,
+                        platform=platform,
+                    )
+                    with _lock:
+                        _state["remaining"] = remaining
+                    if remaining <= 0:
+                        break
+                    limit = min(
+                        batch_size,
+                        max_items - total_distilled - total_failed,
+                        remaining,
+                    )
+                    result = run_distill_batch(storage, limit, platform=platform)
+                    total_distilled += int(result.get("distilled", 0))
+                    total_failed += int(result.get("failed", 0))
+                    with _lock:
+                        _state["distilled"] = total_distilled
+                        _state["failed"] = total_failed
+                    if result.get("distilled", 0) == 0 and result.get("failed", 0) == 0:
+                        break
             logger.info(
-                "Background distill batch finished platform=%s distilled=%s failed=%s",
+                "Background distill batch finished user=%s platform=%s distilled=%s failed=%s",
+                uid,
                 platform,
                 total_distilled,
                 total_failed,

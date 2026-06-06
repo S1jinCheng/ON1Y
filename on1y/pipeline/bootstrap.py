@@ -16,6 +16,7 @@ from on1y.ingestion.zhihu_follow_list import (
 )
 from on1y.pipeline.catchup import run_catchup
 from on1y.pipeline.zhihu_catchup import run_zhihu_catchup
+from on1y.user.feeds_config import resolve_feeds_config_path
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +70,7 @@ def run_bootstrap(
         follows = follows_from_file(follows_path)
         feed_count = merge_zhihu_feeds_yaml(
             follows,
-            feeds_path=settings.rss_config_path,
+            feeds_path=resolve_feeds_config_path(settings),
             rsshub_base=settings.zhihu_rsshub_base,
             enabled=True,
             dry_run=False,

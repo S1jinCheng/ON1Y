@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from on1y.config import PROJECT_ROOT, Settings, get_settings
+from on1y.user.feeds_config import resolve_feeds_config_path
 from on1y.ingestion.youtube_feeds import (
     DEFAULT_CHANNELS_FILE,
     channels_from_file,
@@ -54,7 +55,7 @@ def refresh_youtube_feeds(
 
     count = merge_youtube_feeds_yaml(
         channels,
-        feeds_path=settings.rss_config_path,
+        feeds_path=resolve_feeds_config_path(settings),
         enabled=True,
         dry_run=dry_run,
     )
@@ -81,7 +82,7 @@ def refresh_zhihu_follow_feeds(
     follows = follows_from_file(path)
     count = merge_zhihu_feeds_yaml(
         follows,
-        feeds_path=settings.rss_config_path,
+        feeds_path=resolve_feeds_config_path(settings),
         rsshub_base=settings.zhihu_rsshub_base,
         enabled=True,
         dry_run=dry_run,

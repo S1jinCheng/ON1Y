@@ -55,6 +55,7 @@ def merge_bilibili_up_feeds_yaml(
             {
                 "url": build_feed_url(rsshub_base, mid),
                 "label": slug_label(mid, uname),
+                "display_name": uname,
                 "enabled": enabled,
             }
         )

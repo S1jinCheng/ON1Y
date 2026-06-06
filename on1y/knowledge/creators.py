@@ -12,6 +12,7 @@ _ZHIHU_PERSON_FEED_RE = re.compile(r"^zhihu-(?:activities|answers)-(.+)$")
 _ZHIHU_COLLECTION_FEED_RE = re.compile(r"^zhihu-collection-(\d+)$")
 _ZHIHU_PEOPLE_URL_RE = re.compile(r"/people/(?:activities|answers)/([^/?#]+)")
 _ZHIHU_COLLECTION_URL_RE = re.compile(r"/collection/(\d+)")
+_BILI_UP_FEED_URL_RE = re.compile(r"/bilibili/user/video/(\d+)")
 
 
 def is_subscription_feed(label: str) -> bool:
@@ -153,6 +154,33 @@ def _label_display_hint(label: str) -> str:
             slug = label[len(prefix) :].replace("-", " ")
             return slug.title()
     return label
+
+
+def bilibili_following_groups() -> dict[str, dict[str, Any]]:
+    """All followed Bilibili UPs from feeds.yaml (bili-up-*), including those with no items yet."""
+    from on1y.ingestion.bilibili_feeds import BILI_UP_FEED_LABEL_PREFIX
+
+    groups: dict[str, dict[str, Any]] = {}
+    for feed in load_feeds():
+        if not feed.enabled or not feed.label.startswith(BILI_UP_FEED_LABEL_PREFIX):
+            continue
+        match = _BILI_UP_FEED_URL_RE.search(feed.url)
+        if not match:
+            continue
+        up_mid = match.group(1)
+        author_url = f"https://space.bilibili.com/{up_mid}"
+        key = f"bili:{author_url}"
+        name = str(feed.display_name or "").strip() or _label_display_hint(feed.label)
+        groups[key] = {
+            "key": key,
+            "platform": "bilibili",
+            "feed_labels": [feed.label],
+            "name_hint": name,
+            "author_url": author_url,
+            "up_mid": up_mid,
+            "subscribed": True,
+        }
+    return groups
 
 
 def subscription_feed_groups() -> dict[str, dict[str, Any]]:

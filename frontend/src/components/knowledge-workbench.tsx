@@ -21,6 +21,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 
+import { ColdStartFloatingPanel } from "@/components/cold-start-floating-panel";
+import { ColdStartOnboarding } from "@/components/cold-start-onboarding";
 import { FeedItemCard } from "@/components/feed-item-card";
 import { ThemeMovePopover } from "@/components/theme-move-popover";
 import { NotesPanel } from "@/components/notes-panel";
@@ -41,6 +43,9 @@ import {
   runHotlistSync,
   getCollectionCounts,
   getCreators,
+  getFullSyncStatus,
+  runFullSync,
+  type FullSyncStatus,
   economistEpubDownloadUrl,
   getEconomistWeeks,
   getKnowledgeItems,
@@ -83,7 +88,6 @@ import type { Locale } from "@/lib/i18n";
 function filterValue(value: string): string | undefined {
   return value === ALL_FILTER || value === "" ? undefined : value;
 }
-
 
 function FilterSelect(props: {
   placeholder: string;
@@ -231,6 +235,8 @@ export default function KnowledgeWorkbench(): JSX.Element {
   const [active, setActive] = useState<KnowledgeItem | undefined>(undefined);
   const [reader, setReader] = useState<ReaderContent | undefined>(undefined);
   const [loading, setLoading] = useState<boolean>(false);
+  const [coldStartOnboardingOpen, setColdStartOnboardingOpen] = useState(false);
+  const [coldStartStatus, setColdStartStatus] = useState<FullSyncStatus | null>(null);
   const [message, setMessage] = useState<string>("");
   const [tagList, setTagList] = useState<string[]>([]);
   const [relatedItems, setRelatedItems] = useState<KnowledgeItem[]>([]);
@@ -599,10 +605,96 @@ export default function KnowledgeWorkbench(): JSX.Element {
       });
   }
 
+  const startColdStartJob = useCallback(async (): Promise<void> => {
+    try {
+      const result = await runFullSync();
+      if (!result.started && result.message) {
+        setMessage(result.message);
+      }
+      const status = await getFullSyncStatus();
+      setColdStartStatus(status);
+      if (status.error) {
+        setMessage(status.error);
+      }
+      try {
+        sessionStorage.removeItem("on1y-cold-start-panel-dismissed");
+      } catch {
+        /* ignore */
+      }
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : String(err));
+    }
+  }, []);
+
   useEffect(() => {
     void refreshData();
+    void (async () => {
+      try {
+        const [status, profile] = await Promise.all([getFullSyncStatus(), getUserProfile()]);
+        setColdStartStatus(status);
+        if (status.error) {
+          setMessage(status.error);
+        }
+        let autoStart = false;
+        try {
+          autoStart = sessionStorage.getItem("on1y-auto-cold-start") === "1";
+          if (autoStart) {
+            sessionStorage.removeItem("on1y-auto-cold-start");
+          }
+        } catch {
+          /* ignore */
+        }
+        if (autoStart && !status.running && !status.active) {
+          await startColdStartJob();
+        } else if (!status.running && !status.active) {
+          const cold = profile.cold_start;
+          if (!cold?.onboarding_dismissed && !cold?.last_completed_at) {
+            setColdStartOnboardingOpen(true);
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [locale]);
+  }, [locale, startColdStartJob]);
+
+  const coldStartActive =
+    Boolean(coldStartStatus?.active) ||
+    Boolean(coldStartStatus?.running) ||
+    Boolean(coldStartStatus?.background_distill?.running);
+
+  useEffect(() => {
+    if (!coldStartActive) {
+      return;
+    }
+    const poll = async (): Promise<void> => {
+      try {
+        const status = await getFullSyncStatus();
+        setColdStartStatus(status);
+        if (status.error) {
+          setMessage(status.error);
+        }
+        const [itemResp, taxonomy, creatorsResp] = await Promise.all([
+          getKnowledgeItems(buildItemsQuery(0, INITIAL_FEED_BATCH)),
+          getTaxonomy(locale),
+          getCreators({ enrichAvatars: false })
+        ]);
+        setItems(itemResp.items);
+        setItemTotal(itemResp.total ?? itemResp.count);
+        setThemes(taxonomy.themes);
+        setDynamicTags(taxonomy.tags);
+        setCreators(creatorsResp.creators);
+      } catch {
+        /* background poll */
+      }
+    };
+    const timer = window.setInterval(() => {
+      void poll();
+    }, 4000);
+    return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [coldStartActive, locale]);
 
   const feedFiltersReadyRef = useRef(false);
   useEffect(() => {
@@ -972,6 +1064,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
   };
 
   return (
+    <>
     <div className="flex h-screen w-full flex-col bg-white text-black">
       <div className="shrink-0 border-b border-border bg-white px-4 py-3">
         <div className="mb-2 flex items-center justify-between">
@@ -1716,5 +1809,16 @@ export default function KnowledgeWorkbench(): JSX.Element {
         </PanelGroup>
       )}
     </div>
+    <ColdStartFloatingPanel locale={locale} status={coldStartStatus} />
+    <ColdStartOnboarding
+      locale={locale}
+      open={coldStartOnboardingOpen}
+      onClose={() => setColdStartOnboardingOpen(false)}
+      onStart={() => {
+        setColdStartOnboardingOpen(false);
+        void startColdStartJob();
+      }}
+    />
+    </>
   );
 }

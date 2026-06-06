@@ -65,3 +65,7 @@ config/local.yaml
 # Temporary files
 tmp/
 *.tmp
+
+# Frontend build output
+frontend/.next/
+frontend/out/

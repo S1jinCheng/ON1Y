@@ -23,4 +23,23 @@ def enqueue_url(
     item = QueueEnqueue(url=normalize_url(url), source=source, source_meta=source_meta or {})
     pending_id = storage.enqueue(item)
     logger.info("Enqueued url=%s source=%s id=%s", item.url_str(), source.value, pending_id)
+    from on1y.sync.progress import get_cold_start_progress
+
+    progress = get_cold_start_progress()
+    if progress is not None:
+        meta = source_meta or {}
+        title = str(meta.get("entry_title") or meta.get("title") or item.url_str()).strip()
+        platform = str(meta.get("platform") or "").strip() or None
+        if not platform:
+            from on1y.utils.platform import detect_platform
+
+            platform = detect_platform(item.url_str())
+        progress.log_item(
+            phase=progress.phase or "collections",
+            title=title,
+            platform=platform,
+            status="enqueued",
+            url=item.url_str(),
+            detail=str(meta.get("feed_label") or meta.get("folder_name") or "").strip() or None,
+        )
     return pending_id

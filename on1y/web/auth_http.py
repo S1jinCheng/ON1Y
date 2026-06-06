@@ -116,6 +116,20 @@ def register_auth_routes(app: Any) -> None:
         finally:
             storage.close()
 
+    @app.get("/api/auth/users")
+    def auth_list_users() -> dict[str, Any]:
+        from on1y.adapters.sqlite_storage import get_storage
+
+        storage = get_storage()
+        try:
+            if storage._current_schema_version(storage._connect()) < 9:
+                return {"users": [], "multi_user": False}
+            store = UserStore(storage)
+            users = [user_public_dict(u) for u in store.list_users_public()]
+            return {"users": users, "multi_user": len(users) > 1}
+        finally:
+            storage.close()
+
     @app.get("/api/auth/me")
     def auth_me(credentials: HTTPAuthorizationCredentials | None = Depends(_bearer)) -> dict[str, Any]:
         settings = get_settings()

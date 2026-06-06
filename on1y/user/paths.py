@@ -33,3 +33,7 @@ def user_economist_cache_dir(user_id: int) -> Path:
     path = user_dir(user_id) / "economist"
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def user_feeds_path(user_id: int) -> Path:
+    return user_dir(user_id) / "feeds.yaml"

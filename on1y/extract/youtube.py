@@ -9,6 +9,7 @@ from pathlib import Path
 import yt_dlp
 
 from on1y.config import get_settings
+from on1y.cookies.loader import resolve_cookie_path
 from on1y.extract.base import BaseExtractor
 from on1y.extract.subtitles import build_video_body, collect_bilingual_subtitles, yt_dlp_subtitle_request_langs
 from on1y.extract.ytdlp_meta import video_metadata_from_info
@@ -51,7 +52,7 @@ class YouTubeExtractor(BaseExtractor):
     def fetch_metadata(self, url: str) -> VideoMetadata:
         settings = get_settings()
         opts = build_ytdlp_opts(
-            cookie_path=settings.youtube_cookies_path,
+            cookie_path=resolve_cookie_path("youtube", settings),
             ignore_no_formats_error=True,
         )
         try:
@@ -73,7 +74,7 @@ class YouTubeExtractor(BaseExtractor):
         with tempfile.TemporaryDirectory(prefix="on1y_yt_sub_") as tmp:
             outtmpl = str(Path(tmp) / "%(id)s")
             sub_opts = build_ytdlp_opts(
-                cookie_path=settings.youtube_cookies_path,
+                cookie_path=resolve_cookie_path("youtube", settings),
                 writesubtitles=True,
                 writeautomaticsub=True,
                 subtitleslangs=langs,
