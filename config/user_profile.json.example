@@ -1,6 +1,10 @@
 {
   "version": 1,
   "owner": "default",
+  "app": {
+    "locale": "zh",
+    "open_browser_on_start": true
+  },
   "kindle": {
     "enabled": true,
     "send_to": "chengsijin81_waEOnP@kindle.com"

@@ -17,7 +17,7 @@ import {
   X
 } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 
@@ -58,6 +58,7 @@ import {
   translateItemTranscript,
   uploadDocument
 } from "@/lib/api";
+import { handleExternalLinkClick } from "@/lib/open-external";
 import { t, type UiKey } from "@/lib/i18n";
 import { platformLabel } from "@/lib/platform-label";
 import {
@@ -68,6 +69,8 @@ import {
   type ThemeRow
 } from "@/lib/types";
 import { sortKnowledgeItems, sortOptionsForUi } from "@/lib/sort-knowledge-items";
+import { getUserProfile, patchUserProfile } from "@/lib/api";
+import { loadStoredLocale, persistStoredLocale } from "@/lib/locale-preference";
 import { todayIsoDate } from "@/lib/today-iso-date";
 import {
   ALL_FILTER,
@@ -75,6 +78,7 @@ import {
   type KnowledgeCollection,
   useKnowledgeFilterStore
 } from "@/store/knowledge-store";
+import type { Locale } from "@/lib/i18n";
 
 function filterValue(value: string): string | undefined {
   return value === ALL_FILTER || value === "" ? undefined : value;
@@ -131,8 +135,10 @@ function ColumnScroll(props: {
   );
 }
 
-/** Per-request batch size (API max 200); scroll loads more until exhausted. */
-const FEED_BATCH_SIZE = 200;
+/** First paint: small batch from local DB for fast list display. */
+const INITIAL_FEED_BATCH = 40;
+/** Scroll pagination batch size (API max 200). */
+const FEED_BATCH_SIZE = 80;
 
 function resolveCover(item: {
   cover_image?: string;
@@ -292,9 +298,28 @@ export default function KnowledgeWorkbench(): JSX.Element {
     displayItems.length > 0 &&
     displayItems.every((item) => selectedIds.has(item.raw_id));
 
+  const applyLocale = useCallback((next: Locale) => {
+    setLocale(next);
+    persistStoredLocale(next);
+    void patchUserProfile({ locale: next }).catch(() => {
+      /* offline or backend starting */
+    });
+  }, [setLocale]);
+
   useEffect(() => {
     hydrateKnowledgeSortMode();
-  }, []);
+    const stored = loadStoredLocale();
+    setLocale(stored);
+    void getUserProfile()
+      .then((profile) => {
+        const fromProfile = profile.app?.locale === "en" ? "en" : "zh";
+        setLocale(fromProfile);
+        persistStoredLocale(fromProfile);
+      })
+      .catch(() => {
+        /* use localStorage default */
+      });
+  }, [setLocale]);
 
   useEffect(() => {
     if (!isHotlist || hotlistSource !== "economist") {
@@ -427,7 +452,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
         : undefined
   } as const;
 
-  function buildItemsQuery(offset: number) {
+  function buildItemsQuery(offset: number, limit = FEED_BATCH_SIZE) {
     return {
       locale,
       themeId: selectedThemeId,
@@ -439,7 +464,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
       collection,
       hotlistDate: isHotlist ? hotlistDate : undefined,
       hotlistSource: isHotlist ? hotlistSource : undefined,
-      limit: FEED_BATCH_SIZE,
+      limit,
       offset
     };
   }
@@ -519,7 +544,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
       setActive(next);
       setTagList(next.tags.map((tg) => tg.name));
       if (options?.loadReader !== false && !stillExists) {
-        await loadReader(next.raw_id);
+        void loadReader(next.raw_id);
       }
     } else {
       setActive(undefined);
@@ -548,24 +573,30 @@ export default function KnowledgeWorkbench(): JSX.Element {
     loadingMoreRef.current = false;
     setLoadingMore(false);
     try {
-      const [taxonomy, creatorsResp, itemResp, counts] = await Promise.all([
+      const [taxonomy, itemResp] = await Promise.all([
         getTaxonomy(locale),
-        getCreators(),
-        getKnowledgeItems(buildItemsQuery(0)),
-        getCollectionCounts(
-          isHotlist ? { hotlistDate, hotlistSource } : undefined
-        )
+        getKnowledgeItems(buildItemsQuery(0, INITIAL_FEED_BATCH))
       ]);
       setThemes(taxonomy.themes);
-      setCreators(creatorsResp.creators);
       setDynamicTags(taxonomy.tags);
-      setCollectionCounts(counts);
       await applyItemResponse(itemResp);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "load failed");
     } finally {
       setLoading(false);
     }
+
+    void Promise.all([
+      getCreators({ enrichAvatars: false }),
+      getCollectionCounts(isHotlist ? { hotlistDate, hotlistSource } : undefined)
+    ])
+      .then(([creatorsResp, counts]) => {
+        setCreators(creatorsResp.creators);
+        setCollectionCounts(counts);
+      })
+      .catch(() => {
+        /* sidebar badges can load later */
+      });
   }
 
   useEffect(() => {
@@ -949,14 +980,14 @@ export default function KnowledgeWorkbench(): JSX.Element {
             <div className="inline-flex overflow-hidden rounded-md border border-border text-xs">
               <button
                 type="button"
-                onClick={() => setLocale("zh")}
+                onClick={() => applyLocale("zh")}
                 className={`px-2.5 py-1.5 ${locale === "zh" ? "bg-black text-white" : "bg-white"}`}
               >
                 {ui("langZh")}
               </button>
               <button
                 type="button"
-                onClick={() => setLocale("en")}
+                onClick={() => applyLocale("en")}
                 className={`px-2.5 py-1.5 ${locale === "en" ? "bg-black text-white" : "bg-white"}`}
               >
                 {ui("langEn")}
@@ -978,7 +1009,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
               <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
               {ui("refresh")}
             </button>
-            <AccountMenu locale={locale} onMessage={setMessage} />
+            <AccountMenu locale={locale} onLocaleChange={applyLocale} onMessage={setMessage} />
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -1032,6 +1063,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
                     href={active.url}
                     target="_blank"
                     rel="noreferrer"
+                    onClick={(e) => handleExternalLinkClick(e, active.url)}
                     className="inline-flex items-center gap-1 hover:text-black hover:underline"
                   >
                     {ui("openLink")}
@@ -1532,6 +1564,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
                           href={active.url}
                           target="_blank"
                           rel="noreferrer"
+                          onClick={(e) => handleExternalLinkClick(e, active.url)}
                           className="block overflow-hidden rounded-lg border border-border bg-panel"
                         >
                           <img
@@ -1560,6 +1593,9 @@ export default function KnowledgeWorkbench(): JSX.Element {
                           href={reader?.author_url ?? active.author_url}
                           target="_blank"
                           rel="noreferrer"
+                          onClick={(e) =>
+                            handleExternalLinkClick(e, reader?.author_url ?? active.author_url)
+                          }
                           className="truncate text-sm font-medium text-neutral-800 underline-offset-2 hover:text-black hover:underline"
                         >
                           {(reader?.author ?? active.author).trim() || ui("unknownAuthor")}
@@ -1602,6 +1638,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
                         href={active.url}
                         target="_blank"
                         rel="noreferrer"
+                        onClick={(e) => handleExternalLinkClick(e, active.url)}
                         className="inline-flex items-center gap-1 text-xs text-neutral-700 underline-offset-2 hover:text-black hover:underline"
                       >
                         {ui("openLink")}

@@ -9,7 +9,7 @@ from typing import Any, Iterator
 import httpx
 
 from on1y.config import Settings, get_settings
-from on1y.cookies.loader import extract_cookie_list, load_cookie_file
+from on1y.cookies.loader import extract_cookie_list, load_cookie_file, resolve_cookie_path
 from on1y.exceptions import ConfigurationError
 
 logger = logging.getLogger(__name__)
@@ -61,7 +61,7 @@ def fetch_bilibili_me(
     client: httpx.Client | None = None,
 ) -> dict[str, Any]:
     settings = settings or get_settings()
-    path = cookie_path or settings.bilibili_cookies_path
+    path = cookie_path or resolve_cookie_path("bilibili", settings)
     jar = _cookie_jar(path)
     if not jar.get("SESSDATA"):
         raise ConfigurationError(f"No bilibili.com SESSDATA cookie in {path}")
@@ -101,7 +101,7 @@ def fetch_bilibili_favlists(
     me = fetch_bilibili_me(cookie_path=cookie_path, settings=settings, client=client)
     mid = str(up_mid or me["mid"])
 
-    path = cookie_path or settings.bilibili_cookies_path
+    path = cookie_path or resolve_cookie_path("bilibili", settings)
     jar = _cookie_jar(path)
     own_client = client is None
     if own_client:
@@ -146,7 +146,7 @@ def iter_favlist_items(
     client: httpx.Client | None = None,
 ) -> Iterator[dict[str, Any]]:
     settings = settings or get_settings()
-    path = cookie_path or settings.bilibili_cookies_path
+    path = cookie_path or resolve_cookie_path("bilibili", settings)
     jar = _cookie_jar(path)
     own_client = client is None
     if own_client:
@@ -192,7 +192,7 @@ def fetch_bilibili_followings(
     me = fetch_bilibili_me(cookie_path=cookie_path, settings=settings, client=client)
     target_mid = str(vmid or me["mid"])
 
-    path = cookie_path or settings.bilibili_cookies_path
+    path = cookie_path or resolve_cookie_path("bilibili", settings)
     jar = _cookie_jar(path)
     own_client = client is None
     if own_client:
@@ -257,7 +257,7 @@ def fetch_bilibili_up_face(
     if not up_mid:
         return ""
     settings = settings or get_settings()
-    path = cookie_path or settings.bilibili_cookies_path
+    path = cookie_path or resolve_cookie_path("bilibili", settings)
     jar = _cookie_jar(path)
     own_client = client is None
     if own_client:
@@ -298,7 +298,7 @@ def iter_up_recent_videos(
     are yielded. Pagination stops once an older video is seen.
     """
     settings = settings or get_settings()
-    path = cookie_path or settings.bilibili_cookies_path
+    path = cookie_path or resolve_cookie_path("bilibili", settings)
     jar = _cookie_jar(path)
     own_client = client is None
     if own_client:
@@ -462,7 +462,7 @@ def iter_dynamic_video_feed(
     Uses ``type=video`` and drops 图文/专栏/广告等非投稿视频动态。
     """
     settings = settings or get_settings()
-    path = cookie_path or settings.bilibili_cookies_path
+    path = cookie_path or resolve_cookie_path("bilibili", settings)
     jar = _cookie_jar(path)
     own_client = client is None
     if own_client:

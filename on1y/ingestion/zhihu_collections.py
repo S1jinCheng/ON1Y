@@ -129,6 +129,8 @@ def backfill_zhihu_collections(
     collection_ids: list[str] | None = None,
     include_pins: bool = False,
     dry_run: bool = False,
+    max_scan_per_collection: int = 120,
+    early_stop_existing_streak: int = 20,
     settings: Settings | None = None,
 ) -> dict[str, Any]:
     """
@@ -171,8 +173,15 @@ def backfill_zhihu_collections(
                 "skipped_existing": 0,
                 "skipped_unsupported": 0,
                 "skipped_duplicate": 0,
+                "stopped_early": False,
             }
+            existing_streak = 0
+            scanned = 0
             for item in items:
+                scanned += 1
+                if scanned > max_scan_per_collection:
+                    coll_stats["stopped_early"] = True
+                    break
                 content_type = item["content_type"]
                 url = item["url"]
                 if content_type not in SUPPORTED_CONTENT_TYPES and not (
@@ -188,7 +197,12 @@ def backfill_zhihu_collections(
                 if _should_skip_url(storage, url):
                     coll_stats["skipped_existing"] += 1
                     report["skipped_existing"] += 1
+                    existing_streak += 1
+                    if existing_streak >= early_stop_existing_streak:
+                        coll_stats["stopped_early"] = True
+                        break
                     continue
+                existing_streak = 0
                 if dry_run:
                     coll_stats["enqueued"] += 1
                     report["enqueued"] += 1

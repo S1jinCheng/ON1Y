@@ -41,7 +41,10 @@ def stop_auto_sync_loop() -> None:
     _stop.set()
 
 
-def _run_auto_sync_tick() -> None:
+_first_startup_tick = True
+
+
+def _run_auto_sync_tick(*, poll_only: bool = False) -> None:
     from on1y.auth.context import user_context
     from on1y.config import get_settings
     from on1y.subscriptions.sync_job import run_subscription_sync_blocking
@@ -56,15 +59,21 @@ def _run_auto_sync_tick() -> None:
     finally:
         storage.close()
 
+    ingest = settings.auto_sync_ingest and not poll_only
+    subtitle_limit = 0 if poll_only else settings.auto_sync_subtitle_limit
+    distill_limit = 0 if poll_only else settings.auto_sync_distill_limit
+    if poll_only:
+        logger.info("Auto sync startup tick: poll only (no ingest)")
+
     for uid in user_ids:
         with user_context(uid):
             report = run_subscription_sync_blocking(
                 platform=settings.auto_sync_platform,
                 backfill=False,
-                ingest=settings.auto_sync_ingest,
+                ingest=ingest,
                 ingest_limit=settings.auto_sync_ingest_limit,
-                subtitle_limit=settings.auto_sync_subtitle_limit,
-                distill_limit=settings.auto_sync_distill_limit,
+                subtitle_limit=subtitle_limit,
+                distill_limit=distill_limit,
             )
             if report is None:
                 logger.debug("Auto sync skipped for user %s: another sync running", uid)
@@ -73,13 +82,24 @@ def _run_auto_sync_tick() -> None:
 
 
 def _loop() -> None:
+    global _first_startup_tick
     from on1y.config import get_settings
+
+    settings = get_settings()
+    delay = settings.auto_sync_startup_delay_seconds
+    if delay > 0:
+        logger.info("Auto sync: waiting %ss before first tick (startup grace)", delay)
+        if _stop.wait(timeout=delay):
+            return
 
     while not _stop.is_set():
         try:
-            _run_auto_sync_tick()
+            poll_only = _first_startup_tick and settings.auto_sync_startup_poll_only
+            _run_auto_sync_tick(poll_only=poll_only)
         except Exception:
             logger.exception("Auto subscription sync tick failed")
+        finally:
+            _first_startup_tick = False
 
         settings = get_settings()
         interval = settings.auto_sync_interval_minutes * 60

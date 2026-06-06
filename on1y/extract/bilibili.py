@@ -9,6 +9,7 @@ from pathlib import Path
 import yt_dlp
 
 from on1y.config import get_settings
+from on1y.cookies.loader import resolve_cookie_path
 from on1y.extract.base import BaseExtractor
 from on1y.extract.subtitles import (
     build_video_body,
@@ -66,7 +67,7 @@ class BilibiliExtractor(BaseExtractor):
     def fetch_metadata(self, url: str) -> VideoMetadata:
         settings = get_settings()
         opts = build_ytdlp_opts(
-            cookie_path=settings.bilibili_cookies_path,
+            cookie_path=resolve_cookie_path("bilibili", settings),
             ignore_no_formats_error=True,
         )
         try:
@@ -99,7 +100,7 @@ class BilibiliExtractor(BaseExtractor):
         with tempfile.TemporaryDirectory(prefix="on1y_bili_sub_") as tmp:
             outtmpl = str(Path(tmp) / "%(id)s")
             sub_opts = build_ytdlp_opts(
-                cookie_path=settings.bilibili_cookies_path,
+                cookie_path=resolve_cookie_path("bilibili", settings),
                 writesubtitles=True,
                 writeautomaticsub=True,
                 subtitleslangs=langs,

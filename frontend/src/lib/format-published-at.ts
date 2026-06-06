@@ -1,14 +1,41 @@
 import type { Locale } from "@/lib/types";
 
+function parseDateInput(value: string): Date | null {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(trimmed)
+    ? new Date(`${trimmed}T12:00:00`)
+    : new Date(trimmed);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+export function formatCalendarDate(value: string | null | undefined, locale: Locale): string | null {
+  if (!value?.trim()) {
+    return null;
+  }
+  const date = parseDateInput(value);
+  if (!date) {
+    return null;
+  }
+  return new Intl.DateTimeFormat(locale === "zh" ? "zh-CN" : "en-US", {
+    year: "numeric",
+    month: "numeric",
+    day: "numeric"
+  }).format(date);
+}
+
 export function formatPublishedAt(value: string | null | undefined, locale: Locale): string | null {
   if (!value?.trim()) {
     return null;
   }
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
+  const date = parseDateInput(value);
+  if (!date) {
     return null;
   }
   return new Intl.DateTimeFormat(locale === "zh" ? "zh-CN" : "en-US", {
+    year: "numeric",
     month: "numeric",
     day: "numeric",
     hour: "2-digit",
@@ -54,14 +81,7 @@ export function formatHotlistMetaLine(props: {
   let when: string | null = null;
   const snap = props.snapshotDate?.trim();
   if (snap) {
-    const day = /^\d{4}-\d{2}-\d{2}$/.test(snap) ? new Date(`${snap}T12:00:00`) : new Date(snap);
-    if (!Number.isNaN(day.getTime())) {
-      when = new Intl.DateTimeFormat(props.locale === "zh" ? "zh-CN" : "en-US", {
-        year: "numeric",
-        month: "numeric",
-        day: "numeric"
-      }).format(day);
-    }
+    when = formatCalendarDate(snap, props.locale);
   }
   if (!when) {
     when = formatPublishedAt(props.ingestedAt, props.locale);

@@ -8,6 +8,7 @@ from typing import Any
 import httpx
 
 from on1y.config import Settings, get_settings
+from on1y.cookies.loader import resolve_cookie_path
 from on1y.exceptions import ConfigurationError
 from on1y.ingestion.bilibili_api import (
     DEFAULT_HEADERS,
@@ -74,6 +75,8 @@ def backfill_bilibili_collections(
     *,
     folder_ids: list[str] | None = None,
     dry_run: bool = False,
+    max_scan_per_folder: int = 120,
+    early_stop_existing_streak: int = 20,
     settings: Settings | None = None,
 ) -> dict[str, Any]:
     """Enqueue all videos from the user's Bilibili 收藏夹 (or selected folder IDs)."""
@@ -85,7 +88,7 @@ def backfill_bilibili_collections(
         if not favlists:
             raise ConfigurationError(f"No matching Bilibili favlists for ids: {sorted(wanted)}")
 
-    path = settings.bilibili_cookies_path
+    path = resolve_cookie_path("bilibili", settings)
     jar = _cookie_jar(path)
     if not jar.get("SESSDATA"):
         raise ConfigurationError(f"No bilibili.com cookies in {path}")
@@ -120,8 +123,15 @@ def backfill_bilibili_collections(
                 "skipped_duplicate_deleted": 0,
                 "skipped_non_video": 0,
                 "skipped_duplicate_cross_folder": 0,
+                "stopped_early": False,
             }
+            existing_streak = 0
+            scanned = 0
             for media in iter_favlist_items(folder_id, settings=settings, client=client):
+                scanned += 1
+                if scanned > max_scan_per_folder:
+                    coll_stats["stopped_early"] = True
+                    break
                 if int(media.get("type") or 2) != 2:
                     coll_stats["skipped_non_video"] += 1
                     report["skipped_non_video"] += 1
@@ -163,8 +173,13 @@ def backfill_bilibili_collections(
                 if _should_skip_url(storage, url):
                     coll_stats["skipped_existing"] += 1
                     report["skipped_existing"] += 1
+                    existing_streak += 1
+                    if existing_streak >= early_stop_existing_streak:
+                        coll_stats["stopped_early"] = True
+                        break
                     continue
 
+                existing_streak = 0
                 if dry_run:
                     coll_stats["enqueued"] += 1
                     report["enqueued"] += 1

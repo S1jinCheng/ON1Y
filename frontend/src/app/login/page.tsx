@@ -1,18 +1,31 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
-import { login, register } from "@/lib/api";
+import { fetchAuthStatus, login, register } from "@/lib/api";
 
 export default function LoginPage(): JSX.Element {
   const router = useRouter();
   const [mode, setMode] = useState<"login" | "register">("login");
+  const [checking, setChecking] = useState(true);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [email, setEmail] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    void fetchAuthStatus()
+      .then((status) => {
+        if (!status.auth_required) {
+          router.replace("/");
+        }
+      })
+      .finally(() => {
+        setChecking(false);
+      });
+  }, [router]);
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
@@ -34,6 +47,14 @@ export default function LoginPage(): JSX.Element {
     } finally {
       setLoading(false);
     }
+  }
+
+  if (checking) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-neutral-50 text-sm text-neutral-400">
+        正在加载…
+      </div>
+    );
   }
 
   return (

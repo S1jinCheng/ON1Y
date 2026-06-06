@@ -243,6 +243,27 @@ def _cmd_subscriptions(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_collections(args: argparse.Namespace) -> int:
+    from on1y.ingestion.collections_sync import parse_collections_platforms, sync_collections
+
+    settings = get_settings()
+    settings.ensure_data_dir()
+    platforms = parse_collections_platforms(args.platforms) if args.platforms else None
+    storage = get_storage()
+    try:
+        report = sync_collections(
+            storage,
+            platforms=platforms,
+            dry_run=args.dry_run,
+            ingest=args.ingest,
+            ingest_limit=args.ingest_limit,
+        )
+    finally:
+        storage.close()
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 0
+
+
 def _cmd_bootstrap(args: argparse.Namespace) -> int:
     from on1y.pipeline.bootstrap import run_bootstrap
 
@@ -632,6 +653,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="Max LLM distill jobs when --ingest (default 10)",
     )
     p_subs.set_defaults(func=_cmd_subscriptions)
+
+    p_coll = sub.add_parser(
+        "collections",
+        help="Sync 收藏夹 / YouTube playlists (B站, 知乎, YouTube WL/Liked)",
+    )
+    p_coll_sub = p_coll.add_subparsers(dest="collections_action", required=True)
+    p_coll_sync = p_coll_sub.add_parser("sync", help="Poll favorites and enqueue new items")
+    p_coll_sync.add_argument(
+        "--platforms",
+        default="bilibili,zhihu,youtube",
+        help="Comma-separated: bilibili, zhihu, youtube",
+    )
+    p_coll_sync.add_argument("--dry-run", action="store_true")
+    p_coll_sync.add_argument(
+        "--ingest",
+        action="store_true",
+        help="Process a small ingest batch after enqueue",
+    )
+    p_coll_sync.add_argument("--ingest-limit", type=int, default=5, help="Max items per platform")
+    p_coll_sync.set_defaults(func=_cmd_collections)
 
     p_hotlist = sub.add_parser("hotlist", help="Daily hot-list column sync")
     p_hotlist_sub = p_hotlist.add_subparsers(dest="hotlist_action", required=True)

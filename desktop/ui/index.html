@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>On1y</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        font-family: "Segoe UI", system-ui, sans-serif;
+        background: #0a0a0a;
+        color: #f5f5f5;
+      }
+      .card {
+        text-align: center;
+        padding: 2rem;
+        max-width: 28rem;
+      }
+      .logo {
+        width: 56px;
+        height: 56px;
+        margin: 0 auto 1.25rem;
+        border-radius: 14px;
+        background: #111;
+        border: 2px solid #fff;
+        box-shadow: inset 0 0 0 10px #0a0a0a;
+      }
+      h1 {
+        margin: 0 0 0.5rem;
+        font-size: 1.25rem;
+        font-weight: 600;
+      }
+      p {
+        margin: 0;
+        color: #a3a3a3;
+        font-size: 0.95rem;
+        line-height: 1.5;
+      }
+      .spinner {
+        width: 28px;
+        height: 28px;
+        margin: 1.5rem auto 0;
+        border: 2px solid #333;
+        border-top-color: #fff;
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      #error {
+        display: none;
+        margin-top: 1rem;
+        color: #fca5a5;
+        white-space: pre-wrap;
+        text-align: left;
+        font-size: 0.85rem;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <div class="logo" aria-hidden="true"></div>
+      <h1>On1y</h1>
+      <p id="status">正在启动本地服务…</p>
+      <div class="spinner" id="spinner"></div>
+      <pre id="error"></pre>
+    </div>
+    <script>
+      window.__ON1Y_SHOW_ERROR__ = function (message) {
+        document.getElementById("status").textContent = "启动失败";
+        document.getElementById("spinner").style.display = "none";
+        const el = document.getElementById("error");
+        el.style.display = "block";
+        el.textContent = message;
+      };
+    </script>
+  </body>
+</html>

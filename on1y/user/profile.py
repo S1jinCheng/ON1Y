@@ -35,6 +35,10 @@ def _default_payload(settings: Settings | None = None, *, user_id: int | None = 
     return {
         "version": PROFILE_VERSION,
         "owner": "default",
+        "app": {
+            "locale": "zh",
+            "open_browser_on_start": True,
+        },
         "kindle": {
             "enabled": bool(kindle_to) and settings.economist_auto_kindle,
             "send_to": kindle_to,
@@ -68,6 +72,12 @@ def _normalize_profile(data: dict[str, Any], *, user_id: int | None = None) -> d
     kindle_in = data.get("kindle") if isinstance(data.get("kindle"), dict) else {}
     econ_in = data.get("economist") if isinstance(data.get("economist"), dict) else {}
     base["owner"] = str(data.get("owner") or base["owner"])
+    app_in = data.get("app") if isinstance(data.get("app"), dict) else {}
+    locale = str(app_in.get("locale") or base["app"]["locale"] or "zh").strip().lower()
+    base["app"]["locale"] = locale if locale in {"zh", "en"} else "zh"
+    base["app"]["open_browser_on_start"] = bool(
+        app_in.get("open_browser_on_start", base["app"]["open_browser_on_start"])
+    )
     base["kindle"]["enabled"] = bool(kindle_in.get("enabled", base["kindle"]["enabled"]))
     send_to = str(kindle_in.get("send_to") or base["kindle"]["send_to"] or "").strip()
     base["kindle"]["send_to"] = send_to
@@ -161,11 +171,22 @@ def patch_user_profile(*, user_id: int | None = None, **sections: Any) -> dict[s
         current["kindle"].update(sections["kindle"])
     if "economist" in sections and isinstance(sections["economist"], dict):
         current["economist"].update(sections["economist"])
+    if "app" in sections and isinstance(sections["app"], dict):
+        current["app"].update(sections["app"])
+        if "open_browser_on_start" in sections["app"]:
+            from on1y.desktop.launch_prefs import write_launch_prefs
+
+            write_launch_prefs(
+                open_browser_on_start=bool(current["app"]["open_browser_on_start"]),
+            )
     save_user_profile(current, user_id=uid)
     return current
 
 
 def public_profile_view(user_id: int | None = None) -> dict[str, Any]:
+    from on1y.desktop.launch_prefs import read_launch_prefs
+    from on1y.desktop.windows_autostart import autostart_installed, is_windows
+
     profile = load_user_profile(user_id)
     integrations = profile.get("integrations") or {}
     llm = integrations.get("llm") if isinstance(integrations.get("llm"), dict) else {}
@@ -175,9 +196,19 @@ def public_profile_view(user_id: int | None = None) -> dict[str, Any]:
     for platform, path_str in cookies.items():
         p = Path(str(path_str))
         cookie_status[platform] = {"path": str(p), "exists": p.is_file()}
+    launch = read_launch_prefs()
+    app = profile.get("app") if isinstance(profile.get("app"), dict) else {}
     return {
         "user_id": user_id if user_id is not None else get_effective_user_id(),
         "owner": profile.get("owner"),
+        "app": {
+            "locale": str(app.get("locale") or "zh"),
+            "open_browser_on_start": bool(
+                launch.get("open_browser_on_start", app.get("open_browser_on_start", True))
+            ),
+            "autostart_enabled": autostart_installed() if is_windows() else False,
+            "autostart_supported": is_windows(),
+        },
         "kindle": {
             "enabled": profile["kindle"]["enabled"],
             "send_to": profile["kindle"]["send_to"],

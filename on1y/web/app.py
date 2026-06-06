@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -79,6 +80,16 @@ class UserProfilePatchRequest(BaseModel):
     kindle_send_to: str | None = None
     economist_auto_ingest: bool | None = None
     economist_auto_kindle: bool | None = None
+    locale: str | None = Field(default=None, pattern="^(zh|en)$")
+    open_browser_on_start: bool | None = None
+
+
+class AutostartRequest(BaseModel):
+    enabled: bool
+
+
+class CookieJsonImportRequest(BaseModel):
+    payload: dict[str, Any] | list[dict[str, Any]]
 
 
 class DistillRequest(BaseModel):
@@ -537,6 +548,35 @@ def create_app() -> FastAPI:
 
         return public_profile_view()
 
+    @app.get("/api/app/desktop")
+    def app_desktop_status() -> dict[str, Any]:
+        from on1y import __version__
+        from on1y.config import PROJECT_ROOT, get_settings
+        from on1y.desktop.windows_autostart import autostart_installed, is_windows
+
+        settings = get_settings()
+        return {
+            "platform": "windows" if is_windows() else sys.platform,
+            "autostart_supported": is_windows(),
+            "autostart_enabled": autostart_installed() if is_windows() else False,
+            "version": __version__,
+            "project_root": str(PROJECT_ROOT),
+            "data_dir": str(settings.data_dir),
+            "web_url": f"http://{settings.web_host}:{settings.web_port}",
+        }
+
+    @app.post("/api/app/autostart")
+    def app_set_autostart(body: AutostartRequest) -> dict[str, Any]:
+        from on1y.desktop.windows_autostart import autostart_installed, is_windows, set_autostart
+
+        if not is_windows():
+            raise HTTPException(status_code=501, detail="autostart only supported on Windows")
+        try:
+            set_autostart(body.enabled)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        return {"autostart_enabled": autostart_installed()}
+
     def _user_cookie_rows() -> list[dict[str, Any]]:
         from on1y.auth.context import get_effective_user_id
         from on1y.cookies.loader import PLATFORM_COOKIE_ATTR
@@ -605,10 +645,8 @@ def create_app() -> FastAPI:
     async def upload_user_cookies(platform: str, file: UploadFile = File(...)) -> dict[str, Any]:
         import json
 
-        from on1y.auth.context import get_effective_user_id
-        from on1y.browser.cookies import load_cookie_file
-        from on1y.cookies.loader import PLATFORM_COOKIE_ATTR, extract_cookie_list
-        from on1y.user.paths import user_cookie_path
+        from on1y.cookies.import_user import persist_user_cookie_payload
+        from on1y.cookies.loader import PLATFORM_COOKIE_ATTR
 
         if platform not in PLATFORM_COOKIE_ATTR:
             raise HTTPException(status_code=400, detail=f"unknown platform: {platform}")
@@ -617,22 +655,24 @@ def create_app() -> FastAPI:
             data = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise HTTPException(status_code=400, detail="invalid JSON cookie file") from exc
+        if not isinstance(data, (dict, list)):
+            raise HTTPException(status_code=400, detail="cookie JSON must be an object or array")
         try:
-            cookies = extract_cookie_list(data if isinstance(data, dict) else data)
-        except Exception as exc:
+            return persist_user_cookie_payload(platform, data)
+        except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if not cookies:
-            raise HTTPException(status_code=400, detail="no cookies in file")
-        uid = get_effective_user_id()
-        dest = user_cookie_path(uid, platform)
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        if isinstance(data, dict) and "cookies" in data:
-            payload = data
-        else:
-            payload = {"cookies": cookies, "origins": []}
-        dest.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        _ = load_cookie_file(dest)
-        return {"platform": platform, "path": str(dest), "count": len(cookies)}
+
+    @app.post("/api/user/cookies/{platform}/import")
+    def import_user_cookies_json(platform: str, body: CookieJsonImportRequest) -> dict[str, Any]:
+        from on1y.cookies.import_user import persist_user_cookie_payload
+        from on1y.cookies.loader import PLATFORM_COOKIE_ATTR
+
+        if platform not in PLATFORM_COOKIE_ATTR:
+            raise HTTPException(status_code=400, detail=f"unknown platform: {platform}")
+        try:
+            return persist_user_cookie_payload(platform, body.payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.patch("/api/user/profile")
     def patch_user_profile_api(body: UserProfilePatchRequest) -> dict[str, Any]:
@@ -653,6 +693,13 @@ def create_app() -> FastAPI:
             econ_patch["auto_kindle_enabled"] = body.economist_auto_kindle
         if econ_patch:
             sections["economist"] = econ_patch
+        app_patch: dict[str, Any] = {}
+        if body.locale is not None:
+            app_patch["locale"] = body.locale
+        if body.open_browser_on_start is not None:
+            app_patch["open_browser_on_start"] = body.open_browser_on_start
+        if app_patch:
+            sections["app"] = app_patch
         if sections:
             patch_user_profile(**sections)
         return public_profile_view()
@@ -683,6 +730,12 @@ def create_app() -> FastAPI:
             return {"source": source, "dates": dates, "today": today}
         finally:
             storage.close()
+
+    @app.get("/api/collections/sync/status")
+    def collections_sync_status() -> dict[str, Any]:
+        from on1y.subscriptions.collections_auto_sync import collections_sync_status as get_status
+
+        return get_status()
 
     @app.get("/api/subscriptions/sync/status")
     def subscription_sync_status() -> dict[str, Any]:
@@ -963,10 +1016,12 @@ def create_app() -> FastAPI:
             storage.close()
 
     @app.get("/api/knowledge/creators")
-    def knowledge_creators() -> dict[str, Any]:
+    def knowledge_creators(
+        enrich_avatars: bool = Query(default=False),
+    ) -> dict[str, Any]:
         storage = get_storage()
         try:
-            creators = storage.list_subscribed_creators()
+            creators = storage.list_subscribed_creators(enrich_avatars=enrich_avatars)
             return {"creators": creators, "count": len(creators)}
         finally:
             storage.close()
@@ -1487,11 +1542,13 @@ def run_server(*, host: str | None = None, port: int | None = None) -> None:
 
     from on1y.hotlist.economist_auto import start_economist_auto_loop
     from on1y.subscriptions.auto_sync import start_auto_sync_loop
+    from on1y.subscriptions.collections_auto_sync import start_collections_sync_loop
 
     settings = get_settings()
     settings.ensure_data_dir()
     get_storage().close()
     start_auto_sync_loop()
+    start_collections_sync_loop()
     start_economist_auto_loop()
     uvicorn.run(
         create_app(),

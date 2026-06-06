@@ -118,6 +118,23 @@ def register_auth_routes(app: Any) -> None:
 
     @app.get("/api/auth/me")
     def auth_me(credentials: HTTPAuthorizationCredentials | None = Depends(_bearer)) -> dict[str, Any]:
+        settings = get_settings()
+        if not settings.auth_required:
+            from on1y.adapters.sqlite_storage import get_storage
+
+            storage = get_storage()
+            try:
+                store = UserStore(storage)
+                ids = store.list_active_user_ids()
+                if not ids:
+                    raise HTTPException(status_code=503, detail="no user in database")
+                user = store.get_user_by_id(ids[0])
+                if user is None:
+                    raise HTTPException(status_code=503, detail="no user in database")
+                return {"user": user_public_dict(user)}
+            finally:
+                storage.close()
+
         user = _resolve_user(credentials)
         if user is None:
             raise HTTPException(status_code=401, detail="not authenticated")

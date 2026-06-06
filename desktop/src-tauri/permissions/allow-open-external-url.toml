@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-open-external-url"
+description = "Open article and author links in the system browser."
+commands.allow = ["open_external_url"]

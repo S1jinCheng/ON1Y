@@ -7,30 +7,48 @@
 
 ## 启动
 
-```bash
-cd ~/On1y
-source venv/bin/activate
-pip install -e .   # 含 fastapi、uvicorn
+### Windows 桌面应用（推荐）
 
+一次性安装：
+
+```powershell
+cd D:\On1y
+powershell -ExecutionPolicy Bypass -File scripts\install-on1y-desktop.ps1
+powershell -ExecutionPolicy Bypass -File scripts\install-on1y-autostart.ps1   # 可选：登录自启
+```
+
+日常使用：
+
+- **双击桌面「On1y」** → 自动启动后端 + 前端并打开 http://127.0.0.1:3000（本地默认免登录，用户/设置仍保留）
+- **停止**：`powershell -ExecutionPolicy Bypass -File scripts\stop-on1y.ps1`
+- **取消登录自启**：`scripts\uninstall-on1y-autostart.ps1`
+
+登录自启（L2）只会在后台启动服务，**不会自动弹浏览器**；需要阅读时再点桌面图标。
+
+在 Web **设置 → 通用** 中可切换：界面语言、登录时自动启动、双击图标是否打开浏览器。
+
+### 手动启动（开发）
+
+后端：
+
+```powershell
+conda activate on1y
+cd D:\On1y
 on1y serve
-# 浏览器打开 http://127.0.0.1:8765/
+# API http://127.0.0.1:8765/
 ```
 
-可选参数：
-
-```bash
-on1y serve --host 0.0.0.0 --port 8765
-```
-
+可选参数：`on1y serve --host 0.0.0.0 --port 8765`  
 环境变量：`ON1Y_WEB_HOST`、`ON1Y_WEB_PORT`。
 
-## Next.js 前端（推荐）
+Next.js 前端：
 
-```bash
-cd ~/On1y/frontend
+```powershell
+cd D:\On1y\frontend
 npm install
-NEXT_PUBLIC_ON1Y_API_BASE=http://127.0.0.1:8765 npm run dev
-# 打开 http://127.0.0.1:3000
+$env:NEXT_PUBLIC_ON1Y_API_BASE = "http://127.0.0.1:8765"
+npm run dev
+# http://127.0.0.1:3000
 ```
 
 核心 API：

@@ -67,6 +67,17 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
+export type AuthStatus = {
+  auth_required: boolean;
+  allow_registration: boolean;
+  multi_user: boolean;
+  user_count: number;
+};
+
+export function fetchAuthStatus(): Promise<AuthStatus> {
+  return request<AuthStatus>("/api/auth/status");
+}
+
 export function login(username: string, password: string): Promise<{ token: string; user: AuthUser }> {
   return request<{ token: string; user: AuthUser }>("/api/auth/login", {
     method: "POST",
@@ -145,6 +156,12 @@ export type CookieStatus = {
 export type UserProfile = {
   user_id: number;
   owner: string;
+  app?: {
+    locale: string;
+    open_browser_on_start: boolean;
+    autostart_enabled: boolean;
+    autostart_supported: boolean;
+  };
   kindle: { enabled: boolean; send_to: string };
   economist: {
     auto_ingest_enabled: boolean;
@@ -163,11 +180,34 @@ export function getUserProfile(): Promise<UserProfile> {
   return request<UserProfile>("/api/user/profile");
 }
 
+export type DesktopAppStatus = {
+  platform: string;
+  autostart_supported: boolean;
+  autostart_enabled: boolean;
+  version: string;
+  project_root: string;
+  data_dir: string;
+  web_url: string;
+};
+
+export function getDesktopAppStatus(): Promise<DesktopAppStatus> {
+  return request<DesktopAppStatus>("/api/app/desktop");
+}
+
+export function setAutostart(enabled: boolean): Promise<{ autostart_enabled: boolean }> {
+  return request<{ autostart_enabled: boolean }>("/api/app/autostart", {
+    method: "POST",
+    body: JSON.stringify({ enabled })
+  });
+}
+
 export function patchUserProfile(input: {
   kindle_enabled?: boolean;
   kindle_send_to?: string;
   economist_auto_ingest?: boolean;
   economist_auto_kindle?: boolean;
+  locale?: "zh" | "en";
+  open_browser_on_start?: boolean;
 }): Promise<UserProfile> {
   return request<UserProfile>("/api/user/profile", {
     method: "PATCH",
@@ -177,6 +217,38 @@ export function patchUserProfile(input: {
 
 export function getCookieStatuses(): Promise<{ platforms: CookieStatus[] }> {
   return request<{ platforms: CookieStatus[] }>("/api/user/cookies");
+}
+
+export function importCookieJson(
+  platform: CookiePlatform,
+  payload: unknown
+): Promise<{ platform: string; count: number }> {
+  return request<{ platform: string; count: number }>(`/api/user/cookies/${platform}/import`, {
+    method: "POST",
+    body: JSON.stringify({ payload })
+  });
+}
+
+export async function importCookieFromClipboard(
+  platform: CookiePlatform
+): Promise<{ platform: string; count: number }> {
+  if (typeof navigator === "undefined" || !navigator.clipboard?.readText) {
+    throw new Error("当前浏览器不支持读取剪贴板");
+  }
+  const text = (await navigator.clipboard.readText()).trim();
+  if (!text) {
+    throw new Error("剪贴板为空");
+  }
+  let payload: unknown;
+  try {
+    payload = JSON.parse(text) as unknown;
+  } catch {
+    throw new Error("剪贴板内容不是有效的 Cookie JSON");
+  }
+  if (typeof payload !== "object" || payload === null) {
+    throw new Error("Cookie JSON 必须是对象或数组");
+  }
+  return importCookieJson(platform, payload);
 }
 
 export async function uploadCookieFile(
@@ -331,8 +403,15 @@ export function getEconomistWeeks(
   return request(`/api/hotlist/economist/weeks${suffix}`);
 }
 
-export function getCreators(): Promise<{ creators: CreatorRow[]; count: number }> {
-  return request("/api/knowledge/creators");
+export function getCreators(options?: {
+  enrichAvatars?: boolean;
+}): Promise<{ creators: CreatorRow[]; count: number }> {
+  const query = new URLSearchParams();
+  if (options?.enrichAvatars) {
+    query.set("enrich_avatars", "true");
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request(`/api/knowledge/creators${suffix}`);
 }
 
 export function getKnowledgeItems(params: {

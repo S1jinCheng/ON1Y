@@ -215,7 +215,9 @@ def poll_bilibili_dynamic_updates(
     if backfill or (sync_since_ts is not None and first_run):
         max_pages = settings.bilibili_dynamic_poll_backfill_max_pages
 
-    path = settings.bilibili_cookies_path
+    from on1y.cookies.loader import resolve_cookie_path
+
+    path = resolve_cookie_path("bilibili", settings)
     jar = _cookie_jar(path)
     title_index = youtube_title_index(storage)
 
@@ -338,7 +340,9 @@ def poll_bilibili_up_updates(
     per_up_limit = max_items_per_up if max_items_per_up is not None else settings.rss_backfill_max_items_per_feed
     max_ups_per_run = settings.bilibili_up_poll_max_ups_per_run
 
-    path = settings.bilibili_cookies_path
+    from on1y.cookies.loader import resolve_cookie_path
+
+    path = resolve_cookie_path("bilibili", settings)
     jar = _cookie_jar(path)
     title_index = youtube_title_index(storage)
 

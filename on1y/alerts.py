@@ -33,12 +33,20 @@ _ANTIBOT_RE = re.compile(
 _KIND_LABELS = {
     "rate_limit": "限流 (429)",
     "antibot": "风控 / 安全验证",
+    "cookie_expired": "Cookie 失效",
 }
+
+_COOKIE_EXPIRED_RE = re.compile(
+    r"cookie|cookies may be expired|missing mid|did not return url_token|"
+    r"requires valid cookies|未登录|请登录|login required|sign in",
+    re.IGNORECASE,
+)
 
 
 class AlertKind(str, Enum):
     RATE_LIMIT = "rate_limit"
     ANTIBOT = "antibot"
+    COOKIE_EXPIRED = "cookie_expired"
 
 
 def classify_pipeline_error(message: str) -> AlertKind | None:
@@ -181,6 +189,17 @@ def maybe_alert_from_error(
     if kind is None:
         return None
     return emit_alert(kind, platform, message, worker=worker, url=url)
+
+
+def maybe_alert_cookie_expired(
+    message: str,
+    *,
+    platform: str,
+    worker: str = "collections",
+) -> dict[str, Any] | None:
+    if not _COOKIE_EXPIRED_RE.search(message):
+        return None
+    return emit_alert(AlertKind.COOKIE_EXPIRED, platform, message, worker=worker)
 
 
 def list_alerts(*, limit: int = 30, active_only: bool = False) -> list[dict[str, Any]]:

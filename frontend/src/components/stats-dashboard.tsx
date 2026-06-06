@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
 import { getStatsDaily, getStatsOverview } from "@/lib/api";
+import { formatCalendarDate } from "@/lib/format-published-at";
 import { platformLabel } from "@/lib/platform-label";
 import { themeDisplayName, t, type UiKey } from "@/lib/i18n";
 import type { StatsOverview } from "@/lib/stats-types";
@@ -222,11 +223,11 @@ export function StatsDashboard(props: { locale: Locale }): JSX.Element {
     );
     return sampled.map((day) => ({
       key: day.date,
-      label: day.date.slice(5),
+      label: formatCalendarDate(day.date, locale) ?? day.date,
       count: day.total,
       title: `${day.date}: ${day.total}`
     }));
-  }, [overview, days]);
+  }, [overview, days, locale]);
 
   const hourBars = useMemo(
     () =>
@@ -303,7 +304,7 @@ export function StatsDashboard(props: { locale: Locale }): JSX.Element {
                 {highlights?.busiest_day ? (
                   <StatCard
                     label={ui("statsBusiestDay")}
-                    value={`${highlights.busiest_day.slice(5)} (${highlights.busiest_day_count})`}
+                    value={`${formatCalendarDate(highlights.busiest_day, locale) ?? highlights.busiest_day} (${highlights.busiest_day_count})`}
                   />
                 ) : null}
                 {highlights?.peak_hour != null ? (

@@ -5,15 +5,36 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
 import { SettingsCenter } from "@/components/settings-center";
-import { fetchCurrentUser, logout, type AuthUser } from "@/lib/api";
+import { fetchAuthStatus, fetchCurrentUser, logout, type AuthUser } from "@/lib/api";
 import type { Locale } from "@/lib/i18n";
 
-export function AccountMenu(props: { locale: Locale; onMessage?: (message: string) => void }): JSX.Element {
+export function AccountMenu(props: {
+  locale: Locale;
+  onLocaleChange?: (locale: Locale) => void;
+  onMessage?: (message: string) => void;
+}): JSX.Element {
   const router = useRouter();
   const [user, setUser] = useState<AuthUser | null>(null);
+  const [authRequired, setAuthRequired] = useState(true);
   const [open, setOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchAuthStatus()
+      .then((status) => {
+        if (!cancelled) {
+          setAuthRequired(status.auth_required);
+        }
+      })
+      .catch(() => {
+        /* ignore */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -72,17 +93,19 @@ export function AccountMenu(props: { locale: Locale; onMessage?: (message: strin
               <Settings className="h-4 w-4 text-neutral-400" />
               {props.locale === "zh" ? "设置" : "Settings"}
             </button>
-            <button
-              type="button"
-              className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
-              onClick={() => {
-                logout();
-                router.replace("/login");
-              }}
-            >
-              <LogOut className="h-4 w-4" />
-              {props.locale === "zh" ? "退出登录" : "Log out"}
-            </button>
+            {authRequired ? (
+              <button
+                type="button"
+                className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
+                onClick={() => {
+                  logout();
+                  router.replace("/login");
+                }}
+              >
+                <LogOut className="h-4 w-4" />
+                {props.locale === "zh" ? "退出登录" : "Log out"}
+              </button>
+            ) : null}
           </div>
         ) : null}
       </div>
@@ -93,6 +116,7 @@ export function AccountMenu(props: { locale: Locale; onMessage?: (message: strin
         locale={props.locale}
         user={user}
         onUserUpdated={setUser}
+        onLocaleChange={props.onLocaleChange}
         onMessage={props.onMessage}
       />
     </>

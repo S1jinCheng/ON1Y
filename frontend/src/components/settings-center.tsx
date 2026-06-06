@@ -2,10 +2,12 @@
 
 import {
   Bot,
+  ClipboardPaste,
   Cookie,
   KeyRound,
   Loader2,
   Send,
+  SlidersHorizontal,
   Trash2,
   Upload,
   UserCircle2,
@@ -14,27 +16,31 @@ import {
 import { useEffect, useRef, useState } from "react";
 
 import {
-  changePassword,
   deleteCookieFile,
   getCookieStatuses,
+  getDesktopAppStatus,
   getLlmSettings,
   getSubscriptionSettings,
   getUserProfile,
+  importCookieFromClipboard,
   patchUserProfile,
   saveLlmSettings,
   saveSubscriptionSettings,
+  setAutostart,
   testLlmSettings,
   updateAuthProfile,
   uploadCookieFile,
   type AuthUser,
   type CookiePlatform,
   type CookieStatus,
+  type DesktopAppStatus,
   type LlmSettingsView,
   type UserProfile
 } from "@/lib/api";
 import type { Locale } from "@/lib/i18n";
+import { persistStoredLocale } from "@/lib/locale-preference";
 
-type TabKey = "account" | "platforms" | "cookies" | "ai" | "push";
+type TabKey = "general" | "account" | "platforms" | "cookies" | "ai" | "push";
 
 type Props = {
   open: boolean;
@@ -42,6 +48,7 @@ type Props = {
   locale: Locale;
   user: AuthUser | null;
   onUserUpdated?: (user: AuthUser) => void;
+  onLocaleChange?: (locale: Locale) => void;
   onMessage?: (message: string) => void;
 };
 
@@ -65,18 +72,19 @@ function L(locale: Locale, zh: string, en: string): string {
 
 export function SettingsCenter(props: Props): JSX.Element | null {
   const { open, onClose, locale, user } = props;
-  const [tab, setTab] = useState<TabKey>("account");
+  const [tab, setTab] = useState<TabKey>("general");
 
   if (!open) {
     return null;
   }
 
   const tabs: { key: TabKey; label: string; icon: JSX.Element }[] = [
-    { key: "account", label: L(locale, "账户", "Account"), icon: <UserCircle2 className="h-4 w-4" /> },
-    { key: "platforms", label: L(locale, "平台订阅", "Platforms"), icon: <Send className="h-4 w-4" /> },
-    { key: "cookies", label: L(locale, "登录态 Cookie", "Cookies"), icon: <Cookie className="h-4 w-4" /> },
-    { key: "ai", label: L(locale, "AI 模型", "AI Model"), icon: <Bot className="h-4 w-4" /> },
-    { key: "push", label: L(locale, "推送 Kindle", "Delivery"), icon: <KeyRound className="h-4 w-4" /> }
+    { key: "general", label: L(locale, "通用", "General"), icon: <SlidersHorizontal className="h-4 w-4" /> },
+    { key: "account", label: L(locale, "个人资料", "Profile"), icon: <UserCircle2 className="h-4 w-4" /> },
+    { key: "platforms", label: L(locale, "订阅", "Subscriptions"), icon: <Send className="h-4 w-4" /> },
+    { key: "cookies", label: L(locale, "Cookie", "Cookies"), icon: <Cookie className="h-4 w-4" /> },
+    { key: "ai", label: L(locale, "AI", "AI"), icon: <Bot className="h-4 w-4" /> },
+    { key: "push", label: L(locale, "推送", "Delivery"), icon: <KeyRound className="h-4 w-4" /> }
   ];
 
   return (
@@ -124,6 +132,13 @@ export function SettingsCenter(props: Props): JSX.Element | null {
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5 scrollbar-thin">
+            {tab === "general" ? (
+              <GeneralTab
+                locale={locale}
+                onLocaleChange={props.onLocaleChange}
+                onMessage={props.onMessage}
+              />
+            ) : null}
             {tab === "account" ? (
               <AccountTab locale={locale} user={user} onUserUpdated={props.onUserUpdated} onMessage={props.onMessage} />
             ) : null}
@@ -140,6 +155,195 @@ export function SettingsCenter(props: Props): JSX.Element | null {
 
 function FieldLabel(props: { children: React.ReactNode }): JSX.Element {
   return <span className="mb-1.5 block text-xs font-medium text-neutral-600">{props.children}</span>;
+}
+
+function ToggleRow(props: {
+  label: string;
+  description?: string;
+  checked: boolean;
+  disabled?: boolean;
+  onChange: (checked: boolean) => void;
+}): JSX.Element {
+  return (
+    <label className="flex items-start justify-between gap-4 rounded-lg border border-neutral-100 bg-neutral-50/60 px-3 py-3">
+      <span className="min-w-0">
+        <span className="block text-sm font-medium text-neutral-900">{props.label}</span>
+        {props.description ? (
+          <span className="mt-1 block text-xs leading-relaxed text-neutral-500">{props.description}</span>
+        ) : null}
+      </span>
+      <input
+        type="checkbox"
+        className="mt-1 h-4 w-4 shrink-0 accent-black"
+        checked={props.checked}
+        disabled={props.disabled}
+        onChange={(e) => props.onChange(e.target.checked)}
+      />
+    </label>
+  );
+}
+
+function GeneralTab(props: {
+  locale: Locale;
+  onLocaleChange?: (locale: Locale) => void;
+  onMessage?: (message: string) => void;
+}): JSX.Element {
+  const { locale } = props;
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [language, setLanguage] = useState<Locale>(locale);
+  const [openBrowser, setOpenBrowser] = useState(true);
+  const [autostart, setAutostartEnabled] = useState(false);
+  const [autostartSupported, setAutostartSupported] = useState(false);
+  const [desktop, setDesktop] = useState<DesktopAppStatus | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const [profile, status] = await Promise.all([getUserProfile(), getDesktopAppStatus()]);
+        if (cancelled) {
+          return;
+        }
+        const appLocale = profile.app?.locale === "en" ? "en" : "zh";
+        setLanguage(appLocale);
+        setOpenBrowser(profile.app?.open_browser_on_start ?? true);
+        setAutostartEnabled(status.autostart_enabled);
+        setAutostartSupported(status.autostart_supported);
+        setDesktop(status);
+      } catch (err) {
+        props.onMessage?.(err instanceof Error ? err.message : String(err));
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [props]);
+
+  async function saveGeneral(): Promise<void> {
+    setSaving(true);
+    try {
+      await patchUserProfile({
+        locale: language,
+        open_browser_on_start: openBrowser
+      });
+      persistStoredLocale(language);
+      props.onLocaleChange?.(language);
+      props.onMessage?.(L(locale, "通用设置已保存", "General settings saved"));
+    } catch (err) {
+      props.onMessage?.(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function onAutostartToggle(enabled: boolean): Promise<void> {
+    try {
+      const result = await setAutostart(enabled);
+      setAutostartEnabled(result.autostart_enabled);
+      props.onMessage?.(
+        enabled
+          ? L(locale, "已开启登录时自动启动", "Autostart on login enabled")
+          : L(locale, "已关闭登录时自动启动", "Autostart on login disabled")
+      );
+    } catch (err) {
+      props.onMessage?.(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  if (loading) {
+    return <LoadingRow locale={locale} />;
+  }
+
+  return (
+    <div className="space-y-6">
+      <section className="space-y-3">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-neutral-400">
+          {L(locale, "语言与地区", "Language")}
+        </h3>
+        <div className="inline-flex overflow-hidden rounded-lg border border-neutral-200 text-sm">
+          <button
+            type="button"
+            onClick={() => setLanguage("zh")}
+            className={`px-4 py-2 ${language === "zh" ? "bg-black text-white" : "bg-white text-neutral-700"}`}
+          >
+            中文
+          </button>
+          <button
+            type="button"
+            onClick={() => setLanguage("en")}
+            className={`px-4 py-2 ${language === "en" ? "bg-black text-white" : "bg-white text-neutral-700"}`}
+          >
+            English
+          </button>
+        </div>
+      </section>
+
+      <section className="space-y-3">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-neutral-400">
+          {L(locale, "启动", "Startup")}
+        </h3>
+        <ToggleRow
+          label={L(locale, "登录 Windows 时自动启动 On1y", "Start On1y when I sign in to Windows")}
+          description={L(
+            locale,
+            "登录时在后台启动后端与前端（窗口最小化）。",
+            "Starts backend and frontend in the background on sign-in (minimized windows)."
+          )}
+          checked={autostart}
+          disabled={!autostartSupported}
+          onChange={(v) => void onAutostartToggle(v)}
+        />
+        <ToggleRow
+          label={L(locale, "启动时打开浏览器", "Open browser on start")}
+          description={L(
+            locale,
+            "登录自启或双击桌面图标时自动打开工作台；关闭后需手动访问 http://127.0.0.1:3000",
+            "Opens the workspace on sign-in autostart or desktop launch; if off, visit http://127.0.0.1:3000 manually."
+          )}
+          checked={openBrowser}
+          onChange={setOpenBrowser}
+        />
+        <div className="flex justify-end">
+          <button type="button" className={primaryBtn} disabled={saving} onClick={() => void saveGeneral()}>
+            {saving ? L(locale, "保存中…", "Saving…") : L(locale, "保存", "Save")}
+          </button>
+        </div>
+      </section>
+
+      <section className="space-y-2 rounded-lg border border-amber-100 bg-amber-50/60 px-3 py-3 text-xs leading-relaxed text-amber-900/80">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-amber-800/70">
+          {L(locale, "后台同步", "Background sync")}
+        </h3>
+        <p>
+          {L(
+            locale,
+            "启动后默认先等几分钟再同步；首轮只拉订阅、不入库。大批量入库请在空闲时用右上角「订阅」手动同步，或调小 .env 里的 AUTO_SYNC_*_LIMIT。",
+            "After startup, sync waits a few minutes; the first tick only polls feeds. For heavy catch-up, use Subscriptions in the header or lower AUTO_SYNC_*_LIMIT in .env."
+          )}
+        </p>
+      </section>
+
+      <section className="space-y-2 rounded-lg border border-neutral-100 bg-neutral-50/50 px-3 py-3 text-xs text-neutral-500">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-neutral-400">
+          {L(locale, "关于", "About")}
+        </h3>
+        <p>
+          {L(locale, "版本", "Version")}: {desktop?.version ?? "—"}
+        </p>
+        <p className="break-all">
+          {L(locale, "数据目录", "Data")}: {desktop?.data_dir ?? "—"}
+        </p>
+        <p>
+          {L(locale, "工作台", "App")}: http://127.0.0.1:3000
+        </p>
+      </section>
+    </div>
+  );
 }
 
 const inputClass =
@@ -160,11 +364,6 @@ function AccountTab(props: {
   const [email, setEmail] = useState(props.user?.email ?? "");
   const [savingProfile, setSavingProfile] = useState(false);
 
-  const [currentPwd, setCurrentPwd] = useState("");
-  const [newPwd, setNewPwd] = useState("");
-  const [confirmPwd, setConfirmPwd] = useState("");
-  const [savingPwd, setSavingPwd] = useState(false);
-
   async function saveProfile(): Promise<void> {
     setSavingProfile(true);
     try {
@@ -178,34 +377,11 @@ function AccountTab(props: {
     }
   }
 
-  async function submitPassword(): Promise<void> {
-    if (newPwd.length < 8) {
-      props.onMessage?.(L(locale, "新密码至少 8 位", "New password needs 8+ chars"));
-      return;
-    }
-    if (newPwd !== confirmPwd) {
-      props.onMessage?.(L(locale, "两次输入的新密码不一致", "Passwords do not match"));
-      return;
-    }
-    setSavingPwd(true);
-    try {
-      await changePassword({ current_password: currentPwd, new_password: newPwd });
-      setCurrentPwd("");
-      setNewPwd("");
-      setConfirmPwd("");
-      props.onMessage?.(L(locale, "密码已修改", "Password changed"));
-    } catch (err) {
-      props.onMessage?.(err instanceof Error ? err.message : String(err));
-    } finally {
-      setSavingPwd(false);
-    }
-  }
-
   return (
     <div className="space-y-6">
       <section className="space-y-3">
         <h3 className="text-xs font-semibold uppercase tracking-wide text-neutral-400">
-          {L(locale, "个人资料", "Profile")}
+          {L(locale, "基本信息", "Basic info")}
         </h3>
         <div>
           <FieldLabel>{L(locale, "显示名称", "Display name")}</FieldLabel>
@@ -218,31 +394,6 @@ function AccountTab(props: {
         <div className="flex justify-end">
           <button type="button" className={primaryBtn} disabled={savingProfile} onClick={() => void saveProfile()}>
             {savingProfile ? L(locale, "保存中…", "Saving…") : L(locale, "保存资料", "Save profile")}
-          </button>
-        </div>
-      </section>
-
-      <div className="h-px bg-neutral-100" />
-
-      <section className="space-y-3">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-neutral-400">
-          {L(locale, "修改密码", "Change password")}
-        </h3>
-        <div>
-          <FieldLabel>{L(locale, "当前密码", "Current password")}</FieldLabel>
-          <input className={inputClass} type="password" value={currentPwd} onChange={(e) => setCurrentPwd(e.target.value)} autoComplete="current-password" />
-        </div>
-        <div>
-          <FieldLabel>{L(locale, "新密码（至少 8 位）", "New password (8+)")}</FieldLabel>
-          <input className={inputClass} type="password" value={newPwd} onChange={(e) => setNewPwd(e.target.value)} autoComplete="new-password" />
-        </div>
-        <div>
-          <FieldLabel>{L(locale, "确认新密码", "Confirm new password")}</FieldLabel>
-          <input className={inputClass} type="password" value={confirmPwd} onChange={(e) => setConfirmPwd(e.target.value)} autoComplete="new-password" />
-        </div>
-        <div className="flex justify-end">
-          <button type="button" className={primaryBtn} disabled={savingPwd || !currentPwd || !newPwd} onClick={() => void submitPassword()}>
-            {savingPwd ? L(locale, "提交中…", "Submitting…") : L(locale, "修改密码", "Update password")}
           </button>
         </div>
       </section>
@@ -406,6 +557,19 @@ function CookiesTab(props: { locale: Locale; onMessage?: (message: string) => vo
     }
   }
 
+  async function onPaste(platform: CookiePlatform): Promise<void> {
+    setBusy(platform);
+    try {
+      const result = await importCookieFromClipboard(platform);
+      props.onMessage?.(L(locale, `已从剪贴板导入 ${result.count} 条 Cookie`, `Pasted ${result.count} cookies from clipboard`));
+      await reload();
+    } catch (err) {
+      props.onMessage?.(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function onDelete(platform: CookiePlatform): Promise<void> {
     setBusy(platform);
     try {
@@ -428,8 +592,8 @@ function CookiesTab(props: { locale: Locale; onMessage?: (message: string) => vo
       <p className="text-xs leading-relaxed text-neutral-500">
         {L(
           locale,
-          "用浏览器扩展（如 Cookie-Editor）导出对应平台的 Cookie JSON，再上传到这里。Cookie 仅保存在你本地服务，按用户隔离。",
-          "Export cookies as JSON (e.g. via the Cookie-Editor extension) and upload here. Cookies stay on your local server, isolated per user."
+          "用 Cookie-Editor 等扩展导出 JSON，复制到剪贴板后点「粘贴导入」，或选择 JSON 文件上传。Cookie 仅保存在本地。",
+          "Export JSON with Cookie-Editor, copy to clipboard and click Paste, or upload a JSON file. Cookies stay on your machine only."
         )}
       </p>
       <div className="space-y-2">
@@ -466,10 +630,20 @@ function CookiesTab(props: { locale: Locale; onMessage?: (message: string) => vo
                 type="button"
                 className={`inline-flex items-center gap-1.5 ${ghostBtn} px-3 py-1.5`}
                 disabled={busy === platform.key}
+                onClick={() => void onPaste(platform.key)}
+                title={L(locale, "从剪贴板粘贴 Cookie JSON", "Paste cookie JSON from clipboard")}
+              >
+                {busy === platform.key ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ClipboardPaste className="h-3.5 w-3.5" />}
+                {L(locale, "粘贴", "Paste")}
+              </button>
+              <button
+                type="button"
+                className={`inline-flex items-center gap-1.5 ${ghostBtn} px-3 py-1.5`}
+                disabled={busy === platform.key}
                 onClick={() => fileInputs.current[platform.key]?.click()}
               >
-                {busy === platform.key ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
-                {exists ? L(locale, "更新", "Update") : L(locale, "上传", "Upload")}
+                <Upload className="h-3.5 w-3.5" />
+                {L(locale, "文件", "File")}
               </button>
               {exists ? (
                 <button

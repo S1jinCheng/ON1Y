@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     """Central configuration; all paths are resolved to absolute paths."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=str(PROJECT_ROOT / ".env"),
         env_file_encoding="utf-8",
         env_prefix="ON1Y_",
         extra="ignore",
@@ -156,6 +156,25 @@ class Settings(BaseSettings):
     auto_sync_ingest_limit: int = Field(default=10, ge=1, le=50)
     auto_sync_subtitle_limit: int = Field(default=10, ge=0, le=50)
     auto_sync_distill_limit: int = Field(default=50, ge=0, le=50)
+    # Wait before the first auto-sync tick so serve/UI can start responsive.
+    auto_sync_startup_delay_seconds: int = Field(default=120, ge=0, le=3600)
+    # First tick after delay: poll subscriptions only (no ingest/subtitles/distill).
+    auto_sync_startup_poll_only: bool = Field(default=True)
+    # Favorites / playlists polling while serve is running (B站/知乎收藏夹, YouTube WL/Liked)
+    collections_sync_enabled: bool = Field(default=True)
+    collections_sync_interval_seconds: int = Field(default=120, ge=30, le=3600)
+    collections_sync_platforms: str = Field(default="bilibili,zhihu,youtube")
+    collections_sync_ingest: bool = Field(default=True)
+    collections_sync_ingest_limit: int = Field(default=3, ge=0, le=20)
+    collections_sync_startup_delay_seconds: int = Field(default=90, ge=0, le=3600)
+    collections_sync_startup_poll_only: bool = Field(default=True)
+    collections_max_items_per_source: int = Field(default=80, ge=10, le=500)
+    collections_early_stop_existing_streak: int = Field(default=20, ge=5, le=200)
+    youtube_collections_watch_later: bool = Field(
+        default=False,
+        description="Watch Later (WL) is often blocked by YouTube/yt-dlp; Liked (LL) still syncs.",
+    )
+    youtube_collections_liked: bool = Field(default=True)
     # Optional: refresh feeds.yaml from platform lists before RSS poll
     youtube_auto_refresh_channels: bool = Field(default=False)
     youtube_refresh_max_channels: int = Field(default=50, ge=1, le=500)
@@ -176,7 +195,8 @@ class Settings(BaseSettings):
     # Multi-user auth (web UI + per-user cookies/profile)
     auth_secret_key: str = Field(default="change-me-in-production")
     auth_token_ttl_hours: int = Field(default=168, ge=1, le=24 * 30)
-    auth_required: bool = Field(default=True)
+    # Local single-user desktop: False skips login UI; user profile/settings still use user id=1.
+    auth_required: bool = Field(default=False)
     auth_allow_registration: bool = Field(default=True)
     bootstrap_username: str = Field(default="admin")
     bootstrap_password: str | None = Field(default=None)
@@ -207,7 +227,10 @@ class Settings(BaseSettings):
     )
     @classmethod
     def _expand_path(cls, value: str | Path) -> Path:
-        return Path(value).expanduser().resolve()
+        path = Path(value).expanduser()
+        if not path.is_absolute():
+            path = PROJECT_ROOT / path
+        return path.resolve()
 
     @field_validator("jina_reader_base")
     @classmethod

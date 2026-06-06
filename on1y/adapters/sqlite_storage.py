@@ -89,14 +89,26 @@ class SqliteStorage:
 
     def _connect(self) -> sqlite3.Connection:
         if self._connection is None:
-            self._connection = sqlite3.connect(
-                self._db_path,
-                detect_types=sqlite3.PARSE_DECLTYPES,
-                check_same_thread=False,
-            )
+            self._db_path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                self._connection = sqlite3.connect(
+                    self._db_path,
+                    detect_types=sqlite3.PARSE_DECLTYPES,
+                    check_same_thread=False,
+                    timeout=30.0,
+                )
+            except sqlite3.OperationalError as exc:
+                raise sqlite3.OperationalError(
+                    f"cannot open database at {self._db_path}: {exc}"
+                ) from exc
             self._connection.row_factory = sqlite3.Row
             self._connection.execute("PRAGMA foreign_keys = ON")
-            self._connection.execute("PRAGMA journal_mode = WAL")
+            try:
+                self._connection.execute("PRAGMA journal_mode = WAL")
+            except sqlite3.OperationalError as exc:
+                raise sqlite3.OperationalError(
+                    f"cannot enable WAL for {self._db_path} (check folder write permission): {exc}"
+                ) from exc
         return self._connection
 
     @contextmanager
@@ -2112,7 +2124,7 @@ class SqliteStorage:
             item["search_summary_html"] = hit.get("search_summary_html")
         return {"items": items, "total": total, "engine": "fts5"}
 
-    def list_subscribed_creators(self) -> list[dict[str, Any]]:
+    def list_subscribed_creators(self, *, enrich_avatars: bool = False) -> list[dict[str, Any]]:
         """Creators from subscription feeds + Bilibili follows in the library."""
         from on1y.knowledge.creators import (
             discover_zhihu_person_groups,
@@ -2329,14 +2341,14 @@ class SqliteStorage:
                 item_count = int(bili["count"]) if bili else 0
                 if bili:
                     name = bili["author"] or name or url
-                    enriched = enrich_bilibili_author_meta(
-                        {
-                            "author_url": url,
-                            "author": name,
-                            "author_avatar": bili.get("avatar"),
-                        }
-                    )
-                    avatar = resolve_author_avatar(enriched)
+                    bili_meta = {
+                        "author_url": url,
+                        "author": name,
+                        "author_avatar": bili.get("avatar"),
+                    }
+                    if enrich_avatars:
+                        bili_meta = enrich_bilibili_author_meta(bili_meta)
+                    avatar = resolve_author_avatar(bili_meta)
                     author_url = url
             elif key.startswith("zhihu-person:"):
                 people_url = normalize_zhihu_author_url(
@@ -2388,15 +2400,15 @@ class SqliteStorage:
                     author_url = str(latest_meta.get("author_url") or "").strip()
                 platform_name = str(meta.get("platform") or "").strip().lower()
                 if platform_name == "youtube":
-                    enriched = enrich_youtube_author_meta(
-                        {
-                            "author_avatar": avatar,
-                            "channel_id": channel_id,
-                            "author_url": author_url,
-                            "author": name,
-                        }
-                    )
-                    avatar = resolve_author_avatar(enriched)
+                    yt_meta = {
+                        "author_avatar": avatar,
+                        "channel_id": channel_id,
+                        "author_url": author_url,
+                        "author": name,
+                    }
+                    if enrich_avatars:
+                        yt_meta = enrich_youtube_author_meta(yt_meta)
+                    avatar = resolve_author_avatar(yt_meta)
             creators.append(
                 {
                     "key": key,
