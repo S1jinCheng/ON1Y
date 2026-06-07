@@ -26,11 +26,18 @@ else {
 
 $shortcut.WindowStyle = 1
 
-$iconPath = Join-Path $root "assets\on1y.ico"
+$iconPath = Join-Path $root "assets\only.ico"
+if (-not (Test-Path $iconPath)) {
+    $iconPath = Join-Path $root "desktop\src-tauri\icons\icon.ico"
+}
+if (-not (Test-Path $iconPath)) {
+    $iconPath = Join-Path $root "assets\on1y.ico"
+}
 if (-not (Test-Path $iconPath)) {
     $python = Get-Command python -ErrorAction SilentlyContinue
     if ($python) {
-        & $python.Source (Join-Path $root "scripts\build-on1y-icon.py")
+        & $python.Source (Join-Path $root "scripts\prepare-tauri-icons.py")
+        $iconPath = Join-Path $root "desktop\src-tauri\icons\icon.ico"
     }
 }
 if (Test-Path $iconPath) {

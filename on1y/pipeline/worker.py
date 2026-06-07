@@ -13,6 +13,8 @@ from on1y.exceptions import DuplicateVideoError, ExtractionError, SkippedVideoEr
 from on1y.extract.registry import get_default_registry
 from on1y.logging import setup_logging
 from on1y.pipeline.processor import process_url
+from on1y.utils.platform import PLATFORM_BILIBILI
+from on1y.utils.video_unavailable import is_bilibili_video_unavailable
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +87,15 @@ def run_worker(*, once: bool = False, storage: SqliteStorage | None = None) -> N
             )
         except ExtractionError as exc:
             msg = str(exc)
+            platform = _platform_from_url(pending.url)
+            if platform == PLATFORM_BILIBILI and is_bilibili_video_unavailable(msg):
+                storage.mark_pending_done(pending.id)
+                logger.info(
+                    "Skipped unavailable Bilibili video id=%s url=%s",
+                    pending.id,
+                    pending.url,
+                )
+                continue
             retry = pending.attempts < settings.worker_max_retries
             storage.mark_pending_failed(pending.id, msg, retry=retry)
             maybe_alert_from_error(
@@ -156,11 +167,20 @@ def _process_one_pending(
         return "processed"
     except ExtractionError as exc:
         msg = str(exc)
+        platform = _platform_from_url(pending.url)
+        if platform == PLATFORM_BILIBILI and is_bilibili_video_unavailable(msg):
+            storage.mark_pending_done(pending.id)
+            logger.info(
+                "Skipped unavailable Bilibili video id=%s url=%s",
+                pending.id,
+                pending.url,
+            )
+            return "processed"
         retry = pending.attempts < get_settings().worker_max_retries
         storage.mark_pending_failed(pending.id, msg, retry=retry)
         maybe_alert_from_error(
             msg,
-            platform=_platform_from_url(pending.url),
+            platform=platform,
             worker="ingest",
             url=pending.url,
         )

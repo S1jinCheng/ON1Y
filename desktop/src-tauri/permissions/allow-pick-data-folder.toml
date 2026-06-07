@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-pick-data-folder"
+description = "Pick a folder for On1y data storage."
+commands.allow = ["pick_data_folder"]

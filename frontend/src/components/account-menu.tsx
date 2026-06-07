@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import { SettingsCenter } from "@/components/settings-center";
 import { fetchAuthStatus, fetchCurrentUser, logout, type AuthUser } from "@/lib/api";
 import type { Locale } from "@/lib/i18n";
+import { OPEN_SETTINGS_EVENT, SETTINGS_CLOSED_EVENT } from "@/lib/open-settings";
 
 export function AccountMenu(props: {
   locale: Locale;
@@ -62,6 +63,15 @@ export function AccountMenu(props: {
     return () => document.removeEventListener("mousedown", onClick);
   }, []);
 
+  useEffect(() => {
+    const openHandler = (): void => {
+      setOpen(false);
+      setSettingsOpen(true);
+    };
+    window.addEventListener(OPEN_SETTINGS_EVENT, openHandler);
+    return () => window.removeEventListener(OPEN_SETTINGS_EVENT, openHandler);
+  }, []);
+
   const name = user?.display_name || user?.username || "";
   const initial = name ? name.charAt(0).toUpperCase() : "?";
 
@@ -71,26 +81,26 @@ export function AccountMenu(props: {
         <button
           type="button"
           onClick={() => setOpen((v) => !v)}
-          className="inline-flex items-center gap-1.5 rounded-md border border-border bg-white px-2 py-1.5 text-sm hover:bg-soft"
+          className="inline-flex items-center gap-1.5 rounded-md border border-border bg-surface px-2 py-1.5 text-sm hover:bg-soft"
         >
-          <span className="flex h-5 w-5 items-center justify-center rounded-full bg-black text-[11px] font-semibold text-white">
+          <span className="flex h-5 w-5 items-center justify-center rounded-full bg-inverse text-[11px] font-semibold text-inverse-foreground">
             {initial}
           </span>
-          <span className="max-w-[7rem] truncate text-neutral-700">{name}</span>
-          <ChevronDown className="h-3.5 w-3.5 text-neutral-400" />
+          <span className="max-w-[7rem] truncate text-foreground">{name}</span>
+          <ChevronDown className="h-3.5 w-3.5 text-muted" />
         </button>
 
         {open ? (
-          <div className="absolute right-0 z-50 mt-1.5 w-44 overflow-hidden rounded-lg border border-neutral-200 bg-white py-1 shadow-lg">
+          <div className="absolute right-0 z-50 mt-1.5 w-44 overflow-hidden rounded-lg border border-border bg-surface py-1 shadow-lg">
             <button
               type="button"
-              className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm text-neutral-700 hover:bg-neutral-50"
+              className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm text-foreground hover:bg-soft"
               onClick={() => {
                 setOpen(false);
                 setSettingsOpen(true);
               }}
             >
-              <Settings className="h-4 w-4 text-neutral-400" />
+              <Settings className="h-4 w-4 text-muted" />
               {props.locale === "zh" ? "设置" : "Settings"}
             </button>
             {authRequired ? (
@@ -112,7 +122,10 @@ export function AccountMenu(props: {
 
       <SettingsCenter
         open={settingsOpen}
-        onClose={() => setSettingsOpen(false)}
+        onClose={() => {
+          setSettingsOpen(false);
+          window.dispatchEvent(new Event(SETTINGS_CLOSED_EVENT));
+        }}
         locale={props.locale}
         user={user}
         onUserUpdated={setUser}

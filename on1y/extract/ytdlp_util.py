@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from on1y.config import get_settings
+from on1y.network.proxy import effective_ytdlp_proxy, proxy_hint_message
 from on1y.cookies.loader import load_cookies_for_ytdlp
 from on1y.extract.subtitles import DEFAULT_SUBTITLE_LANGS, parse_subtitle_langs
 
@@ -27,8 +28,9 @@ def build_ytdlp_opts(
         "retries": settings.ytdlp_retries,
         "extractor_retries": settings.ytdlp_retries,
     }
-    if settings.ytdlp_proxy:
-        opts["proxy"] = settings.ytdlp_proxy
+    proxy = effective_ytdlp_proxy(settings=settings)
+    if proxy:
+        opts["proxy"] = proxy
     if cookie_path is not None:
         netscape = load_cookies_for_ytdlp(cookie_path, required=required)
         if netscape is not None:
@@ -45,10 +47,4 @@ def parse_subtitle_langs_from_settings() -> list[str]:
 
 
 def proxy_hint() -> str:
-    settings = get_settings()
-    if settings.ytdlp_proxy:
-        return f"Proxy is set ({settings.ytdlp_proxy}) but connection still failed."
-    return (
-        "WSL may not reach YouTube. Set ON1Y_YTDLP_PROXY in .env "
-        "(e.g. http://127.0.0.1:7890) to match your VPN/clash on Windows."
-    )
+    return proxy_hint_message()

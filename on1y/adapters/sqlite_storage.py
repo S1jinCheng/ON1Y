@@ -1348,10 +1348,26 @@ class SqliteStorage:
 
     def count_subtitles_by_status(self) -> dict[str, int]:
         conn = self._connect()
-        rows = conn.execute(
-            "SELECT status, COUNT(*) AS c FROM pending_subtitles GROUP BY status"
-        ).fetchall()
-        return {str(r["status"]): int(r["c"]) for r in rows}
+        user_clause, user_params = self._user_scope_parts(conn)
+        if user_clause:
+            rows = conn.execute(
+                f"""
+                SELECT ps.status, COUNT(*) AS c
+                FROM pending_subtitles ps
+                JOIN raw_items r ON r.id = ps.raw_id
+                WHERE {user_clause}
+                GROUP BY ps.status
+                """,
+                user_params,
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT status, COUNT(*) AS c FROM pending_subtitles GROUP BY status"
+            ).fetchall()
+        counts = {str(r["status"]): int(r["c"]) for r in rows}
+        for key in ("pending", "processing", "done", "failed"):
+            counts.setdefault(key, 0)
+        return counts
 
     def count_pending_subtitles_for_platform(self, platform: str) -> int:
         conn = self._connect()
@@ -2755,8 +2771,12 @@ class SqliteStorage:
             where_parts.append(day_where.strip().removeprefix("AND").strip())
         needs_join = False
         if platform:
-            where_parts.append("r.platform = ?")
-            params.append(platform)
+            from on1y.utils.platform import knowledge_platform_filter_sql
+
+            clause, platform_params = knowledge_platform_filter_sql(platform)
+            if clause:
+                where_parts.append(clause)
+                params.extend(platform_params)
         if source:
             where_parts.append("r.source = ?")
             params.append(source)

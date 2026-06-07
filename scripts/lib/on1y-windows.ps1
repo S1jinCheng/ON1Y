@@ -190,14 +190,24 @@ function Initialize-RustPath {
 
 function Stop-On1yDesktopProcess {
     $stopped = 0
-    foreach ($proc in Get-Process -Name "On1y" -ErrorAction SilentlyContinue) {
-        Write-Host "Stopping On1y desktop (PID $($proc.Id))..."
-        Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-        $stopped++
+    foreach ($name in @("On1y", "on1y")) {
+        foreach ($proc in Get-Process -Name $name -ErrorAction SilentlyContinue) {
+            Write-Host "Stopping $($proc.ProcessName) (PID $($proc.Id))..."
+            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+            $stopped++
+        }
     }
     if ($stopped -gt 0) {
-        Start-Sleep -Milliseconds 800
+        Start-Sleep -Milliseconds 1200
     }
+    return $stopped
+}
+
+function Stop-On1yForBuild {
+    $stopped = Stop-On1yDesktopProcess
+    $backendPort = Get-On1yBackendPort
+    $stopped += Stop-PortListener -Port $backendPort
+    Start-Sleep -Milliseconds 400
     return $stopped
 }
 

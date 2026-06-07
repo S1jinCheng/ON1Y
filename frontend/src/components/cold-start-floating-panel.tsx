@@ -6,22 +6,23 @@ import {
   ChevronDown,
   ChevronUp,
   Loader2,
-  Snowflake,
+  RefreshCw,
   X
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { type FullSyncStatus } from "@/lib/api";
+import { type FullSyncStatus, type PipelineBarMetrics } from "@/lib/api";
 import { t, type Locale, type UiKey } from "@/lib/i18n";
+import { platformLabel } from "@/lib/platform-label";
 
 const COLLAPSED_KEY = "on1y-cold-start-panel-collapsed";
 const DISMISSED_KEY = "on1y-cold-start-panel-dismissed";
+const RECENT_EVENT_LIMIT = 3;
 
-type ColdStartEvent = {
+type RecentEvent = {
   id: number;
   kind: string;
   status: string;
-  phase: string;
   title: string;
   platform?: string | null;
 };
@@ -54,6 +55,94 @@ function phaseLabel(phase: string | null | undefined, ui: (key: UiKey) => string
     return ui("coldStartIngestDone");
   }
   return ui("coldStartRunning");
+}
+
+function formatBarFraction(bar: PipelineBarMetrics): string {
+  return `${bar.done}/${bar.total}`;
+}
+
+function eventStatusLabel(status: string, ui: (key: UiKey) => string): string {
+  const map: Record<string, UiKey> = {
+    enqueued: "coldStartStatusEnqueued",
+    ingested: "coldStartStatusIngested",
+    distilled: "coldStartStatusDistilled",
+    failed: "coldStartStatusFailed",
+    skipped: "coldStartStatusSkipped"
+  };
+  const key = map[status];
+  return key ? ui(key) : status;
+}
+
+function eventStatusTone(status: string): string {
+  if (status === "failed") {
+    return "bg-red-950/30 text-red-300";
+  }
+  if (status === "distilled") {
+    return "bg-accent-soft text-highlight";
+  }
+  if (status === "ingested" || status === "enqueued") {
+    return "bg-soft text-muted";
+  }
+  return "bg-panel text-muted";
+}
+
+function RecentEventRow(props: {
+  event: RecentEvent;
+  locale: Locale;
+  ui: (key: UiKey) => string;
+}): JSX.Element {
+  const { event, locale, ui } = props;
+  return (
+    <div className="group flex items-center gap-2 rounded-lg px-1.5 py-1 transition-colors hover:bg-soft/80">
+      <span
+        className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+          event.status === "failed"
+            ? "bg-red-400/80"
+            : event.status === "distilled"
+              ? "bg-highlight"
+              : "bg-progress"
+        }`}
+      />
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-[11px] font-medium text-foreground">{event.title}</div>
+        {event.platform ? (
+          <div className="truncate text-[10px] text-muted">
+            {platformLabel(event.platform, locale)}
+          </div>
+        ) : null}
+      </div>
+      <span
+        className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${eventStatusTone(event.status)}`}
+      >
+        {eventStatusLabel(event.status, ui)}
+      </span>
+    </div>
+  );
+}
+
+function PipelineBarRow(props: {
+  label: string;
+  bar: PipelineBarMetrics;
+  active?: boolean;
+}): JSX.Element {
+  const { bar, label, active } = props;
+  const pct = bar.total > 0 ? Math.min(100, (bar.done / bar.total) * 100) : 0;
+  return (
+    <div className="flex items-center gap-2 text-xs">
+      <span className="w-7 shrink-0 text-muted">{label}</span>
+      <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-soft">
+        <div
+          className={`h-full rounded-full transition-all duration-300 ${
+            active ? "bg-progress" : bar.done >= bar.total && bar.total > 0 ? "bg-highlight" : "bg-accent"
+          }`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      <span className="w-14 shrink-0 text-right tabular-nums text-foreground">
+        {formatBarFraction(bar)}
+      </span>
+    </div>
+  );
 }
 
 export function ColdStartFloatingPanel(props: {
@@ -116,16 +205,37 @@ export function ColdStartFloatingPanel(props: {
 
   const progress = props.status?.progress;
   const counters = progress?.counters ?? {};
-  const ingested = counters.ingested ?? 0;
-  const failed = counters.failed ?? 0;
-  const distilledBg = typeof bg?.distilled === "number" ? bg.distilled : 0;
-  const remainingBg = typeof bg?.remaining === "number" ? bg.remaining : null;
 
-  const itemEvents = useMemo(() => {
+  const bars = useMemo(() => {
+    const fromApi = props.status?.pipeline_bars;
+    const fallbackIngestTotal = Math.max(
+      counters.ingested ?? 0,
+      counters.enqueued ?? 0
+    );
+    const fallbackIngest: PipelineBarMetrics = {
+      done: counters.ingested ?? 0,
+      total: fallbackIngestTotal
+    };
+    const fallbackDistill: PipelineBarMetrics = {
+      done: counters.distilled ?? (typeof bg?.distilled === "number" ? bg.distilled : 0),
+      total:
+        typeof bg?.remaining === "number" && typeof bg?.distilled === "number"
+          ? bg.distilled + bg.remaining
+          : counters.distilled ?? 0
+    };
+    return {
+      ingest: fromApi?.ingest ?? fallbackIngest,
+      subtitles: fromApi?.subtitles ?? { done: 0, total: 0 },
+      distill: fromApi?.distill ?? fallbackDistill
+    };
+  }, [bg?.distilled, bg?.remaining, counters.distilled, counters.enqueued, counters.ingested, props.status?.pipeline_bars]);
+
+  const recentEvents = useMemo(() => {
     const events = progress?.events ?? [];
     return events
       .filter((e) => e.kind === "item" || e.kind === "error")
-      .slice(-6) as ColdStartEvent[];
+      .slice(-RECENT_EVENT_LIMIT)
+      .reverse() as RecentEvent[];
   }, [progress?.events]);
 
   const elapsedMs =
@@ -135,35 +245,7 @@ export function ColdStartFloatingPanel(props: {
       ? Math.max(0, Date.now() - Date.parse(props.status.started_at))
       : undefined);
 
-  const summary = useMemo(() => {
-    if (ingestRunning) {
-      return ui("coldStartFloatIngesting")
-        .replace("{ingested}", String(ingested))
-        .replace("{failed}", failed > 0 ? ` · ${failed} ${ui("coldStartCounterFailed")}` : "");
-    }
-    if (distillRunning) {
-      const rem =
-        remainingBg != null
-          ? ui("coldStartFloatDistillRemaining").replace("{remaining}", String(remainingBg))
-          : ui("coldStartPhaseBackgroundDistill");
-      return ui("coldStartFloatDistilling")
-        .replace("{done}", String(distilledBg))
-        .replace("{detail}", rem);
-    }
-    if (props.status?.current_phase === "done" && !distillRunning) {
-      return ui("coldStartIngestDone");
-    }
-    return ui("coldStartRunning");
-  }, [
-    distillRunning,
-    distilledBg,
-    failed,
-    ingestRunning,
-    ingested,
-    props.status?.current_phase,
-    remainingBg,
-    ui
-  ]);
+  const barsSummary = `${formatBarFraction(bars.ingest)} · ${formatBarFraction(bars.subtitles)} · ${formatBarFraction(bars.distill)}`;
 
   if (!active && dismissed) {
     return null;
@@ -186,27 +268,27 @@ export function ColdStartFloatingPanel(props: {
       <button
         type="button"
         onClick={toggleCollapsed}
-        className="fixed bottom-4 right-4 z-[60] flex max-w-[min(20rem,calc(100vw-2rem))] items-center gap-2 rounded-full border border-sky-200 bg-white/95 px-3 py-2 text-left text-sm shadow-lg backdrop-blur hover:bg-sky-50"
+        className="fixed bottom-4 right-4 z-[60] flex max-w-[min(24rem,calc(100vw-2rem))] items-center gap-2 rounded-full border border-border bg-surface/95 px-3 py-2 text-left text-sm shadow-on1y backdrop-blur-md hover:bg-soft/80"
       >
         {active ? (
-          <Loader2 className="h-4 w-4 shrink-0 animate-spin text-sky-600" />
+          <Loader2 className="h-4 w-4 shrink-0 animate-spin text-highlight" />
         ) : (
-          <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" />
+          <CheckCircle2 className="h-4 w-4 shrink-0 text-highlight" />
         )}
-        <Snowflake className="h-3.5 w-3.5 shrink-0 text-sky-600" />
-        <span className="min-w-0 truncate font-medium text-neutral-800">{summary}</span>
-        <ChevronUp className="h-4 w-4 shrink-0 text-neutral-400" />
+        <RefreshCw className="h-3.5 w-3.5 shrink-0 text-highlight" />
+        <span className="min-w-0 truncate font-medium tabular-nums text-foreground">{barsSummary}</span>
+        <ChevronUp className="h-4 w-4 shrink-0 text-muted" />
       </button>
     );
   }
 
   return (
-    <div className="fixed bottom-4 right-4 z-[60] w-[min(22rem,calc(100vw-2rem))] overflow-hidden rounded-xl border border-sky-200 bg-white/95 shadow-xl backdrop-blur">
-      <div className="flex items-center gap-2 border-b border-sky-100 bg-sky-50/80 px-3 py-2">
-        <Snowflake className="h-4 w-4 shrink-0 text-sky-600" />
+    <div className="fixed bottom-4 right-4 z-[60] w-[min(22rem,calc(100vw-2rem))] overflow-hidden rounded-xl border border-border bg-surface/95 shadow-on1y backdrop-blur-md">
+      <div className="flex items-center gap-2 border-b border-border bg-panel/90 px-3 py-2">
+        <RefreshCw className="h-4 w-4 shrink-0 text-highlight" />
         <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-semibold text-neutral-900">{ui("coldStartTitle")}</div>
-          <div className="truncate text-[11px] text-neutral-500">
+          <div className="truncate text-sm font-semibold text-foreground">{ui("coldStartTitle")}</div>
+          <div className="truncate text-[11px] text-muted">
             {ingestRunning
               ? phaseLabel(currentPhase, ui)
               : distillRunning
@@ -219,7 +301,7 @@ export function ColdStartFloatingPanel(props: {
           type="button"
           aria-label={ui("coldStartFloatCollapse")}
           onClick={toggleCollapsed}
-          className="rounded p-1 text-neutral-400 hover:bg-white hover:text-neutral-700"
+          className="rounded p-1 text-muted hover:bg-soft hover:text-foreground"
         >
           <ChevronDown className="h-4 w-4" />
         </button>
@@ -228,7 +310,7 @@ export function ColdStartFloatingPanel(props: {
             type="button"
             aria-label={ui("coldStartFloatClose")}
             onClick={dismiss}
-            className="rounded p-1 text-neutral-400 hover:bg-white hover:text-neutral-700"
+            className="rounded p-1 text-muted hover:bg-soft hover:text-foreground"
           >
             <X className="h-4 w-4" />
           </button>
@@ -252,10 +334,10 @@ export function ColdStartFloatingPanel(props: {
                   key={phase}
                   className={`rounded-full px-2 py-0.5 ${
                     done
-                      ? "bg-emerald-50 text-emerald-800"
+                      ? "bg-accent-soft text-highlight"
                       : activePhase
-                        ? "bg-sky-100 text-sky-800"
-                        : "bg-neutral-100 text-neutral-500"
+                        ? "bg-soft text-foreground"
+                        : "bg-panel text-muted"
                   }`}
                 >
                   {phaseLabel(phase, ui)}
@@ -265,22 +347,22 @@ export function ColdStartFloatingPanel(props: {
           </div>
         ) : null}
 
-        <div className="grid grid-cols-2 gap-2 text-xs">
-          <div className="rounded-lg bg-neutral-50 px-2 py-1.5">
-            <div className="text-[10px] text-neutral-500">{ui("coldStartCounterIngested")}</div>
-            <div className="font-semibold tabular-nums text-neutral-900">{ingested}</div>
-          </div>
-          <div className="rounded-lg bg-neutral-50 px-2 py-1.5">
-            <div className="text-[10px] text-neutral-500">{ui("coldStartCounterDistilled")}</div>
-            <div className="font-semibold tabular-nums text-neutral-900">
-              {distillRunning || distilledBg > 0 ? distilledBg : (counters.distilled ?? 0)}
-              {remainingBg != null && distillRunning ? (
-                <span className="ml-1 text-[10px] font-normal text-neutral-500">
-                  / {remainingBg + distilledBg}
-                </span>
-              ) : null}
-            </div>
-          </div>
+        <div className="space-y-1.5">
+          <PipelineBarRow
+            label={ui("coldStartBarIngest")}
+            bar={bars.ingest}
+            active={ingestRunning}
+          />
+          <PipelineBarRow
+            label={ui("coldStartBarSubtitles")}
+            bar={bars.subtitles}
+            active={ingestRunning}
+          />
+          <PipelineBarRow
+            label={ui("coldStartBarDistill")}
+            bar={bars.distill}
+            active={ingestRunning || distillRunning}
+          />
         </div>
 
         {props.status?.error ? (
@@ -298,21 +380,19 @@ export function ColdStartFloatingPanel(props: {
         ) : null}
 
         {!ingestRunning && distillRunning ? (
-          <p className="text-[11px] leading-relaxed text-neutral-500">{ui("coldStartFloatDistillHint")}</p>
+          <p className="text-[11px] leading-relaxed text-muted">{ui("coldStartFloatDistillHint")}</p>
         ) : null}
 
-        {itemEvents.length > 0 && ingestRunning ? (
-          <div className="max-h-28 space-y-1 overflow-y-auto border-t border-neutral-100 pt-2">
-            {itemEvents.map((event) => (
-              <div key={event.id} className="flex items-start gap-1.5 text-[11px] text-neutral-600">
-                {event.status === "failed" ? (
-                  <AlertCircle className="mt-0.5 h-3 w-3 shrink-0 text-red-500" />
-                ) : (
-                  <CheckCircle2 className="mt-0.5 h-3 w-3 shrink-0 text-emerald-600" />
-                )}
-                <span className="line-clamp-1">{event.title}</span>
-              </div>
-            ))}
+        {active && recentEvents.length > 0 ? (
+          <div className="border-t border-border pt-2">
+            <div className="mb-1 px-1.5 text-[10px] font-medium uppercase tracking-wide text-muted">
+              {ui("coldStartFloatRecent")}
+            </div>
+            <div className="space-y-0.5">
+              {recentEvents.map((event) => (
+                <RecentEventRow key={event.id} event={event} locale={props.locale} ui={ui} />
+              ))}
+            </div>
           </div>
         ) : null}
       </div>

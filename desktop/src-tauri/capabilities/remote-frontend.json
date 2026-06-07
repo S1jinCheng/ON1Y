@@ -8,6 +8,8 @@
   },
   "permissions": [
     "opener:default",
-    "allow-open-external-url"
+    "allow-open-external-url",
+    "allow-pick-data-folder",
+    "allow-save-archive-file"
   ]
 }

@@ -19,9 +19,43 @@ logger = logging.getLogger(__name__)
 _SKIP_EPUB_PARTS = re.compile(r"(nav|toc|copyright|cover|titlepage|contents)", re.I)
 
 
-def economist_epub_cache_path(settings: Settings, edition_date: str) -> Path:
+def _legacy_economist_epub_cache_path(settings: Settings, edition_date: str) -> Path:
     safe = edition_date.strip().replace("/", "-")
     return settings.data_dir / "economist" / f"{safe}.epub"
+
+
+def economist_epub_cache_path(
+    settings: Settings,
+    edition_date: str,
+    *,
+    user_id: int | None = None,
+) -> Path:
+    from on1y.auth.context import get_effective_user_id
+    from on1y.user.paths import user_economist_cache_dir
+
+    uid = user_id if user_id is not None else get_effective_user_id()
+    safe = edition_date.strip().replace("/", "-")
+    return user_economist_cache_dir(uid) / f"{safe}.epub"
+
+
+def resolve_economist_epub_cache_path(
+    settings: Settings,
+    edition_date: str,
+    *,
+    user_id: int | None = None,
+) -> Path | None:
+    """User-scoped EPUB path, with legacy data/economist/ fallback for user 1."""
+    from on1y.auth.context import get_effective_user_id
+
+    uid = user_id if user_id is not None else get_effective_user_id()
+    path = economist_epub_cache_path(settings, edition_date, user_id=uid)
+    if path.is_file():
+        return path
+    if uid == 1:
+        legacy = _legacy_economist_epub_cache_path(settings, edition_date)
+        if legacy.is_file():
+            return legacy
+    return None
 
 
 def download_epub(url: str, *, settings: Settings | None = None) -> bytes:
@@ -39,9 +73,14 @@ def cache_epub(data: bytes, *, settings: Settings, edition_date: str) -> Path:
     return path
 
 
-def load_cached_epub(settings: Settings, edition_date: str) -> bytes | None:
-    path = economist_epub_cache_path(settings, edition_date)
-    if path.is_file():
+def load_cached_epub(
+    settings: Settings,
+    edition_date: str,
+    *,
+    user_id: int | None = None,
+) -> bytes | None:
+    path = resolve_economist_epub_cache_path(settings, edition_date, user_id=user_id)
+    if path is not None:
         return path.read_bytes()
     return None
 

@@ -73,7 +73,7 @@ function ActionBtn(props: {
       aria-label={props.label}
       title={props.label}
       onClick={props.onClick}
-      className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-black ${props.className ?? ""}`}
+      className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-soft hover:text-foreground ${props.className ?? ""}`}
     >
       {props.children}
     </button>
@@ -148,10 +148,10 @@ export function FeedItemCard(props: FeedItemCardProps): JSX.Element {
     <div
       className={`flex overflow-hidden rounded-lg border transition-colors ${
         selectionMode && selected
-          ? "border-black bg-soft ring-1 ring-black"
+          ? "border-foreground bg-soft ring-1 ring-foreground"
           : active
-            ? "border-black bg-soft"
-            : "border-border bg-white hover:bg-panel"
+            ? "border-foreground bg-soft"
+            : "border-border bg-surface hover:bg-panel"
       }`}
     >
       <button
@@ -161,7 +161,7 @@ export function FeedItemCard(props: FeedItemCardProps): JSX.Element {
       >
         {compact ? (
           <div>
-            <div className="flex items-start gap-1.5 text-sm font-medium leading-snug">
+            <div className="flex items-start gap-1.5 text-sm font-medium leading-snug text-foreground">
               <div className="min-w-0 flex-1">
                 <SearchHtml
                   html={item.search_title_html}
@@ -176,7 +176,7 @@ export function FeedItemCard(props: FeedItemCardProps): JSX.Element {
               />
             </div>
             {hotlistMetaLine ? (
-              <p className="mt-1 text-[11px] text-neutral-500">{hotlistMetaLine}</p>
+              <p className="mt-1 text-[11px] text-muted">{hotlistMetaLine}</p>
             ) : null}
             {visibleTags.length > 0 ? (
               <div className="mt-1.5 flex flex-wrap gap-1">
@@ -192,10 +192,10 @@ export function FeedItemCard(props: FeedItemCardProps): JSX.Element {
           <div className="flex gap-3">
             {authorAvatar}
             <div className="min-w-0 flex-1">
-              <div className="truncate text-xs font-medium text-neutral-800">
+              <div className="truncate text-xs font-medium text-foreground">
                 {item.author.trim() || unknownAuthorLabel}
               </div>
-              <div className="mt-0.5 flex items-start gap-1.5 text-sm font-medium leading-snug">
+              <div className="mt-0.5 flex items-start gap-1.5 text-sm font-medium leading-snug text-foreground">
                 <div className="min-w-0 flex-1">
                   <SearchHtml
                     html={item.search_title_html}
@@ -210,28 +210,25 @@ export function FeedItemCard(props: FeedItemCardProps): JSX.Element {
                 />
               </div>
               {sourceLine ? (
-                <div className="mt-1 text-[11px] text-neutral-500">{sourceLine}</div>
+                <div className="mt-1 text-[11px] text-muted">{sourceLine}</div>
               ) : null}
-              <div className="mt-1 text-xs leading-relaxed text-neutral-600">
+              <div className="mt-1 text-xs leading-relaxed text-muted">
                 <SearchHtml
                   html={item.search_summary_html}
                   fallback={item.summary || item.search_snippet || noSummaryLabel}
                 />
               </div>
               <div className="mt-2 flex flex-wrap items-center gap-1">
-                <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-[10px] text-neutral-600">
+                <span className="rounded bg-soft px-1.5 py-0.5 text-[10px] text-muted">
                   {platformLabel(item.platform, locale)}
                 </span>
                 {item.theme ? (
-                  <span className="rounded border border-black px-1.5 py-0.5 text-[10px] font-medium">
+                  <span className="rounded border border-foreground px-1.5 py-0.5 text-[10px] font-medium text-foreground">
                     {themeDisplayName(item.theme, locale)}
                   </span>
                 ) : null}
                 {visibleTags.slice(0, 3).map((tg) => (
-                  <span
-                    key={tg.id}
-                    className="rounded bg-neutral-100 px-1.5 py-0.5 text-[10px] text-neutral-700"
-                  >
+                  <span key={tg.id} className={feedItemListTagClass}>
                     #{tg.name}
                   </span>
                 ))}
@@ -242,7 +239,7 @@ export function FeedItemCard(props: FeedItemCardProps): JSX.Element {
       </button>
 
       <div
-        className={`flex shrink-0 flex-col items-center justify-center gap-0 border-l border-border bg-neutral-50/80 ${
+        className={`flex shrink-0 flex-col items-center justify-center gap-0 border-l border-border bg-panel/80 ${
           selectionMode ? "w-10 py-2" : "py-1"
         }`}
         onClick={(e) => e.stopPropagation()}
@@ -251,14 +248,14 @@ export function FeedItemCard(props: FeedItemCardProps): JSX.Element {
       >
         <ActionBtn
           label={batchSelectLabel}
-          className={selected ? "text-black" : ""}
+          className={selected ? "text-foreground" : ""}
           onClick={(e) => {
             e.stopPropagation();
             onToggleSelected?.();
           }}
         >
           {selected ? (
-            <CheckCircle2 className="h-4 w-4 fill-black text-white" />
+            <CheckCircle2 className="h-4 w-4 fill-foreground text-background" />
           ) : (
             <Circle className="h-4 w-4" />
           )}
@@ -299,7 +296,7 @@ export function FeedItemCard(props: FeedItemCardProps): JSX.Element {
                 type="button"
                 aria-label={moveThemeLabel}
                 title={moveThemeLabel}
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-black"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-soft hover:text-foreground"
               >
                 <Forward className="h-4 w-4" />
               </button>
@@ -309,7 +306,7 @@ export function FeedItemCard(props: FeedItemCardProps): JSX.Element {
           {confirmDelete ? (
             <ActionBtn
               label={deleteConfirmLabel}
-              className="text-red-600 hover:bg-red-50 hover:text-red-700"
+              className="text-red-600 hover:bg-red-500/10 hover:text-red-500"
               onClick={(e) => {
                 e.stopPropagation();
                 onDelete();
@@ -321,7 +318,7 @@ export function FeedItemCard(props: FeedItemCardProps): JSX.Element {
           ) : (
             <ActionBtn
               label={deleteLabel}
-              className="hover:text-red-600"
+              className="hover:text-red-500"
               onClick={(e) => {
                 e.stopPropagation();
                 setConfirmDelete(true);

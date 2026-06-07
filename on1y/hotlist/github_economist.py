@@ -79,8 +79,11 @@ def _github_client(settings: Settings) -> httpx.Client:
             "Accept": "application/vnd.github+json",
         },
     }
-    if settings.ytdlp_proxy:
-        kwargs["proxy"] = settings.ytdlp_proxy
+    from on1y.network.proxy import effective_ytdlp_proxy
+
+    proxy = effective_ytdlp_proxy(settings=settings)
+    if proxy:
+        kwargs["proxy"] = proxy
     return httpx.Client(**kwargs)
 
 

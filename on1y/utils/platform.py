@@ -15,6 +15,10 @@ PLATFORM_GENERIC = "generic"
 # Platforms using yt-dlp with decoupled metadata + subtitle pipeline
 YTDLP_VIDEO_PLATFORMS = frozenset({PLATFORM_YOUTUBE, PLATFORM_BILIBILI})
 
+# Primary feed platforms shown in the workbench platform filter.
+KNOWLEDGE_MAIN_PLATFORMS = frozenset({PLATFORM_ZHIHU, PLATFORM_BILIBILI, PLATFORM_YOUTUBE})
+PLATFORM_FILTER_OTHER = "other"
+
 
 def is_ytdlp_video_platform(platform: str) -> bool:
     return platform in YTDLP_VIDEO_PLATFORMS
@@ -50,6 +54,24 @@ def is_zhihu_url(url: str) -> bool:
 
 def is_youtube_url(url: str) -> bool:
     return detect_platform(url) == PLATFORM_YOUTUBE
+
+
+def knowledge_platform_filter_sql(
+    platform: str | None,
+    *,
+    table_alias: str = "r",
+) -> tuple[str, list[str]]:
+    """SQL fragment for knowledge list/search platform filter (supports ``other``)."""
+    if not platform:
+        return ("", [])
+    key = platform.strip().lower()
+    if key == PLATFORM_FILTER_OTHER:
+        placeholders = ",".join("?" * len(KNOWLEDGE_MAIN_PLATFORMS))
+        return (
+            f"{table_alias}.platform NOT IN ({placeholders})",
+            sorted(KNOWLEDGE_MAIN_PLATFORMS),
+        )
+    return (f"{table_alias}.platform = ?", [key])
 
 
 def pending_url_platform_clause(platform: str) -> tuple[str, tuple[str, ...]]:

@@ -56,7 +56,7 @@ export function RichNoteEditor(props: RichNoteEditorProps): JSX.Element {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col rounded-lg border border-border bg-white">
+    <div className="flex h-full min-h-0 flex-col rounded-lg border border-border bg-surface">
       <div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-border px-2 py-1.5">
         <ToolbarButton
           title="Bold"
@@ -94,7 +94,7 @@ export function RichNoteEditor(props: RichNoteEditorProps): JSX.Element {
         <select
           disabled={disabled}
           onChange={(e) => exec("fontName", e.target.value)}
-          className="rounded border border-border bg-white px-1.5 py-0.5 text-xs outline-none"
+          className="rounded border border-border bg-surface px-1.5 py-0.5 text-xs text-foreground outline-none"
           defaultValue=""
         >
           <option value="" disabled>

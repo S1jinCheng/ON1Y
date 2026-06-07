@@ -72,7 +72,54 @@ def _on_cold_start_progress(snapshot: dict[str, Any]) -> None:
     )
 
 
+def pipeline_bar_metrics(*, user_id: int) -> dict[str, dict[str, int]]:
+    """Per-user ingest / subtitle / distill progress for the sync panel."""
+    from on1y.adapters.sqlite_storage import SqliteStorage
+    from on1y.auth.context import user_context
+    from on1y.config import get_settings
+    from on1y.distill.prompts import PROMPT_VERSION
+
+    storage = SqliteStorage(get_settings().db_path)
+    storage.initialize()
+    try:
+        with user_context(user_id):
+            pending = storage.count_pending_by_status()
+            ingest_done = int(pending.get("done", 0))
+            ingest_total = sum(int(pending.get(k, 0)) for k in ("pending", "processing", "done", "failed"))
+
+            sub = storage.count_subtitles_by_status()
+            subtitle_done = int(sub.get("done", 0))
+            subtitle_total = sum(
+                int(sub.get(k, 0)) for k in ("pending", "processing", "done", "failed")
+            )
+
+            distill_done = storage.count_distilled_items()
+            distill_remaining = storage.count_raw_ids_needing_distill(
+                prompt_version=PROMPT_VERSION,
+                platform=None,
+            )
+            distill_total = distill_done + distill_remaining
+    finally:
+        storage.close()
+
+    return {
+        "ingest": {
+            "done": ingest_done,
+            "total": max(ingest_total, ingest_done),
+        },
+        "subtitles": {
+            "done": subtitle_done,
+            "total": max(subtitle_total, subtitle_done),
+        },
+        "distill": {
+            "done": distill_done,
+            "total": max(distill_total, distill_done),
+        },
+    }
+
+
 def full_sync_status() -> dict[str, Any]:
+    from on1y.auth.context import get_current_user_id, user_context
     from on1y.distill.batch_job import distill_batch_status
 
     with _lock:
@@ -96,6 +143,28 @@ def full_sync_status() -> dict[str, Any]:
             st["progress"] = progress
         except (TypeError, ValueError, OSError):
             pass
+
+    uid = get_current_user_id()
+    if uid is not None:
+        try:
+            with user_context(uid):
+                bars = pipeline_bar_metrics(user_id=uid)
+            if st.get("running") and st.get("user_id") == uid:
+                counters = (st.get("progress") or {}).get("counters") or {}
+                enqueued = int(counters.get("enqueued", 0))
+                ingested_live = int(counters.get("ingested", 0))
+                distilled_live = int(counters.get("distilled", 0))
+                if enqueued > bars["ingest"]["total"]:
+                    bars["ingest"]["total"] = enqueued
+                if ingested_live > bars["ingest"]["done"]:
+                    bars["ingest"]["done"] = ingested_live
+                if distilled_live > bars["distill"]["done"]:
+                    bars["distill"]["done"] = distilled_live
+                    bars["distill"]["total"] = max(bars["distill"]["total"], distilled_live)
+            st["pipeline_bars"] = bars
+        except Exception:
+            logger.debug("pipeline_bar_metrics failed for user %s", uid, exc_info=True)
+
     return st
 
 
@@ -210,23 +279,42 @@ def _sync_subscriptions_phase(
         rss_report: dict[str, Any] = {}
         try:
             progress and progress.set_phase("subscriptions", detail=f"同步订阅 · {rss_platform}")
-            if rss_platform == "youtube" and settings.youtube_auto_refresh_channels:
-                with phase_timer.span(f"subscriptions.{rss_platform}.config"):
-                    rss_report["config"] = refresh_youtube_feeds(
+            if rss_platform == "youtube":
+                if settings.youtube_auto_refresh_channels:
+                    with phase_timer.span(f"subscriptions.{rss_platform}.config"):
+                        rss_report["config"] = refresh_youtube_feeds(
+                            settings=settings,
+                            max_channels=settings.youtube_refresh_max_channels,
+                        )
+                with phase_timer.span(f"subscriptions.{rss_platform}.poll"):
+                    rss_report["poll"] = sync_rss_subscriptions(
+                        storage,
+                        platform=rss_platform,
+                        backfill=True,
+                        max_items_per_feed=videos_per_feed,
                         settings=settings,
-                        max_channels=settings.youtube_refresh_max_channels,
                     )
-            if rss_platform == "zhihu" and settings.zhihu_auto_refresh_follows:
-                with phase_timer.span(f"subscriptions.{rss_platform}.config"):
-                    rss_report["config"] = refresh_zhihu_follow_feeds(settings=settings)
-            with phase_timer.span(f"subscriptions.{rss_platform}.poll"):
-                rss_report["poll"] = sync_rss_subscriptions(
-                    storage,
-                    platform=rss_platform,
-                    backfill=True,
-                    max_items_per_feed=videos_per_feed,
-                    settings=settings,
-                )
+            elif settings.zhihu_follow_sync_mode == "api":
+                with phase_timer.span(f"subscriptions.{rss_platform}.poll"):
+                    from on1y.ingestion.zhihu_subscriptions import poll_zhihu_follow_activities
+
+                    rss_report["poll"] = poll_zhihu_follow_activities(
+                        storage,
+                        settings=settings,
+                        backfill=True,
+                    )
+            else:
+                if settings.zhihu_auto_refresh_follows:
+                    with phase_timer.span(f"subscriptions.{rss_platform}.config"):
+                        rss_report["config"] = refresh_zhihu_follow_feeds(settings=settings)
+                with phase_timer.span(f"subscriptions.{rss_platform}.poll"):
+                    rss_report["poll"] = sync_rss_subscriptions(
+                        storage,
+                        platform=rss_platform,
+                        backfill=True,
+                        max_items_per_feed=videos_per_feed,
+                        settings=settings,
+                    )
         except Exception as exc:
             logger.exception("Full sync RSS %s failed", rss_platform)
             rss_report["error"] = str(exc)
@@ -324,70 +412,23 @@ def _drain_ingest_pipeline(
     batch_size: int = INGEST_BATCH_SIZE,
     max_rounds: int = MAX_PIPELINE_ROUNDS,
     timer: Any | None = None,
+    user_id: int | None = None,
 ) -> dict[str, Any]:
-    """Ingest pending URLs + fetch subtitles. LLM distill runs separately in background."""
-    import time
+    """Ingest + subtitles + distill in parallel (three worker threads)."""
+    from on1y.auth.context import get_current_user_id
+    from on1y.sync.parallel_pipeline import run_parallel_pipeline
 
-    from on1y.pipeline.subtitle_worker import run_subtitle_batch
-    from on1y.pipeline.zhihu_catchup import run_zhihu_catchup
-    from on1y.sync.progress import get_cold_start_progress
-    from on1y.sync.timing import SyncTimer, rollup_phase_totals
-
-    phase_timer = timer or SyncTimer()
-    progress = get_cold_start_progress()
-    progress and progress.set_phase("pipeline", detail="抓取正文与字幕")
-    totals: dict[str, Any] = {"rounds": 0, "platforms": {}, "round_timings_ms": []}
-    for _round in range(max_rounds):
-        round_t0 = time.perf_counter()
-        did_work = False
-        for platform in platforms:
-            plat_totals = totals["platforms"].setdefault(platform, {})
-            pending = storage.count_pending_for_platform(platform)
-            if platform == "zhihu":
-                if pending > 0:
-                    did_work = True
-                    with phase_timer.span(f"pipeline.{platform}.ingest"):
-                        plat_totals["ingest"] = run_zhihu_catchup(
-                            storage,
-                            ingest_per_round=batch_size,
-                            max_rounds=1,
-                        )
-            elif platform in ("bilibili", "youtube"):
-                if pending > 0:
-                    did_work = True
-                    with phase_timer.span(f"pipeline.{platform}.ingest"):
-                        plat_totals["ingest"] = _pipeline_ingest_batch(
-                            storage,
-                            platform=platform,
-                            limit=batch_size,
-                            progress=progress,
-                        )
-                    with phase_timer.span(f"pipeline.{platform}.subtitles"):
-                        sub = run_subtitle_batch(
-                            storage,
-                            batch_size,
-                            platform=platform,
-                            auto_distill=False,
-                        )
-                        plat_totals["subtitles"] = sub
-            elif pending > 0:
-                did_work = True
-                with phase_timer.span(f"pipeline.{platform}.ingest"):
-                    plat_totals["ingest"] = _pipeline_ingest_batch(
-                        storage,
-                        platform=platform,
-                        limit=batch_size,
-                        progress=progress,
-                    )
-
-        round_ms = round((time.perf_counter() - round_t0) * 1000, 1)
-        totals["round_timings_ms"].append(round_ms)
-        totals["rounds"] += 1
-        _set_sync_progress(phase="pipeline", phases_ms=rollup_phase_totals(phase_timer.spans_ms))
-        if not did_work:
-            break
-
-    return totals
+    uid = user_id if user_id is not None else get_current_user_id()
+    if uid is None:
+        uid = 1
+    _ = max_rounds  # kept for API compat; parallel pipeline drains until queues empty
+    return run_parallel_pipeline(
+        storage,
+        user_id=uid,
+        platforms=platforms,
+        batch_size=batch_size,
+        timer=timer,
+    )
 
 
 def _drain_ingest_and_distill(
@@ -465,7 +506,7 @@ def _execute_full_sync(
     try:
         with user_context(user_id):
             with progress.activate():
-                progress.set_phase("starting", detail="准备冷启动")
+                progress.set_phase("starting", detail="准备初始同步")
                 _set_sync_progress(phase="collections", phases_ms=rollup_phase_totals(timer.spans_ms))
                 report["collections"] = _sync_collections_phase(
                     storage,
@@ -488,11 +529,23 @@ def _execute_full_sync(
                     storage,
                     platforms=pipeline_platforms,
                     timer=timer,
+                    user_id=user_id,
                 )
-                progress.set_phase("done", detail="入库完成，AI 摘要已在后台继续")
-                report["background_distill"] = _start_background_distill_after_cold_start(
-                    user_id=user_id
-                )
+                distill_stats = (report.get("pipeline") or {}).get("distill") or {}
+                if distill_stats.get("enabled"):
+                    progress.set_phase("done", detail="初始同步完成（含 AI 摘要）")
+                    report["background_distill"] = {
+                        "started": False,
+                        "running": False,
+                        "message": "摘要已在并行流水线中处理",
+                        "distilled": distill_stats.get("distilled", 0),
+                        "failed": distill_stats.get("failed", 0),
+                    }
+                else:
+                    progress.set_phase("done", detail="入库完成（未配置 LLM，跳过摘要）")
+                    report["background_distill"] = _start_background_distill_after_cold_start(
+                        user_id=user_id
+                    )
 
         finished_at = datetime.now(timezone.utc).isoformat()
         phase_totals = rollup_phase_totals(timer.spans_ms)
@@ -586,6 +639,15 @@ def run_full_sync_blocking(
     return report
 
 
+def _user_has_sync_cookies(user_id: int) -> bool:
+    from on1y.user.paths import user_cookie_path
+
+    return any(
+        user_cookie_path(user_id, platform).is_file()
+        for platform in ("bilibili", "youtube", "zhihu")
+    )
+
+
 def start_full_sync_job(
     *,
     user_id: int,
@@ -594,12 +656,19 @@ def start_full_sync_job(
 ) -> dict[str, Any]:
     from on1y.subscriptions.sync_job import subscription_sync_status
 
+    if not _user_has_sync_cookies(user_id):
+        return {
+            "started": False,
+            "running": False,
+            "message": "请先在设置 → Cookie 中配置至少一个平台（哔哩哔哩 / YouTube / 知乎）",
+        }
+
     with _lock:
         if _state["running"]:
             return {
                 "started": False,
                 "running": True,
-                "message": "冷启动已在进行中",
+                "message": "初始同步已在进行中",
             }
     if subscription_sync_status().get("running"):
         return {
@@ -610,7 +679,7 @@ def start_full_sync_job(
 
     with _lock:
         if _state["running"]:
-            return {"started": False, "running": True, "message": "冷启动已在进行中"}
+            return {"started": False, "running": True, "message": "初始同步已在进行中"}
         started_at = datetime.now(timezone.utc).isoformat()
         _state.update(
             {
@@ -653,7 +722,7 @@ def start_full_sync_job(
         "started": True,
         "running": True,
         "message": (
-            f"已开始冷启动（收藏夹 + B 站近 {dynamic_days} 天动态 + 入库；"
+            f"已开始初始同步（收藏夹 + B 站近 {dynamic_days} 天动态 + 入库；"
             f"AI 摘要后台进行）"
         ),
     }

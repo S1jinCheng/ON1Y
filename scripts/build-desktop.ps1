@@ -17,8 +17,14 @@ if (-not (Initialize-RustPath)) {
     exit 1
 }
 
-Write-Host "Preparing frontend production build..."
-Ensure-FrontendReady -ForceRebuild
+if (-not (Test-Path (Join-Path (Get-On1yRoot) "dist\portable\app\frontend\out\index.html"))) {
+    Write-Host "Packaging portable backend + app assets..."
+    & (Join-Path $PSScriptRoot "package-release.ps1")
+    if ($LASTEXITCODE -ne 0) { throw "package-release.ps1 failed" }
+}
+else {
+    Write-Host "Using existing dist/portable bundle (run package-release.ps1 to rebuild)."
+}
 
 Write-Host "Preparing Tauri icons..."
 $python = Get-Command python -ErrorAction SilentlyContinue
@@ -36,11 +42,22 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "npm install failed in desktop/" }
 
     $env:ON1Y_ROOT = $root
-    if (Stop-On1yDesktopProcess -gt 0) {
-        Write-Host "Closed running On1y.exe so the build can replace it."
+    $stopped = Stop-On1yForBuild
+    if ($stopped -gt 0) {
+        Write-Host "Closed $stopped On1y process(es) so the build can replace locked files."
+    }
+    $setupExe = Join-Path $desktop "src-tauri\target\release\bundle\nsis\On1y_0.1.0_x64-setup.exe"
+    if (Test-Path $setupExe) {
+        Remove-Item -Force $setupExe -ErrorAction SilentlyContinue
     }
     Write-Host "Building On1y desktop (first run may take several minutes)..."
     & $npm run build
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "First tauri build failed; stopping processes and retrying once..." -ForegroundColor Yellow
+        Stop-On1yForBuild | Out-Null
+        Start-Sleep -Seconds 2
+        & $npm run build
+    }
     if ($LASTEXITCODE -ne 0) { throw "tauri build failed" }
 }
 finally {

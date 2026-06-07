@@ -132,7 +132,7 @@ export function OriginalTextPanel(props: OriginalTextPanelProps): JSX.Element {
 
       {cleaned ? (
         <div
-          className={`original-reading rounded-md border border-border bg-[#fafaf8] px-5 py-4 text-neutral-800 ${readingClass} ${scrollClass} [&_.original-heading]:mb-3 [&_.original-heading]:mt-5 [&_.original-heading]:font-semibold [&_.original-heading]:text-neutral-900 [&_.original-paragraph]:mb-4 [&_.original-paragraph]:indent-8 [&_.original-paragraph]:text-justify`}
+          className={`original-reading rounded-md border border-border bg-panel px-5 py-4 text-foreground ${readingClass} ${scrollClass} [&_.original-heading]:mb-3 [&_.original-heading]:mt-5 [&_.original-heading]:font-semibold [&_.original-heading]:text-foreground [&_.original-paragraph]:mb-4 [&_.original-paragraph]:indent-8 [&_.original-paragraph]:text-justify`}
           dangerouslySetInnerHTML={{ __html: html }}
         />
       ) : (

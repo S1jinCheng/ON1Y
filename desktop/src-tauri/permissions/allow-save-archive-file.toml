@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-save-archive-file"
+description = "Save exported On1y library archive via native dialog."
+commands.allow = ["save_archive_file"]

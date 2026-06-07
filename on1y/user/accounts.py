@@ -357,6 +357,15 @@ def bootstrap_default_user(storage: Any, *, settings: Settings | None = None) ->
                 {**profile, **legacy["profile_payload"]},
                 user_id=1,
             )
+        else:
+            kindle_to = (settings.kindle_send_to or "").strip()
+            if kindle_to:
+                profile["kindle"]["send_to"] = kindle_to
+                profile["kindle"]["enabled"] = bool(settings.economist_auto_kindle)
+            profile["economist"]["auto_ingest_enabled"] = bool(
+                settings.economist_auto_sync_enabled
+            )
+            profile["economist"]["auto_kindle_enabled"] = bool(settings.economist_auto_kindle)
         profile["owner"] = username
         from on1y.user.paths import COOKIE_PLATFORMS, user_cookie_path
 

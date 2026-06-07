@@ -37,10 +37,15 @@ def _llm_integration_defaults(*, user_id: int | None = None) -> dict[str, Any]:
     }
 
 
+def kindle_delivery_address(profile: dict[str, Any]) -> str:
+    """Per-user Kindle recipient from profile only (never global .env)."""
+    kindle = profile.get("kindle") if isinstance(profile.get("kindle"), dict) else {}
+    return str(kindle.get("send_to") or "").strip()
+
+
 def _default_payload(settings: Settings | None = None, *, user_id: int | None = None) -> dict[str, Any]:
     settings = settings or get_settings()
     uid = user_id if user_id is not None else get_effective_user_id()
-    kindle_to = (settings.kindle_send_to or "").strip()
     cookies: dict[str, str] = {}
     for platform in COOKIE_PLATFORMS:
         cookies[platform] = str(user_cookie_path(uid, platform))
@@ -49,15 +54,16 @@ def _default_payload(settings: Settings | None = None, *, user_id: int | None = 
         "owner": "default",
         "app": {
             "locale": "zh",
+            "appearance": "system",
             "open_browser_on_start": True,
         },
         "kindle": {
-            "enabled": bool(kindle_to) and settings.economist_auto_kindle,
-            "send_to": kindle_to,
+            "enabled": False,
+            "send_to": "",
         },
         "economist": {
-            "auto_ingest_enabled": settings.economist_auto_sync_enabled,
-            "auto_kindle_enabled": settings.economist_auto_kindle,
+            "auto_ingest_enabled": False,
+            "auto_kindle_enabled": False,
             "last_synced_edition": None,
             "last_kindle_edition": None,
         },
@@ -86,18 +92,19 @@ def _normalize_profile(data: dict[str, Any], *, user_id: int | None = None) -> d
     app_in = data.get("app") if isinstance(data.get("app"), dict) else {}
     locale = str(app_in.get("locale") or base["app"]["locale"] or "zh").strip().lower()
     base["app"]["locale"] = locale if locale in {"zh", "en"} else "zh"
+    appearance = str(app_in.get("appearance") or base["app"]["appearance"] or "system").strip().lower()
+    base["app"]["appearance"] = appearance if appearance in {"light", "dark", "system"} else "system"
     base["app"]["open_browser_on_start"] = bool(
         app_in.get("open_browser_on_start", base["app"]["open_browser_on_start"])
     )
-    base["kindle"]["enabled"] = bool(kindle_in.get("enabled", base["kindle"]["enabled"]))
-    send_to = str(kindle_in.get("send_to") or base["kindle"]["send_to"] or "").strip()
-    base["kindle"]["send_to"] = send_to
-    base["economist"]["auto_ingest_enabled"] = bool(
-        econ_in.get("auto_ingest_enabled", base["economist"]["auto_ingest_enabled"])
-    )
-    base["economist"]["auto_kindle_enabled"] = bool(
-        econ_in.get("auto_kindle_enabled", base["economist"]["auto_kindle_enabled"])
-    )
+    if "enabled" in kindle_in:
+        base["kindle"]["enabled"] = bool(kindle_in["enabled"])
+    if "send_to" in kindle_in:
+        base["kindle"]["send_to"] = str(kindle_in.get("send_to") or "").strip()
+    if "auto_ingest_enabled" in econ_in:
+        base["economist"]["auto_ingest_enabled"] = bool(econ_in["auto_ingest_enabled"])
+    if "auto_kindle_enabled" in econ_in:
+        base["economist"]["auto_kindle_enabled"] = bool(econ_in["auto_kindle_enabled"])
     for key in ("last_synced_edition", "last_kindle_edition"):
         raw = econ_in.get(key)
         base["economist"][key] = str(raw).strip() if raw else None
@@ -223,6 +230,7 @@ def public_profile_view(user_id: int | None = None) -> dict[str, Any]:
         "owner": profile.get("owner"),
         "app": {
             "locale": str(app.get("locale") or "zh"),
+            "appearance": str(app.get("appearance") or "system"),
             "open_browser_on_start": bool(
                 launch.get("open_browser_on_start", app.get("open_browser_on_start", True))
             ),

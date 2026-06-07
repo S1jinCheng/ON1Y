@@ -8,7 +8,11 @@ from typing import Any
 from on1y.config import Settings, get_settings
 from on1y.hotlist.constants import HOTLIST_ECONOMIST
 from on1y.hotlist.economist_urls import resolve_economist_epub_url, strip_legacy_economist_body
-from on1y.hotlist.epub_preview import build_economist_preview, economist_epub_cache_path
+from on1y.hotlist.epub_preview import (
+    build_economist_preview,
+    economist_epub_cache_path,
+    resolve_economist_epub_cache_path,
+)
 from on1y.models.enums import ContentType, ExtractStatus, SourceType
 from on1y.models.raw import RawItemCreate
 from on1y.ports.storage import StoragePort
@@ -66,12 +70,12 @@ def ensure_economist_preview(
     if not force and preview_is_complete(raw.body_text, meta):
         return True
 
-    cached = economist_epub_cache_path(settings, edition_date)
-    if not force and not cached.is_file():
+    cached = resolve_economist_epub_cache_path(settings, edition_date)
+    if not force and cached is None:
         logger.info(
             "Economist %s: no EPUB cache at %s; run hot-list sync once",
             edition_date,
-            cached,
+            economist_epub_cache_path(settings, edition_date),
         )
         return preview_is_complete(raw.body_text, meta)
 
@@ -91,7 +95,7 @@ def ensure_economist_preview(
             "chapter_count": preview_meta.get("chapter_count"),
             "preview_chars": preview_meta.get("preview_chars"),
             "epub_preview_ok": bool(body_text.strip() or preview_meta.get("chapters")),
-            "epub_cached": cached.is_file(),
+            "epub_cached": cached is not None,
         }
     )
 

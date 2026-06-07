@@ -69,8 +69,11 @@ def fetch_youtube_channel_avatar(
             "Accept-Language": "en-US,en;q=0.9",
         },
     }
-    if settings.ytdlp_proxy:
-        client_kwargs["proxy"] = settings.ytdlp_proxy
+    from on1y.network.proxy import effective_ytdlp_proxy
+
+    proxy = effective_ytdlp_proxy(settings=settings)
+    if proxy:
+        client_kwargs["proxy"] = proxy
     try:
         with httpx.Client(**client_kwargs) as client:
             response = client.get(url)

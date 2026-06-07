@@ -70,24 +70,33 @@ def sync_subscriptions(
             if rss_platform == "youtube"
             else settings.zhihu_auto_refresh_follows
         )
-        if do_refresh or auto_refresh:
-            try:
-                if rss_platform == "youtube":
-                    rss_report["config"] = refresh_youtube_feeds(
-                        settings=settings,
-                        max_channels=settings.youtube_refresh_max_channels,
-                    )
-                else:
-                    rss_report["config"] = refresh_zhihu_follow_feeds(settings=settings)
-            except Exception as exc:
-                rss_report["config"] = {"error": str(exc)}
+        if rss_platform == "zhihu" and settings.zhihu_follow_sync_mode == "api":
+            from on1y.ingestion.zhihu_subscriptions import poll_zhihu_follow_activities
 
-        rss_report["poll"] = sync_rss_subscriptions(
-            storage,
-            platform=rss_platform,
-            backfill=backfill,
-            settings=settings,
-        )
+            rss_report["poll"] = poll_zhihu_follow_activities(
+                storage,
+                settings=settings,
+                backfill=backfill,
+            )
+        else:
+            if do_refresh or auto_refresh:
+                try:
+                    if rss_platform == "youtube":
+                        rss_report["config"] = refresh_youtube_feeds(
+                            settings=settings,
+                            max_channels=settings.youtube_refresh_max_channels,
+                        )
+                    else:
+                        rss_report["config"] = refresh_zhihu_follow_feeds(settings=settings)
+                except Exception as exc:
+                    rss_report["config"] = {"error": str(exc)}
+
+            rss_report["poll"] = sync_rss_subscriptions(
+                storage,
+                platform=rss_platform,
+                backfill=backfill,
+                settings=settings,
+            )
         report[rss_platform] = rss_report
 
     if sync_hotlist and not dry_run and platform in {"zhihu", "all"}:

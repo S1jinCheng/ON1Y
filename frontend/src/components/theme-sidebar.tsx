@@ -27,6 +27,7 @@ import { Minus, Plus, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { themeDisplayName } from "@/lib/i18n";
+import { GLASS_MUTED, glassNavClass } from "@/lib/nav-glass";
 import type { Locale, ThemeRow } from "@/lib/types";
 
 type ThemeSidebarProps = {
@@ -89,13 +90,13 @@ function ThemeEditCard(props: ThemeEditCardProps): JSX.Element {
 
   return (
     <div
-      className={`theme-card-3d theme-sort-card rounded-md border border-neutral-200/90 bg-gradient-to-br from-white via-white to-neutral-50 px-2 py-1.5 ${
+      className={`theme-card-3d theme-sort-card rounded-md border border-border bg-gradient-to-br from-surface via-surface to-panel px-2 py-1.5 ${
         overlay ? "theme-sort-overlay shadow-lg" : ""
       }`}
       {...(overlay ? {} : dragProps)}
     >
       <div className="flex items-center justify-between gap-2 text-sm">
-        <span className="min-w-0 flex-1 truncate font-medium text-black">
+        <span className="min-w-0 flex-1 truncate font-medium text-foreground">
           {themeDisplayName(theme, locale)}
         </span>
         <span className="shrink-0 text-xs text-muted">{theme.item_count}</span>
@@ -157,10 +158,10 @@ function SortableThemeItem(props: SortableThemeItemProps): JSX.Element {
         title={deleting ? deletingLabel : deleteLabel}
         aria-label={deleting ? deletingLabel : deleteLabel}
         aria-busy={deleting}
-        className={`absolute left-0 top-1/2 z-10 flex h-3.5 w-3.5 -translate-y-1/2 items-center justify-center rounded-full border bg-white shadow-sm transition-colors disabled:cursor-not-allowed disabled:border-neutral-200 disabled:text-neutral-300 disabled:hover:bg-white ${
+        className={`absolute left-0 top-1/2 z-10 flex h-3.5 w-3.5 -translate-y-1/2 items-center justify-center rounded-full border bg-surface shadow-sm transition-colors disabled:cursor-not-allowed disabled:border-border disabled:text-muted disabled:hover:bg-surface ${
           deleting
-            ? "border-neutral-300 text-neutral-400"
-            : "border-red-500 text-red-500 hover:bg-red-50"
+            ? "border-border text-muted"
+            : "border-red-500 text-red-500 hover:bg-red-500/10"
         }`}
       >
         <Minus className="h-2 w-2" strokeWidth={4.5} absoluteStrokeWidth />
@@ -368,8 +369,8 @@ export function ThemeSidebar(props: ThemeSidebarProps): JSX.Element {
           aria-label={editMode ? labels.done : labels.addTheme}
           className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md border transition-colors ${
             editMode
-              ? "border-black bg-black text-white"
-              : "border-border bg-white text-neutral-600 hover:border-neutral-400 hover:text-black"
+              ? "border-foreground bg-inverse text-inverse-foreground"
+              : "border-border bg-surface text-muted hover:border-muted hover:text-foreground"
           }`}
         >
           {editMode ? <X className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
@@ -413,7 +414,7 @@ export function ThemeSidebar(props: ThemeSidebarProps): JSX.Element {
                     value={newName}
                     onChange={(e) => setNewName(e.target.value)}
                     placeholder={labels.themeName}
-                    className="mb-2 w-full rounded border border-border bg-white px-2 py-1 text-sm"
+                    className="mb-2 w-full rounded border border-border bg-surface px-2 py-1 text-sm text-foreground"
                     onKeyDown={(e) => {
                       if (e.key === "Enter") {
                         void handleAdd();
@@ -424,7 +425,7 @@ export function ThemeSidebar(props: ThemeSidebarProps): JSX.Element {
                     <button
                       type="button"
                       onClick={() => void handleAdd()}
-                      className="flex-1 rounded border border-black bg-black py-1 text-xs text-white"
+                      className="flex-1 rounded border border-foreground bg-inverse py-1 text-xs text-inverse-foreground"
                     >
                       {labels.addTheme}
                     </button>
@@ -445,7 +446,7 @@ export function ThemeSidebar(props: ThemeSidebarProps): JSX.Element {
                   type="button"
                   onClick={() => setAdding(true)}
                   disabled={savingOrder}
-                  className="ml-4 w-[calc(100%-1rem)] rounded-md border border-dashed border-border py-1.5 text-xs text-muted hover:border-neutral-400 hover:text-black disabled:opacity-50"
+                  className="ml-4 w-[calc(100%-1rem)] rounded-md border border-dashed border-border py-1.5 text-xs text-muted hover:border-muted hover:text-foreground disabled:opacity-50"
                 >
                   + {labels.addTheme}
                 </button>
@@ -472,11 +473,9 @@ export function ThemeSidebar(props: ThemeSidebarProps): JSX.Element {
           <button
             type="button"
             onClick={onSelectAll}
-            className={`w-full rounded px-2 py-1.5 text-left text-sm ${
+            className={`w-full rounded-md px-2 py-1.5 text-left text-sm transition-colors ${glassNavClass(
               selectedThemeId === undefined && collection === "feed"
-                ? "bg-black font-medium text-white"
-                : "hover:bg-soft"
-            }`}
+            )}`}
           >
             {labels.allThemes}
           </button>
@@ -485,16 +484,16 @@ export function ThemeSidebar(props: ThemeSidebarProps): JSX.Element {
               key={theme.id}
               type="button"
               onClick={() => onSelectTheme(theme.id)}
-              className={`flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-sm ${
+              className={`flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-sm transition-colors ${glassNavClass(
                 selectedThemeId === theme.id && collection === "feed"
-                  ? "bg-black font-medium text-white"
-                  : "hover:bg-soft"
-              }`}
+              )}`}
             >
               <span className="truncate">{themeDisplayName(theme, locale)}</span>
               <span
                 className={`shrink-0 text-xs ${
-                  selectedThemeId === theme.id ? "text-neutral-300" : "text-muted"
+                  selectedThemeId === theme.id && collection === "feed"
+                    ? GLASS_MUTED
+                    : "text-muted"
                 }`}
               >
                 {theme.item_count}

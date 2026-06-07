@@ -406,6 +406,59 @@ def _cmd_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_archive(args: argparse.Namespace) -> int:
+    from pathlib import Path
+
+    from on1y.auth.context import user_context
+    from on1y.user.accounts import UserStore
+    from on1y.user.archive import (
+        default_export_filename,
+        read_archive_from_path,
+        write_archive_to_path,
+    )
+
+    storage = get_storage()
+    try:
+        uid = args.user_id
+        if args.username:
+            user = UserStore(storage).get_user_by_username(args.username)
+            if user is None:
+                print(f"user not found: {args.username}", file=sys.stderr)
+                return 1
+            uid = user.id
+
+        with user_context(uid):
+            if args.archive_action == "export":
+                out = Path(args.output) if args.output else Path(default_export_filename())
+                result = write_archive_to_path(
+                    storage,
+                    uid,
+                    out,
+                    include_trash=args.include_trash,
+                    include_settings=args.include_settings,
+                )
+                print(json.dumps(result, ensure_ascii=False, indent=2))
+                return 0
+
+            path = Path(args.file)
+            if not path.is_file():
+                print(f"file not found: {path}", file=sys.stderr)
+                return 1
+            result = read_archive_from_path(
+                storage,
+                uid,
+                path,
+                on_conflict=args.on_conflict,
+            )
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0 if int(result.get("error_count") or 0) == 0 else 1
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    finally:
+        storage.close()
+
+
 def _cmd_user_password(args: argparse.Namespace) -> int:
     from on1y.user.accounts import UserStore
 
@@ -746,6 +799,41 @@ def build_parser() -> argparse.ArgumentParser:
     p_list.add_argument("--limit", type=int, default=20)
     p_list.add_argument("--offset", type=int, default=0)
     p_list.set_defaults(func=_cmd_list)
+
+    p_archive = sub.add_parser("archive", help="Export / import per-user knowledge library (.on1y.zip)")
+    p_archive_sub = p_archive.add_subparsers(dest="archive_action", required=True)
+    p_archive_export = p_archive_sub.add_parser("export", help="Export feed items to a zip bundle")
+    p_archive_export.add_argument(
+        "-o",
+        "--output",
+        default=None,
+        help="Output path (default on1y-<user>-<timestamp>.on1y.zip in cwd)",
+    )
+    p_archive_export.add_argument(
+        "--include-trash",
+        action="store_true",
+        help="Include soft-deleted items",
+    )
+    p_archive_export.add_argument(
+        "--include-settings",
+        action="store_true",
+        help="Include per-user cookies and subscription settings",
+    )
+    p_archive_export.add_argument("--user-id", type=int, default=1, help="Target user id (default 1)")
+    p_archive_export.add_argument("--username", default=None, help="Target username (overrides --user-id)")
+    p_archive_export.set_defaults(func=_cmd_archive)
+
+    p_archive_import = p_archive_sub.add_parser("import", help="Restore a zip bundle into a user library")
+    p_archive_import.add_argument("file", help="Path to .on1y.zip archive")
+    p_archive_import.add_argument(
+        "--on-conflict",
+        choices=["skip", "overwrite"],
+        default="overwrite",
+        help="When URL already exists: skip or overwrite (default overwrite)",
+    )
+    p_archive_import.add_argument("--user-id", type=int, default=1, help="Target user id (default 1)")
+    p_archive_import.add_argument("--username", default=None, help="Target username (overrides --user-id)")
+    p_archive_import.set_defaults(func=_cmd_archive)
 
     p_user = sub.add_parser("user", help="Multi-user account management")
     p_user_sub = p_user.add_subparsers(dest="user_action", required=True)

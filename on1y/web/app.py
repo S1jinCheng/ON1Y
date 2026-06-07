@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import logging
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -45,6 +46,12 @@ class LlmSettingsRequest(BaseModel):
     clear_api_key: bool = False
 
 
+class NetworkSettingsRequest(BaseModel):
+    proxy_mode: str | None = None  # auto | manual | off
+    manual_proxy: str | None = None
+    test_proxy: str | None = None
+
+
 class SubscriptionSettingsRequest(BaseModel):
     bilibili_sync_since: str | None = None
     youtube_sync_since: str | None = None
@@ -84,12 +91,18 @@ class UserProfilePatchRequest(BaseModel):
     economist_auto_ingest: bool | None = None
     economist_auto_kindle: bool | None = None
     locale: str | None = Field(default=None, pattern="^(zh|en)$")
+    appearance: str | None = Field(default=None, pattern="^(light|dark|system)$")
     open_browser_on_start: bool | None = None
     cold_start_onboarding_dismissed: bool | None = None
 
 
 class AutostartRequest(BaseModel):
     enabled: bool
+
+
+class DesktopPrefsPatchRequest(BaseModel):
+    close_window_action: str | None = Field(default=None, pattern="^(hide|quit)$")
+    data_dir_override: str | None = None
 
 
 class CookieJsonImportRequest(BaseModel):
@@ -425,6 +438,28 @@ def create_app() -> FastAPI:
         )
         return {"saved": True, **public_settings_view()}
 
+    @app.get("/api/network/settings")
+    def network_settings_get() -> dict[str, Any]:
+        from on1y.network.settings import public_settings_view
+
+        return public_settings_view()
+
+    @app.post("/api/network/settings")
+    def network_settings_save(body: NetworkSettingsRequest) -> dict[str, Any]:
+        from on1y.network.proxy import test_proxy_reachability
+        from on1y.network.settings import public_settings_view, save_file_settings
+
+        if body.test_proxy is not None:
+            return test_proxy_reachability(body.test_proxy)
+        mode = body.proxy_mode.strip().lower() if body.proxy_mode else None
+        if mode is not None and mode not in {"auto", "manual", "off"}:
+            raise HTTPException(status_code=400, detail="proxy_mode must be auto, manual, or off")
+        save_file_settings(
+            proxy_mode=mode,  # type: ignore[arg-type]
+            manual_proxy=body.manual_proxy,
+        )
+        return {"saved": True, **public_settings_view()}
+
     @app.get("/api/subscriptions/settings")
     def subscription_settings_get() -> dict[str, Any]:
         from on1y.subscriptions.settings import public_settings_view
@@ -589,7 +624,10 @@ def create_app() -> FastAPI:
         from on1y.config import PROJECT_ROOT, get_settings
         from on1y.desktop.windows_autostart import autostart_installed, is_windows
 
+        from on1y.desktop.launch_prefs import read_launch_prefs
+
         settings = get_settings()
+        prefs = read_launch_prefs(settings)
         return {
             "platform": "windows" if is_windows() else sys.platform,
             "autostart_supported": is_windows(),
@@ -597,7 +635,25 @@ def create_app() -> FastAPI:
             "version": __version__,
             "project_root": str(PROJECT_ROOT),
             "data_dir": str(settings.data_dir),
+            "data_dir_override": prefs.get("data_dir_override"),
+            "close_window_action": prefs.get("close_window_action") or "quit",
+            "is_desktop_shell": bool(os.environ.get("ON1Y_DESKTOP_SHELL")),
             "web_url": f"http://{settings.web_host}:{settings.web_port}",
+        }
+
+    @app.patch("/api/app/desktop-prefs")
+    def patch_desktop_prefs(body: DesktopPrefsPatchRequest) -> dict[str, Any]:
+        from on1y.desktop.launch_prefs import read_launch_prefs, write_launch_prefs
+
+        write_launch_prefs(
+            close_window_action=body.close_window_action,  # type: ignore[arg-type]
+            data_dir_override=body.data_dir_override,
+        )
+        prefs = read_launch_prefs()
+        return {
+            "close_window_action": prefs.get("close_window_action") or "quit",
+            "data_dir_override": prefs.get("data_dir_override"),
+            "restart_required": body.data_dir_override is not None,
         }
 
     @app.post("/api/app/autostart")
@@ -731,6 +787,8 @@ def create_app() -> FastAPI:
         app_patch: dict[str, Any] = {}
         if body.locale is not None:
             app_patch["locale"] = body.locale
+        if body.appearance is not None:
+            app_patch["appearance"] = body.appearance
         if body.open_browser_on_start is not None:
             app_patch["open_browser_on_start"] = body.open_browser_on_start
         if app_patch:
@@ -742,6 +800,62 @@ def create_app() -> FastAPI:
         if sections:
             patch_user_profile(**sections)
         return public_profile_view()
+
+    @app.get("/api/user/archive/export")
+    def export_user_archive_api(
+        include_trash: bool = Query(default=False),
+        include_settings: bool = Query(default=False),
+    ) -> Response:
+        from on1y.auth.context import get_effective_user_id
+        from on1y.user.accounts import UserStore
+        from on1y.user.archive import default_export_filename, export_user_archive
+
+        storage = get_storage()
+        try:
+            uid = get_effective_user_id()
+            data = export_user_archive(
+                storage,
+                uid,
+                include_trash=include_trash,
+                include_settings=include_settings,
+            )
+            username = "library"
+            user = UserStore(storage).get_user_by_id(uid)
+            if user is not None:
+                username = user.username
+            filename = default_export_filename(username)
+            return Response(
+                content=data,
+                media_type="application/zip",
+                headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            )
+        finally:
+            storage.close()
+
+    @app.post("/api/user/archive/import")
+    async def import_user_archive_api(
+        file: UploadFile = File(...),
+        on_conflict: str = Query(default="overwrite"),
+    ) -> dict[str, Any]:
+        from on1y.auth.context import get_effective_user_id
+        from on1y.user.archive import import_user_archive
+
+        if on_conflict not in ("skip", "overwrite"):
+            raise HTTPException(status_code=400, detail="on_conflict must be skip or overwrite")
+        raw = await file.read()
+        storage = get_storage()
+        try:
+            uid = get_effective_user_id()
+            return import_user_archive(
+                storage,
+                uid,
+                raw,
+                on_conflict=on_conflict,  # type: ignore[arg-type]
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        finally:
+            storage.close()
 
     @app.post("/api/cold-start")
     def cold_start() -> dict[str, Any]:
@@ -1289,8 +1403,8 @@ def create_app() -> FastAPI:
         from on1y.hotlist.epub_preview import (
             cache_epub,
             download_epub,
-            economist_epub_cache_path,
             load_cached_epub,
+            resolve_economist_epub_cache_path,
         )
 
         import logging
@@ -1312,8 +1426,8 @@ def create_app() -> FastAPI:
             filename = Path(epub_url).name or "TheEconomist.epub"
 
             if edition_date:
-                cached = economist_epub_cache_path(settings, edition_date)
-                if cached.is_file():
+                cached = resolve_economist_epub_cache_path(settings, edition_date)
+                if cached is not None:
                     return FileResponse(
                         path=cached,
                         media_type="application/epub+zip",

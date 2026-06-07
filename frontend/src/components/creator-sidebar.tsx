@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 
+import { GLASS_MUTED, glassNavClass } from "@/lib/nav-glass";
 import { platformLabel } from "@/lib/platform-label";
 import type { CreatorRow, Locale } from "@/lib/types";
 
@@ -27,14 +28,14 @@ function CreatorAvatar(props: { name: string; avatar?: string | null }): JSX.Ele
       <img
         src={avatar}
         alt=""
-        className="h-7 w-7 shrink-0 rounded-full object-cover bg-neutral-100"
+        className="h-7 w-7 shrink-0 rounded-full object-cover bg-soft"
         referrerPolicy="no-referrer"
         onError={() => setFailed(true)}
       />
     );
   }
   return (
-    <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-neutral-200 text-xs font-medium text-neutral-600">
+    <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-soft text-xs font-medium text-muted">
       {name.slice(0, 1).toUpperCase()}
     </div>
   );
@@ -51,11 +52,9 @@ export function CreatorSidebar(props: CreatorSidebarProps): JSX.Element {
       <button
         type="button"
         onClick={onSelectAll}
-        className={`mb-1 w-full rounded-md px-2 py-1.5 text-left text-sm transition-colors ${
+        className={`mb-1 w-full rounded-md px-2 py-1.5 text-left text-sm transition-colors ${glassNavClass(
           !selectedCreatorKey
-            ? "bg-soft font-medium text-black"
-            : "text-neutral-700 hover:bg-neutral-50"
-        }`}
+        )}`}
       >
         {labels.allCreators}
       </button>
@@ -70,20 +69,26 @@ export function CreatorSidebar(props: CreatorSidebarProps): JSX.Element {
                 <button
                   type="button"
                   onClick={() => onSelectCreator(creator.key)}
-                  className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors ${
+                  className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors ${glassNavClass(
                     active
-                      ? "bg-soft font-medium text-black"
-                      : "text-neutral-700 hover:bg-neutral-50"
-                  }`}
+                  )}`}
                 >
                   <CreatorAvatar name={creator.name} avatar={creator.author_avatar} />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm leading-tight">{creator.name}</span>
-                    <span className="block truncate text-[10px] text-muted">
+                    <span
+                      className={`block truncate text-[10px] ${
+                        active ? GLASS_MUTED : "text-muted"
+                      }`}
+                    >
                       {platformLabel(creator.platform, locale)}
                     </span>
                   </span>
-                  <span className="shrink-0 text-xs tabular-nums text-muted">
+                  <span
+                    className={`shrink-0 text-xs tabular-nums ${
+                      active ? GLASS_MUTED : "text-muted"
+                    }`}
+                  >
                     {creator.item_count}
                   </span>
                 </button>

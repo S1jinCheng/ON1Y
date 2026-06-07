@@ -22,7 +22,7 @@ import ReactMarkdown from "react-markdown";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 
 import { ColdStartFloatingPanel } from "@/components/cold-start-floating-panel";
-import { ColdStartOnboarding } from "@/components/cold-start-onboarding";
+import { FirstRunGuide } from "@/components/first-run-guide";
 import { FeedItemCard } from "@/components/feed-item-card";
 import { ThemeMovePopover } from "@/components/theme-move-popover";
 import { NotesPanel } from "@/components/notes-panel";
@@ -30,7 +30,6 @@ import { OriginalTextPanel } from "@/components/original-text-panel";
 import { ContentTypeIndicator } from "@/components/content-type-indicator";
 import { RelatedItemsSection } from "@/components/related-items-section";
 import { AccountMenu } from "@/components/account-menu";
-import { SubscriptionSettingsButton } from "@/components/subscription-settings-panel";
 import { TagChipEditor } from "@/components/tag-chip-editor";
 import { ThemeSidebar } from "@/components/theme-sidebar";
 import { CreatorSidebar } from "@/components/creator-sidebar";
@@ -42,6 +41,7 @@ import {
   reorderThemes,
   runHotlistSync,
   getCollectionCounts,
+  getCookieStatuses,
   getCreators,
   getFullSyncStatus,
   runFullSync,
@@ -76,6 +76,13 @@ import {
 import { sortKnowledgeItems, sortOptionsForUi } from "@/lib/sort-knowledge-items";
 import { getUserProfile, patchUserProfile } from "@/lib/api";
 import { loadStoredLocale, persistStoredLocale } from "@/lib/locale-preference";
+import {
+  REQUEST_INITIAL_SYNC_EVENT,
+  SETTINGS_CLOSED_EVENT,
+  SHOW_FIRST_RUN_GUIDE_EVENT
+} from "@/lib/open-settings";
+import { GLASS_MUTED, GLASS_PANEL, glassNavClass } from "@/lib/nav-glass";
+import { hasSyncCookies } from "@/lib/sync-cookies";
 import { todayIsoDate } from "@/lib/today-iso-date";
 import {
   ALL_FILTER,
@@ -95,22 +102,27 @@ function FilterSelect(props: {
   onChange: (value: string) => void;
   options: Array<{ label: string; value: string }>;
 }): JSX.Element {
+  const active = props.value !== ALL_FILTER && props.value !== "";
   return (
     <Select.Root value={props.value || ALL_FILTER} onValueChange={props.onChange}>
-      <Select.Trigger className="inline-flex h-9 min-w-[7rem] items-center justify-between gap-2 rounded-md border border-border bg-white px-3 text-sm text-black">
+      <Select.Trigger
+        className={`inline-flex h-9 min-w-[7rem] items-center justify-between gap-2 rounded-md px-3 text-sm outline-none transition-colors ${
+          active ? "on1y-glass-trigger-active" : "on1y-glass-trigger"
+        }`}
+      >
         <Select.Value placeholder={props.placeholder} />
         <Select.Icon>
-          <ChevronDown className="h-4 w-4 text-muted" />
+          <ChevronDown className={`h-4 w-4 ${active ? GLASS_MUTED : "text-muted"}`} />
         </Select.Icon>
       </Select.Trigger>
       <Select.Portal>
-        <Select.Content className="z-50 overflow-hidden rounded-md border border-border bg-white shadow-lg">
+        <Select.Content className="on1y-glass-panel z-50 overflow-hidden rounded-md shadow-on1y">
           <Select.Viewport className="p-1">
             {props.options.map((opt) => (
               <Select.Item
                 key={opt.value}
                 value={opt.value}
-                className="cursor-pointer rounded px-2 py-1.5 text-sm text-black outline-none data-[highlighted]:bg-soft"
+                className="on1y-glass-menu-item cursor-pointer px-2 py-1.5 text-sm outline-none"
               >
                 <Select.ItemText>{opt.label}</Select.ItemText>
               </Select.Item>
@@ -132,7 +144,7 @@ function ColumnScroll(props: {
     <div
       ref={props.scrollRef}
       onScroll={props.onScroll}
-      className={`h-full min-h-0 overflow-y-auto scrollbar-thin ${props.className ?? ""}`}
+      className={`h-full min-h-0 overflow-y-auto bg-background scrollbar-thin ${props.className ?? ""}`}
     >
       {props.children}
     </div>
@@ -183,14 +195,14 @@ function AuthorAvatar(props: {
       <img
         src={props.authorAvatar}
         alt=""
-        className={`${sizeClass} shrink-0 rounded-full object-cover bg-neutral-200`}
+        className={`${sizeClass} shrink-0 rounded-full object-cover bg-soft`}
         referrerPolicy="no-referrer"
       />
     );
   }
   return (
     <div
-      className={`${sizeClass} flex shrink-0 items-center justify-center rounded-full bg-neutral-200 font-medium text-neutral-600`}
+      className={`${sizeClass} flex shrink-0 items-center justify-center rounded-full bg-soft font-medium text-muted`}
     >
       {name.slice(0, 1).toUpperCase()}
     </div>
@@ -206,7 +218,6 @@ export default function KnowledgeWorkbench(): JSX.Element {
     selectedTagId,
     query,
     platform,
-    source,
     setLocale,
     setSidebarMode,
     setTheme,
@@ -215,7 +226,6 @@ export default function KnowledgeWorkbench(): JSX.Element {
     selectCreator,
     setQuery,
     setPlatform,
-    setSource,
     collection,
     setCollection,
     sortMode,
@@ -269,10 +279,10 @@ export default function KnowledgeWorkbench(): JSX.Element {
   const platformOptions = useMemo(
     () => [
       { label: locale === "zh" ? "所有平台" : "All platforms", value: ALL_FILTER },
-      { label: "知乎", value: "zhihu" },
+      { label: locale === "zh" ? "知乎" : "Zhihu", value: "zhihu" },
+      { label: locale === "zh" ? "B站" : "Bilibili", value: "bilibili" },
       { label: "YouTube", value: "youtube" },
-      { label: locale === "zh" ? "上传" : "Upload", value: "upload" },
-      { label: locale === "zh" ? "手动" : "Manual", value: "manual" }
+      { label: locale === "zh" ? "其他" : "Other", value: "other" }
     ],
     [locale]
   );
@@ -353,17 +363,6 @@ export default function KnowledgeWorkbench(): JSX.Element {
       cancelled = true;
     };
   }, [isHotlist, hotlistSource, economistYear, locale]);
-
-  const sourceOptions = useMemo(
-    () => [
-      { label: locale === "zh" ? "所有来源" : "All sources", value: ALL_FILTER },
-      { label: "rss", value: "rss" },
-      { label: "manual", value: "manual" },
-      { label: "youtube_feed", value: "youtube_feed" }
-    ],
-    [locale]
-  );
-
 
   async function loadReader(rawId: number): Promise<void> {
     try {
@@ -461,12 +460,11 @@ export default function KnowledgeWorkbench(): JSX.Element {
   function buildItemsQuery(offset: number, limit = FEED_BATCH_SIZE) {
     return {
       locale,
-      themeId: selectedThemeId,
-      creatorKey: selectedCreatorKey,
-      tagId: selectedTagId,
-      q: query,
-      platform: filterValue(platform),
-      source: filterValue(source),
+      themeId: isHotlist ? undefined : selectedThemeId,
+      creatorKey: isHotlist ? undefined : selectedCreatorKey,
+      tagId: isHotlist ? undefined : selectedTagId,
+      q: isHotlist ? undefined : query,
+      platform: isHotlist ? undefined : filterValue(platform),
       collection,
       hotlistDate: isHotlist ? hotlistDate : undefined,
       hotlistSource: isHotlist ? hotlistSource : undefined,
@@ -561,6 +559,10 @@ export default function KnowledgeWorkbench(): JSX.Element {
   async function refreshFeed(): Promise<void> {
     setLoading(true);
     setMessage("");
+    setItems([]);
+    setItemTotal(undefined);
+    setActive(undefined);
+    setReader(undefined);
     loadingMoreRef.current = false;
     setLoadingMore(false);
     try {
@@ -605,8 +607,17 @@ export default function KnowledgeWorkbench(): JSX.Element {
       });
   }
 
-  const startColdStartJob = useCallback(async (): Promise<void> => {
+  const startColdStartJob = useCallback(async (): Promise<boolean> => {
     try {
+      const cookies = await getCookieStatuses();
+      if (!hasSyncCookies(cookies.platforms)) {
+        setMessage(
+          locale === "zh"
+            ? "请先配置至少一个平台 Cookie（哔哩哔哩 / YouTube / 知乎）"
+            : "Configure at least one platform cookie (Bilibili / YouTube / Zhihu) first"
+        );
+        return false;
+      }
       const result = await runFullSync();
       if (!result.started && result.message) {
         setMessage(result.message);
@@ -621,10 +632,12 @@ export default function KnowledgeWorkbench(): JSX.Element {
       } catch {
         /* ignore */
       }
+      return true;
     } catch (err) {
       setMessage(err instanceof Error ? err.message : String(err));
+      return false;
     }
-  }, []);
+  }, [locale]);
 
   useEffect(() => {
     void refreshData();
@@ -658,6 +671,36 @@ export default function KnowledgeWorkbench(): JSX.Element {
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [locale, startColdStartJob]);
+
+  useEffect(() => {
+    const onRequestSync = (): void => {
+      void startColdStartJob();
+    };
+    const onSettingsClosed = (): void => {
+      void (async () => {
+        try {
+          const profile = await getUserProfile();
+          const cold = profile.cold_start;
+          if (!cold?.onboarding_dismissed && !cold?.last_completed_at) {
+            setColdStartOnboardingOpen(true);
+          }
+        } catch {
+          /* ignore */
+        }
+      })();
+    };
+    const onShowGuide = (): void => {
+      setColdStartOnboardingOpen(true);
+    };
+    window.addEventListener(REQUEST_INITIAL_SYNC_EVENT, onRequestSync);
+    window.addEventListener(SETTINGS_CLOSED_EVENT, onSettingsClosed);
+    window.addEventListener(SHOW_FIRST_RUN_GUIDE_EVENT, onShowGuide);
+    return () => {
+      window.removeEventListener(REQUEST_INITIAL_SYNC_EVENT, onRequestSync);
+      window.removeEventListener(SETTINGS_CLOSED_EVENT, onSettingsClosed);
+      window.removeEventListener(SHOW_FIRST_RUN_GUIDE_EVENT, onShowGuide);
+    };
+  }, [startColdStartJob]);
 
   const coldStartActive =
     Boolean(coldStartStatus?.active) ||
@@ -719,7 +762,6 @@ export default function KnowledgeWorkbench(): JSX.Element {
     selectedCreatorKey,
     selectedTagId,
     platform,
-    source,
     query,
     collection,
     hotlistDate,
@@ -840,8 +882,14 @@ export default function KnowledgeWorkbench(): JSX.Element {
 
   function switchCollection(next: KnowledgeCollection): void {
     exitSelectionMode();
+    setItems([]);
+    setItemTotal(undefined);
+    setActive(undefined);
+    setReader(undefined);
     setCollection(next);
     if (next === "hotlist") {
+      setPlatform(ALL_FILTER);
+      setQuery("");
       if (hotlistSource === "zhihu") {
         setHotlistDate(todayIsoDate());
       }
@@ -1065,31 +1113,23 @@ export default function KnowledgeWorkbench(): JSX.Element {
 
   return (
     <>
-    <div className="flex h-screen w-full flex-col bg-white text-black">
-      <div className="shrink-0 border-b border-border bg-white px-4 py-3">
+    <div className="flex h-screen w-full flex-col bg-background text-foreground">
+      <div className="shrink-0 border-b border-border bg-background px-4 py-3">
         <div className="mb-2 flex items-center justify-between">
-          <h1 className="text-lg font-semibold tracking-tight">{ui("appTitle")}</h1>
+          <div className="flex items-center gap-2.5">
+            <img
+              src="/on1y-logo.png"
+              alt=""
+              width={32}
+              height={32}
+              className="h-8 w-8 shrink-0 object-contain"
+            />
+            <h1 className="text-lg font-semibold tracking-tight">{ui("appTitle")}</h1>
+          </div>
           <div className="flex items-center gap-2">
-            <div className="inline-flex overflow-hidden rounded-md border border-border text-xs">
-              <button
-                type="button"
-                onClick={() => applyLocale("zh")}
-                className={`px-2.5 py-1.5 ${locale === "zh" ? "bg-black text-white" : "bg-white"}`}
-              >
-                {ui("langZh")}
-              </button>
-              <button
-                type="button"
-                onClick={() => applyLocale("en")}
-                className={`px-2.5 py-1.5 ${locale === "en" ? "bg-black text-white" : "bg-white"}`}
-              >
-                {ui("langEn")}
-              </button>
-            </div>
-            <SubscriptionSettingsButton locale={locale} onMessage={setMessage} />
             <Link
               href="/stats"
-              className="inline-flex items-center gap-2 rounded-md border border-border bg-white px-3 py-1.5 text-sm hover:bg-soft"
+              className="inline-flex items-center gap-2 rounded-md border border-border bg-surface px-3 py-1.5 text-sm hover:bg-soft"
             >
               <BarChart3 className="h-4 w-4" />
               {ui("stats")}
@@ -1097,7 +1137,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
             <button
               type="button"
               onClick={() => void refreshData()}
-              className="inline-flex items-center gap-2 rounded-md border border-border bg-white px-3 py-1.5 text-sm hover:bg-soft"
+              className="inline-flex items-center gap-2 rounded-md border border-border bg-surface px-3 py-1.5 text-sm hover:bg-soft"
             >
               <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
               {ui("refresh")}
@@ -1106,13 +1146,13 @@ export default function KnowledgeWorkbench(): JSX.Element {
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <div className="inline-flex items-center gap-2 rounded-md border border-border bg-white px-2 py-1.5">
+          <div className="on1y-glass-trigger inline-flex items-center gap-2 rounded-md px-2 py-1.5">
             <Search className="h-4 w-4 text-muted" />
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder={ui("searchPlaceholder")}
-              className="w-56 bg-transparent text-sm text-black outline-none placeholder:text-neutral-400"
+              aria-label={ui("searchPlaceholder")}
+              className="w-56 bg-transparent text-sm text-foreground outline-none"
             />
           </div>
           {query.trim() && searchTotal !== undefined ? (
@@ -1127,16 +1167,10 @@ export default function KnowledgeWorkbench(): JSX.Element {
             onChange={setPlatform}
             options={platformOptions}
           />
-          <FilterSelect
-            placeholder={ui("source")}
-            value={source}
-            onChange={setSource}
-            options={sourceOptions}
-          />
           <button
             type="button"
             onClick={() => void refreshData()}
-            className="rounded-md border border-black bg-black px-3 py-1.5 text-sm text-white hover:bg-neutral-800"
+            className="rounded-md border border-inverse bg-inverse px-3 py-1.5 text-sm text-inverse-foreground hover:opacity-90"
           >
             {ui("filter")}
           </button>
@@ -1147,7 +1181,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
       {readerExpanded && active ? (
         <PanelGroup key="reader-expanded" direction="horizontal" className="min-h-0 flex-1">
           <Panel minSize={25} defaultSize={58} className="min-h-0 overflow-hidden">
-            <div className="flex h-full min-h-0 flex-col border-r border-border bg-white p-4">
+            <div className="flex h-full min-h-0 flex-col border-r border-border bg-surface p-4">
               <div className="mb-3 shrink-0">
                 <h3 className="text-lg font-semibold leading-snug">{active.title || "—"}</h3>
                 <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted">
@@ -1157,7 +1191,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
                     target="_blank"
                     rel="noreferrer"
                     onClick={(e) => handleExternalLinkClick(e, active.url)}
-                    className="inline-flex items-center gap-1 hover:text-black hover:underline"
+                    className="inline-flex items-center gap-1 hover:text-foreground hover:underline"
                   >
                     {ui("openLink")}
                     <ExternalLink className="h-3 w-3" />
@@ -1193,26 +1227,24 @@ export default function KnowledgeWorkbench(): JSX.Element {
         <PanelGroup key="normal" direction="horizontal" className="min-h-0 flex-1">
         <Panel minSize={15} defaultSize={18} className="min-h-0 overflow-hidden">
           <ColumnScroll className="border-r border-border p-3">
-              <div className="mb-3 flex rounded-md border border-border bg-white p-0.5">
+              <div className={`mb-3 flex rounded-md p-0.5 ${GLASS_PANEL}`}>
                 <button
                   type="button"
                   onClick={() => setSidebarMode("theme")}
-                  className={`flex-1 rounded px-2 py-1 text-xs font-medium transition-colors ${
-                    sidebarMode === "theme"
-                      ? "bg-black text-white"
-                      : "text-neutral-600 hover:text-black"
-                  }`}
+                  className={`flex-1 rounded-md px-2 py-1 text-xs transition-colors ${glassNavClass(
+                    sidebarMode === "theme",
+                    sidebarMode !== "theme" ? "text-muted hover:text-foreground" : ""
+                  )}`}
                 >
                   {ui("sidebarTheme")}
                 </button>
                 <button
                   type="button"
                   onClick={() => setSidebarMode("creator")}
-                  className={`flex-1 rounded px-2 py-1 text-xs font-medium transition-colors ${
-                    sidebarMode === "creator"
-                      ? "bg-black text-white"
-                      : "text-neutral-600 hover:text-black"
-                  }`}
+                  className={`flex-1 rounded-md px-2 py-1 text-xs transition-colors ${glassNavClass(
+                    sidebarMode === "creator",
+                    sidebarMode !== "creator" ? "text-muted hover:text-foreground" : ""
+                  )}`}
                 >
                   {ui("sidebarCreator")}
                 </button>
@@ -1295,51 +1327,45 @@ export default function KnowledgeWorkbench(): JSX.Element {
                   <button
                     type="button"
                     onClick={() => switchCollection("hotlist")}
-                    className={`flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-sm ${
-                      isHotlist ? "bg-black font-medium text-white" : "hover:bg-soft"
-                    }`}
+                    className={`flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-sm transition-colors ${glassNavClass(
+                      isHotlist
+                    )}`}
                   >
                     <span className="inline-flex items-center gap-1.5">
                       <Flame className="h-3.5 w-3.5" />
                       {ui("collectionHotlist")}
                     </span>
-                    <span
-                      className={`text-xs ${isHotlist ? "text-neutral-300" : "text-muted"}`}
-                    >
+                    <span className={`text-xs ${isHotlist ? GLASS_MUTED : "text-muted"}`}>
                       {collectionCounts.hotlist}
                     </span>
                   </button>
                   <button
                     type="button"
                     onClick={() => switchCollection("favorites")}
-                    className={`flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-sm ${
+                    className={`flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-sm transition-colors ${glassNavClass(
                       isFavorites
-                        ? "bg-black font-medium text-white"
-                        : "hover:bg-soft"
-                    }`}
+                    )}`}
                   >
                     <span className="inline-flex items-center gap-1.5">
                       <Star className="h-3.5 w-3.5" />
                       {ui("collectionFavorites")}
                     </span>
-                    <span
-                      className={`text-xs ${isFavorites ? "text-neutral-300" : "text-muted"}`}
-                    >
+                    <span className={`text-xs ${isFavorites ? GLASS_MUTED : "text-muted"}`}>
                       {collectionCounts.favorites}
                     </span>
                   </button>
                   <button
                     type="button"
                     onClick={() => switchCollection("trash")}
-                    className={`flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-sm ${
-                      isTrash ? "bg-black font-medium text-white" : "hover:bg-soft"
-                    }`}
+                    className={`flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-sm transition-colors ${glassNavClass(
+                      isTrash
+                    )}`}
                   >
                     <span className="inline-flex items-center gap-1.5">
                       <Trash2 className="h-3.5 w-3.5" />
                       {ui("collectionTrash")}
                     </span>
-                    <span className={`text-xs ${isTrash ? "text-neutral-300" : "text-muted"}`}>
+                    <span className={`text-xs ${isTrash ? GLASS_MUTED : "text-muted"}`}>
                       {collectionCounts.trash}
                     </span>
                   </button>
@@ -1394,7 +1420,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
                           <select
                             value={economistYear}
                             onChange={(e) => setEconomistYear(Number(e.target.value))}
-                            className="rounded border border-border bg-white px-2 py-1 text-xs text-black"
+                            className="rounded border border-border bg-surface px-2 py-1 text-xs text-foreground"
                           >
                             {Array.from({ length: 6 }, (_, i) => new Date().getFullYear() - i).map(
                               (y) => (
@@ -1410,7 +1436,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
                           <select
                             value={economistWeek}
                             onChange={(e) => selectEconomistWeek(Number(e.target.value))}
-                            className="max-w-[12rem] rounded border border-border bg-white px-2 py-1 text-xs text-black"
+                            className="max-w-[12rem] rounded border border-border bg-surface px-2 py-1 text-xs text-foreground"
                           >
                             {economistWeeks.map((w) => (
                               <option key={`${w.iso_year}-${w.iso_week}`} value={w.iso_week}>
@@ -1427,7 +1453,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
                         <button
                           type="button"
                           onClick={() => void goEconomistCurrentWeek()}
-                          className="rounded border border-border bg-white px-2 py-1 text-xs hover:bg-soft"
+                          className="rounded border border-border bg-surface px-2 py-1 text-xs hover:bg-soft"
                         >
                           {ui("hotlistCurrentWeek")}
                         </button>
@@ -1441,13 +1467,13 @@ export default function KnowledgeWorkbench(): JSX.Element {
                             value={hotlistDate}
                             max={todayIsoDate()}
                             onChange={(e) => setHotlistDate(e.target.value || todayIsoDate())}
-                            className="rounded border border-border bg-white px-2 py-1 text-xs text-black"
+                            className="rounded border border-border bg-surface px-2 py-1 text-xs text-foreground"
                           />
                         </label>
                         <button
                           type="button"
                           onClick={() => setHotlistDate(todayIsoDate())}
-                          className="rounded border border-border bg-white px-2 py-1 text-xs hover:bg-soft"
+                          className="rounded border border-border bg-surface px-2 py-1 text-xs hover:bg-soft"
                         >
                           {ui("hotlistToday")}
                         </button>
@@ -1470,7 +1496,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
                           ? ui("hotlistSyncTodayOnly")
                           : undefined
                       }
-                      className="inline-flex items-center gap-1 rounded-md border border-border bg-white px-2 py-1 text-xs hover:bg-soft disabled:opacity-50"
+                      className="inline-flex items-center gap-1 rounded-md border border-border bg-surface px-2 py-1 text-xs hover:bg-soft disabled:opacity-50"
                     >
                       <Flame className="h-3.5 w-3.5 text-orange-500" />
                       {hotlistSource === "economist"
@@ -1489,7 +1515,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
                 </div>
               </div>
               {selectionMode ? (
-                <div className="mb-3 flex items-center justify-between gap-2 rounded-lg border border-border bg-neutral-50 px-2 py-1.5">
+                <div className="mb-3 flex items-center justify-between gap-2 rounded-lg border border-border bg-panel px-2 py-1.5">
                   <div className="flex min-w-0 items-center gap-2">
                     <button
                       type="button"
@@ -1499,8 +1525,8 @@ export default function KnowledgeWorkbench(): JSX.Element {
                       aria-pressed={allVisibleSelected}
                       className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-md border transition-colors ${
                         allVisibleSelected
-                          ? "border-black bg-black text-white"
-                          : "border-border bg-white text-neutral-500 hover:border-neutral-400"
+                          ? "border-inverse bg-inverse text-inverse-foreground"
+                          : "border-border bg-surface text-muted hover:border-muted"
                       }`}
                     >
                       {allVisibleSelected ? (
@@ -1509,7 +1535,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
                         <Square className="h-4 w-4" />
                       )}
                     </button>
-                    <span className="truncate text-xs font-medium text-neutral-700">
+                    <span className="truncate text-xs font-medium text-foreground">
                       {ui("batchSelected").replace("{n}", String(selectedIds.size))}
                     </span>
                   </div>
@@ -1522,7 +1548,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
                           disabled={selectedIds.size === 0 || loading}
                           title={ui("favorite")}
                           aria-label={ui("favorite")}
-                          className="flex h-8 w-8 items-center justify-center rounded-md text-neutral-500 hover:bg-white hover:text-black disabled:opacity-40"
+                          className="flex h-8 w-8 items-center justify-center rounded-md text-muted hover:bg-soft hover:text-foreground disabled:opacity-40"
                         >
                           <Star className="h-4 w-4" />
                         </button>
@@ -1537,7 +1563,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
                               disabled={selectedIds.size === 0 || loading}
                               title={ui("moveTheme")}
                               aria-label={ui("moveTheme")}
-                              className="flex h-8 w-8 items-center justify-center rounded-md text-neutral-500 hover:bg-white hover:text-black disabled:opacity-40"
+                              className="flex h-8 w-8 items-center justify-center rounded-md text-muted hover:bg-soft hover:text-foreground disabled:opacity-40"
                             >
                               <Forward className="h-4 w-4" />
                             </button>
@@ -1563,7 +1589,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
                         disabled={selectedIds.size === 0 || loading}
                         title={ui("batchDelete")}
                         aria-label={ui("batchDelete")}
-                        className="flex h-8 w-8 items-center justify-center rounded-md text-neutral-500 hover:bg-white hover:text-red-600 disabled:opacity-40"
+                        className="flex h-8 w-8 items-center justify-center rounded-md text-muted hover:bg-soft hover:text-red-500 disabled:opacity-40"
                       >
                         <Trash2 className="h-4 w-4" />
                       </button>
@@ -1573,7 +1599,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
                       onClick={exitSelectionMode}
                       title={locale === "zh" ? "退出批量" : "Exit batch"}
                       aria-label={locale === "zh" ? "退出批量" : "Exit batch"}
-                      className="flex h-8 w-8 items-center justify-center rounded-md text-neutral-500 hover:bg-white hover:text-black"
+                      className="flex h-8 w-8 items-center justify-center rounded-md text-muted hover:bg-soft hover:text-foreground"
                     >
                       <X className="h-4 w-4" />
                     </button>
@@ -1621,15 +1647,17 @@ export default function KnowledgeWorkbench(): JSX.Element {
                 ))}
                 {displayItems.length === 0 ? (
                   <div className="rounded border border-dashed border-border p-4 text-sm text-muted">
-                    {isTrash
-                      ? ui("trashEmpty")
-                      : isFavorites
-                        ? ui("favoritesEmpty")
-                        : isHotlist
-                          ? hotlistSource === "economist"
-                            ? ui("hotlistEmptyEconomist")
-                            : ui("hotlistEmpty")
-                          : ui("noItems")}
+                    {loading
+                      ? ui("loadingMore")
+                      : isTrash
+                        ? ui("trashEmpty")
+                        : isFavorites
+                          ? ui("favoritesEmpty")
+                          : isHotlist
+                            ? hotlistSource === "economist"
+                              ? ui("hotlistEmptyEconomist")
+                              : ui("hotlistEmpty")
+                            : ui("noItems")}
                   </div>
                 ) : null}
                 {loadingMore ? (
@@ -1643,7 +1671,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
 
         <Panel minSize={22} defaultSize={58} className="min-h-0 overflow-hidden">
           {active ? (
-            <ColumnScroll className="border-r border-border bg-white">
+            <ColumnScroll className="border-r border-border bg-surface">
               <div className="space-y-0">
               <div className="space-y-3 border-b border-border p-4">
                 {!isHotlist
@@ -1689,12 +1717,12 @@ export default function KnowledgeWorkbench(): JSX.Element {
                           onClick={(e) =>
                             handleExternalLinkClick(e, reader?.author_url ?? active.author_url)
                           }
-                          className="truncate text-sm font-medium text-neutral-800 underline-offset-2 hover:text-black hover:underline"
+                          className="truncate text-sm font-medium text-foreground underline-offset-2 hover:underline"
                         >
                           {(reader?.author ?? active.author).trim() || ui("unknownAuthor")}
                         </a>
                       ) : (
-                        <span className="truncate text-sm font-medium text-neutral-800">
+                        <span className="truncate text-sm font-medium text-foreground">
                           {(reader?.author ?? active.author).trim() || ui("unknownAuthor")}
                         </span>
                       )}
@@ -1715,7 +1743,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
                     <a
                       href={economistEpubDownloadUrl(active.raw_id)}
                       download
-                      className="mt-1.5 inline-flex items-center gap-1 text-xs text-neutral-700 underline-offset-2 hover:text-black hover:underline"
+                      className="mt-1.5 inline-flex items-center gap-1 text-xs text-muted underline-offset-2 hover:text-foreground hover:underline"
                     >
                       {ui("hotlistDownloadEpub")}
                       <ExternalLink className="h-3 w-3" />
@@ -1723,7 +1751,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
                   ) : null}
                   <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
                     <span className="text-xs text-muted">{ui("sourcePlatform")}</span>
-                    <span className="rounded bg-neutral-100 px-2 py-0.5 text-xs font-medium">
+                    <span className="rounded bg-soft px-2 py-0.5 text-xs font-medium text-foreground">
                       {platformLabel(active.platform, locale)}
                     </span>
                     {!isEconomistHotlist ? (
@@ -1732,7 +1760,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
                         target="_blank"
                         rel="noreferrer"
                         onClick={(e) => handleExternalLinkClick(e, active.url)}
-                        className="inline-flex items-center gap-1 text-xs text-neutral-700 underline-offset-2 hover:text-black hover:underline"
+                        className="inline-flex items-center gap-1 text-xs text-muted underline-offset-2 hover:text-foreground hover:underline"
                       >
                         {ui("openLink")}
                         <ExternalLink className="h-3 w-3" />
@@ -1747,7 +1775,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
                   <p className="mb-2 text-xs font-medium uppercase tracking-wider text-muted">
                     {ui("summary")}
                   </p>
-                  <div className="prose prose-sm max-w-none text-black prose-p:my-1 prose-p:text-neutral-800">
+                  <div className="prose prose-sm max-w-none text-foreground prose-p:my-1 prose-p:text-foreground">
                     <ReactMarkdown>{active.summary || ui("noSummary")}</ReactMarkdown>
                   </div>
                 </div>
@@ -1799,7 +1827,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
               </div>
             </ColumnScroll>
           ) : (
-            <ColumnScroll className="border-r border-border bg-white p-4">
+            <ColumnScroll className="border-r border-border bg-surface p-4">
               <div className="rounded border border-dashed border-border p-4 text-sm text-muted">
                 {ui("selectItem")}
               </div>
@@ -1810,11 +1838,11 @@ export default function KnowledgeWorkbench(): JSX.Element {
       )}
     </div>
     <ColdStartFloatingPanel locale={locale} status={coldStartStatus} />
-    <ColdStartOnboarding
+    <FirstRunGuide
       locale={locale}
       open={coldStartOnboardingOpen}
       onClose={() => setColdStartOnboardingOpen(false)}
-      onStart={() => {
+      onStartSync={() => {
         setColdStartOnboardingOpen(false);
         void startColdStartJob();
       }}

@@ -55,7 +55,7 @@ export function ThemeMovePopover(props: {
   }, [open]);
 
   const list = (
-    <div className="max-h-64 w-48 overflow-y-auto rounded-lg border border-border bg-white py-1 shadow-xl">
+    <div className="max-h-64 w-48 overflow-y-auto rounded-lg border border-border bg-surface py-1 shadow-xl">
       {props.themes.map((theme) => (
         <button
           key={theme.id}
@@ -66,7 +66,7 @@ export function ThemeMovePopover(props: {
             setOpen(false);
           }}
           className={`block w-full px-3 py-2 text-left text-sm hover:bg-soft ${
-            props.currentThemeId === theme.id ? "font-medium text-black" : "text-neutral-700"
+            props.currentThemeId === theme.id ? "font-medium text-foreground" : "text-muted"
           }`}
         >
           {themeDisplayName(theme, props.locale)}

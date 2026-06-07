@@ -16,6 +16,10 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
+    "resources": {
+      "../../dist/portable/app/": "app/",
+      "../../dist/portable/backend/on1y/": "backend/on1y/"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

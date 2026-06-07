@@ -21,6 +21,7 @@ from on1y.pipeline.video_meta import (
 from on1y.ports.storage import StoragePort
 from on1y.pipeline.video_author import enrich_video_source_meta
 from on1y.utils.platform import YTDLP_VIDEO_PLATFORMS
+from on1y.utils.video_unavailable import is_permanent_video_error
 
 logger = logging.getLogger(__name__)
 
@@ -159,7 +160,8 @@ def run_subtitle_batch(
                 _maybe_auto_distill(storage, job.raw_id)  # type: ignore[arg-type]
         except ExtractionError as exc:
             msg = str(exc)
-            retry = job.attempts < settings.subtitle_max_retries
+            permanent = is_permanent_video_error(msg, raw.platform)
+            retry = not permanent and job.attempts < settings.subtitle_max_retries
             if retry and is_rate_limit_error(msg):
                 storage.mark_subtitle_failed(job.id, msg, retry=True)
                 _handle_subtitle_rate_limit(attempts=job.attempts)
@@ -174,17 +176,25 @@ def run_subtitle_batch(
                 url=job.url,
             )
             if not retry:
-                meta = with_subtitle_failed(raw.source_meta, str(exc))
+                err_note = "video_unavailable" if permanent else str(exc)
+                meta = with_subtitle_failed(raw.source_meta, err_note)
                 storage.update_raw_item_content(
                     job.raw_id,
                     body_text=raw.body_text,
                     raw_title=raw.raw_title,
                     extract_status=raw.extract_status,
-                    extract_error=raw.extract_error,
+                    extract_error=err_note if permanent else raw.extract_error,
                     source_meta=meta,
                 )
+            if permanent:
+                logger.info(
+                    "Skipped unavailable video subtitles raw_id=%s url=%s",
+                    job.raw_id,
+                    job.url,
+                )
+            else:
+                logger.error("Subtitle failed raw_id=%s retry=%s: %s", job.raw_id, retry, exc)
             failed += 1
-            logger.error("Subtitle failed raw_id=%s retry=%s: %s", job.raw_id, retry, exc)
         except Exception as exc:
             msg = f"unexpected: {exc}"
             retry = job.attempts < settings.subtitle_max_retries

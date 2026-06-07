@@ -1,5 +1,9 @@
 """Application settings loaded from environment and optional .env file."""
 
+from __future__ import annotations
+
+import os
+import sys
 from functools import lru_cache
 from pathlib import Path
 
@@ -11,14 +15,37 @@ _DEFAULT_YTDLP_SUB_LANGS = (
     "zh-Hans,zh-CN,zh-Hant,zh-TW,zh,ai-zh,cmn,chi,en-orig,en-US,en-GB,en,ai-en"
 )
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+def resolve_project_root() -> Path:
+    """App install root (sources, frontend/out, sql). Set ON1Y_ROOT in packaged desktop builds."""
+    raw = os.environ.get("ON1Y_ROOT", "").strip()
+    if raw:
+        return Path(raw).expanduser().resolve()
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent.parent
+
+
+PROJECT_ROOT = resolve_project_root()
+
+
+def _settings_env_files() -> tuple[str, ...]:
+    paths: list[str] = []
+    explicit = os.environ.get("ON1Y_ENV_FILE", "").strip()
+    if explicit:
+        paths.append(explicit)
+    paths.append(str(PROJECT_ROOT / ".env"))
+    data_parent = os.environ.get("ON1Y_DATA_DIR", "").strip()
+    if data_parent:
+        parent_env = Path(data_parent).expanduser().resolve().parent / ".env"
+        paths.append(str(parent_env))
+    return tuple(dict.fromkeys(paths))
 
 
 class Settings(BaseSettings):
     """Central configuration; all paths are resolved to absolute paths."""
 
     model_config = SettingsConfigDict(
-        env_file=str(PROJECT_ROOT / ".env"),
+        env_file=_settings_env_files(),
         env_file_encoding="utf-8",
         env_prefix="ON1Y_",
         extra="ignore",
@@ -189,6 +216,11 @@ class Settings(BaseSettings):
     # Minimum duration for YouTube ingest (0 = disabled). Default 2 minutes.
     youtube_min_duration_sec: int = Field(default=120, ge=0, le=86_400)
     zhihu_auto_refresh_follows: bool = Field(default=False)
+    # Zhihu follow sync: api = cookie API poll (no RSSHub); rss = feeds.yaml + RSSHub
+    zhihu_follow_sync_mode: str = Field(default="api", pattern="^(api|rss)$")
+    zhihu_api_poll_max_followees: int = Field(default=25, ge=1, le=200)
+    zhihu_api_poll_max_pages: int = Field(default=2, ge=1, le=20)
+    zhihu_api_poll_backfill_pages: int = Field(default=5, ge=1, le=50)
 
     log_level: str = Field(default="INFO")
 

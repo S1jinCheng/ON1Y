@@ -174,6 +174,7 @@ export type UserProfile = {
   owner: string;
   app?: {
     locale: string;
+    appearance?: "light" | "dark" | "system";
     open_browser_on_start: boolean;
     autostart_enabled: boolean;
     autostart_supported: boolean;
@@ -207,11 +208,28 @@ export type DesktopAppStatus = {
   version: string;
   project_root: string;
   data_dir: string;
+  data_dir_override?: string | null;
+  close_window_action?: "hide" | "quit";
+  is_desktop_shell?: boolean;
   web_url: string;
 };
 
 export function getDesktopAppStatus(): Promise<DesktopAppStatus> {
   return request<DesktopAppStatus>("/api/app/desktop");
+}
+
+export function patchDesktopPrefs(input: {
+  close_window_action?: "hide" | "quit";
+  data_dir_override?: string | null;
+}): Promise<{
+  close_window_action: "hide" | "quit";
+  data_dir_override: string | null;
+  restart_required?: boolean;
+}> {
+  return request("/api/app/desktop-prefs", {
+    method: "PATCH",
+    body: JSON.stringify(input)
+  });
 }
 
 export function setAutostart(enabled: boolean): Promise<{ autostart_enabled: boolean }> {
@@ -227,6 +245,7 @@ export function patchUserProfile(input: {
   economist_auto_ingest?: boolean;
   economist_auto_kindle?: boolean;
   locale?: "zh" | "en";
+  appearance?: "light" | "dark" | "system";
   open_browser_on_start?: boolean;
   cold_start_onboarding_dismissed?: boolean;
 }): Promise<UserProfile> {
@@ -299,6 +318,101 @@ export async function uploadCookieFile(
   return (await response.json()) as { platform: string; count: number };
 }
 
+export type ArchiveImportResult = {
+  manifest: Record<string, unknown>;
+  imported: number;
+  skipped: number;
+  themes_created: number;
+  cookies_restored: number;
+  subscription_restored: number;
+  errors: string[];
+  error_count: number;
+};
+
+export type ArchiveExportOptions = {
+  includeTrash?: boolean;
+  includeSettings?: boolean;
+};
+
+export function buildUserArchiveExportUrl(options: ArchiveExportOptions = {}): string {
+  const token = getAuthToken();
+  const params = new URLSearchParams();
+  if (options.includeTrash) {
+    params.set("include_trash", "true");
+  }
+  if (options.includeSettings) {
+    params.set("include_settings", "true");
+  }
+  if (token) {
+    params.set("access_token", token);
+  }
+  const qs = params.toString() ? `?${params.toString()}` : "";
+  return `${API_BASE}/api/user/archive/export${qs}`;
+}
+
+export async function exportUserArchive(options: ArchiveExportOptions = {}): Promise<Blob> {
+  const url = buildUserArchiveExportUrl(options);
+  const token = getAuthToken();
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      cache: "no-store"
+    });
+  } catch {
+    throw new Error("无法连接后端，请确认 on1y serve 已启动");
+  }
+  if (response.status === 401) {
+    clearAuth();
+    throw new Error("请先登录");
+  }
+  if (!response.ok) {
+    throw new Error(`export failed: ${response.status}`);
+  }
+  return response.blob();
+}
+
+export async function importUserArchive(
+  file: File,
+  onConflict: "skip" | "overwrite" = "overwrite"
+): Promise<ArchiveImportResult> {
+  const form = new FormData();
+  form.append("file", file);
+  const token = getAuthToken();
+  let response: Response;
+  try {
+    response = await fetch(
+      `${API_BASE}/api/user/archive/import?on_conflict=${encodeURIComponent(onConflict)}`,
+      {
+        method: "POST",
+        body: form,
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        cache: "no-store"
+      }
+    );
+  } catch {
+    throw new Error("无法连接后端，请确认 on1y serve 已启动");
+  }
+  if (response.status === 401) {
+    clearAuth();
+    throw new Error("请先登录");
+  }
+  if (!response.ok) {
+    const fallback = `import failed: ${response.status}`;
+    let detail = fallback;
+    try {
+      const payload = (await response.json()) as { detail?: string };
+      if (typeof payload.detail === "string") {
+        detail = payload.detail;
+      }
+    } catch {
+      /* non-JSON */
+    }
+    throw new Error(detail);
+  }
+  return (await response.json()) as ArchiveImportResult;
+}
+
 export function deleteCookieFile(platform: CookiePlatform): Promise<{ removed: boolean }> {
   return request<{ removed: boolean }>(`/api/user/cookies/${platform}`, {
     method: "DELETE"
@@ -331,6 +445,41 @@ export function saveLlmSettings(input: {
       api_key: input.api_key ?? "",
       clear_api_key: input.clear_api_key ?? false
     })
+  });
+}
+
+export type NetworkSettingsView = {
+  proxy_mode: "auto" | "manual" | "off";
+  manual_proxy: string;
+  env_proxy: string | null;
+  system_proxy: string | null;
+  probed_proxy: string | null;
+  effective_proxy: string | null;
+};
+
+export function getNetworkSettings(): Promise<NetworkSettingsView> {
+  return request<NetworkSettingsView>("/api/network/settings");
+}
+
+export function saveNetworkSettings(input: {
+  proxy_mode?: "auto" | "manual" | "off";
+  manual_proxy?: string;
+}): Promise<NetworkSettingsView & { saved: boolean }> {
+  return request("/api/network/settings", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
+export function testNetworkProxy(proxy: string): Promise<{
+  ok: boolean;
+  proxy?: string;
+  status_code?: number;
+  error?: string;
+}> {
+  return request("/api/network/settings", {
+    method: "POST",
+    body: JSON.stringify({ test_proxy: proxy })
   });
 }
 
@@ -768,6 +917,11 @@ export type ColdStartProgressView = {
   event_total?: number;
 };
 
+export type PipelineBarMetrics = {
+  done: number;
+  total: number;
+};
+
 export type FullSyncStatus = {
   running: boolean;
   active?: boolean;
@@ -780,6 +934,11 @@ export type FullSyncStatus = {
   current_phase: string | null;
   phases_ms: Record<string, number>;
   progress: ColdStartProgressView | null;
+  pipeline_bars?: {
+    ingest: PipelineBarMetrics;
+    subtitles: PipelineBarMetrics;
+    distill: PipelineBarMetrics;
+  } | null;
   background_distill?: DistillBackfillStatus | null;
   error: string | null;
   user_id: number | null;

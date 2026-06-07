@@ -4,6 +4,70 @@
 
 :root {
   color-scheme: light;
+  --on1y-bg: #ffffff;
+  --on1y-fg: #111111;
+  --on1y-muted: #737373;
+  --on1y-surface: #ffffff;
+  --on1y-panel: #fafafa;
+  --on1y-soft: #f5f5f5;
+  --on1y-border: #e5e5e5;
+  --on1y-glass: rgba(255, 255, 255, 0.62);
+  --on1y-inverse-bg: #111111;
+  --on1y-inverse-fg: #ffffff;
+  --on1y-accent: #0a0f1c;
+  --on1y-accent-hover: #060912;
+  --on1y-accent-fg: #e8ecf4;
+  --on1y-accent-soft: #c8d0dc;
+  --on1y-highlight: #121a2e;
+  --on1y-mark: #fef08a;
+  --on1y-overlay: rgba(0, 0, 0, 0.4);
+  --on1y-shadow: rgba(0, 0, 0, 0.12);
+  --on1y-progress: #1a2438;
+  --on1y-glass-nav-bg: rgba(6, 10, 22, 0.96);
+  --on1y-glass-nav-fg: #e8ecf4;
+  --on1y-glass-nav-muted: rgba(232, 236, 244, 0.68);
+  --on1y-glass-nav-border: rgba(4, 7, 16, 0.98);
+  --on1y-glass-nav-hover: rgba(6, 10, 22, 0.32);
+  --on1y-glass-trigger-bg: rgba(6, 10, 22, 0.14);
+  --on1y-glass-trigger-active-bg: rgba(4, 8, 18, 0.94);
+  --on1y-glass-nav-mix: #0a0f1c;
+  --on1y-glass-nav-brightness: 0.72;
+  --on1y-glass-nav-saturate: 0.85;
+  --on1y-glass-nav-inset: rgba(232, 236, 244, 0.08);
+}
+
+html.dark {
+  color-scheme: dark;
+  --on1y-bg: #0a0a0a;
+  --on1y-fg: #ececec;
+  --on1y-muted: #9a9a9a;
+  --on1y-surface: #0f0f0f;
+  --on1y-panel: #161616;
+  --on1y-soft: #1f1f1f;
+  --on1y-border: #2e2e2e;
+  --on1y-glass: rgba(20, 20, 22, 0.62);
+  --on1y-inverse-bg: #f2f2f2;
+  --on1y-inverse-fg: #0a0a0a;
+  --on1y-accent: #0c101c;
+  --on1y-accent-hover: #141c30;
+  --on1y-accent-fg: #dce4ee;
+  --on1y-accent-soft: #121a2a;
+  --on1y-highlight: #1a2438;
+  --on1y-mark: #2a3548;
+  --on1y-overlay: rgba(0, 0, 0, 0.62);
+  --on1y-shadow: rgba(0, 0, 0, 0.45);
+  --on1y-progress: #243044;
+  --on1y-glass-nav-bg: rgba(236, 238, 242, 0.9);
+  --on1y-glass-nav-fg: #121212;
+  --on1y-glass-nav-muted: rgba(18, 18, 18, 0.58);
+  --on1y-glass-nav-border: rgba(255, 255, 255, 0.26);
+  --on1y-glass-nav-hover: rgba(255, 255, 255, 0.1);
+  --on1y-glass-trigger-bg: rgba(255, 255, 255, 0.07);
+  --on1y-glass-trigger-active-bg: rgba(242, 244, 248, 0.94);
+  --on1y-glass-nav-mix: #f2f4f8;
+  --on1y-glass-nav-brightness: 1.08;
+  --on1y-glass-nav-saturate: 1.04;
+  --on1y-glass-nav-inset: rgba(255, 255, 255, 0.34);
 }
 
 html,
@@ -15,8 +79,14 @@ body {
 }
 
 body {
-  background: #ffffff;
-  color: #111111;
+  background: var(--on1y-bg);
+  color: var(--on1y-fg);
+}
+
+html.dark body {
+  background:
+    radial-gradient(ellipse 120% 80% at 50% -20%, rgba(42, 65, 88, 0.2), transparent 55%),
+    var(--on1y-bg);
 }
 
 * {
@@ -25,11 +95,11 @@ body {
 
 .scrollbar-thin {
   scrollbar-width: thin;
-  scrollbar-color: #d4d4d4 transparent;
+  scrollbar-color: var(--on1y-border) transparent;
 }
 
 mark {
-  background-color: #fef08a;
+  background-color: var(--on1y-mark);
   color: inherit;
   border-radius: 2px;
   padding: 0 1px;
@@ -85,8 +155,8 @@ mark {
   cursor: default;
   transform: rotateX(2deg) rotateY(-1deg) scale(1.03);
   box-shadow:
-    0 2px 4px rgba(0, 0, 0, 0.08),
-    0 12px 28px rgba(0, 0, 0, 0.14);
+    0 2px 4px var(--on1y-shadow),
+    0 12px 28px var(--on1y-shadow);
 }
 
 .theme-edit-sorting .theme-card-3d {
@@ -97,10 +167,10 @@ mark {
   transform-style: preserve-3d;
   transform: rotateX(4deg) rotateY(-1deg);
   box-shadow:
-    0 1px 0 rgba(255, 255, 255, 0.9) inset,
-    0 1px 2px rgba(0, 0, 0, 0.06),
-    0 6px 14px rgba(0, 0, 0, 0.08),
-    0 14px 28px rgba(0, 0, 0, 0.05);
+    0 1px 0 rgba(255, 255, 255, 0.06) inset,
+    0 1px 2px var(--on1y-shadow),
+    0 6px 14px var(--on1y-shadow),
+    0 14px 28px var(--on1y-shadow);
   transition:
     transform 0.22s ease,
     box-shadow 0.22s ease,
@@ -116,10 +186,26 @@ mark {
 .theme-card-3d:hover {
   transform: rotateX(2deg) rotateY(0deg) translateY(-2px) scale(1.01);
   box-shadow:
-    0 1px 0 rgba(255, 255, 255, 0.95) inset,
-    0 2px 4px rgba(0, 0, 0, 0.07),
-    0 10px 22px rgba(0, 0, 0, 0.1),
-    0 18px 36px rgba(0, 0, 0, 0.06);
+    0 1px 0 rgba(255, 255, 255, 0.08) inset,
+    0 2px 4px var(--on1y-shadow),
+    0 10px 22px var(--on1y-shadow),
+    0 18px 36px var(--on1y-shadow);
+}
+
+html.dark .theme-card-3d {
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.04) inset,
+    0 1px 2px var(--on1y-shadow),
+    0 6px 14px var(--on1y-shadow),
+    0 14px 28px var(--on1y-shadow);
+}
+
+html.dark .theme-card-3d:hover {
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.06) inset,
+    0 2px 4px var(--on1y-shadow),
+    0 10px 22px var(--on1y-shadow),
+    0 18px 36px var(--on1y-shadow);
 }
 
 .theme-edit-sorting .theme-card-3d:hover {
@@ -139,4 +225,85 @@ mark {
   .theme-card-3d {
     transform: none;
   }
+}
+
+/* Frosted glass for sidebar nav, filters, and segmented toggles */
+.on1y-glass-panel {
+  border: 1px solid color-mix(in srgb, var(--on1y-accent) 18%, var(--on1y-border));
+  background: color-mix(in srgb, var(--on1y-glass) 82%, var(--on1y-glass-trigger-bg));
+  backdrop-filter: blur(18px) saturate(1.15);
+  -webkit-backdrop-filter: blur(18px) saturate(1.15);
+  box-shadow: 0 4px 24px color-mix(in srgb, var(--on1y-shadow) 65%, transparent);
+}
+
+.on1y-glass-selected {
+  border: 1px solid var(--on1y-glass-nav-border);
+  background: color-mix(in srgb, var(--on1y-glass-nav-bg) 88%, var(--on1y-glass-nav-mix));
+  backdrop-filter: blur(20px) saturate(var(--on1y-glass-nav-saturate))
+    brightness(var(--on1y-glass-nav-brightness));
+  -webkit-backdrop-filter: blur(20px) saturate(var(--on1y-glass-nav-saturate))
+    brightness(var(--on1y-glass-nav-brightness));
+  box-shadow:
+    0 6px 28px color-mix(in srgb, var(--on1y-glass-nav-mix) 42%, transparent),
+    inset 0 1px 0 var(--on1y-glass-nav-inset);
+  color: var(--on1y-glass-nav-fg);
+  font-weight: 500;
+}
+
+.on1y-glass-idle {
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--on1y-fg);
+}
+
+.on1y-glass-idle:hover {
+  background: var(--on1y-glass-nav-hover);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.on1y-glass-trigger {
+  border: 1px solid color-mix(in srgb, var(--on1y-accent) 16%, var(--on1y-border));
+  background: color-mix(in srgb, var(--on1y-glass) 78%, var(--on1y-glass-trigger-bg));
+  backdrop-filter: blur(16px) saturate(1.12);
+  -webkit-backdrop-filter: blur(16px) saturate(1.12);
+  color: var(--on1y-fg);
+}
+
+.on1y-glass-trigger-active {
+  border: 1px solid var(--on1y-glass-nav-border);
+  background: color-mix(in srgb, var(--on1y-glass-trigger-active-bg) 88%, var(--on1y-glass-nav-mix));
+  backdrop-filter: blur(20px) saturate(var(--on1y-glass-nav-saturate))
+    brightness(var(--on1y-glass-nav-brightness));
+  -webkit-backdrop-filter: blur(20px) saturate(var(--on1y-glass-nav-saturate))
+    brightness(var(--on1y-glass-nav-brightness));
+  color: var(--on1y-glass-nav-fg);
+  font-weight: 500;
+}
+
+.on1y-glass-menu-item {
+  border: 1px solid transparent;
+  border-radius: 0.375rem;
+  color: var(--on1y-fg);
+}
+
+.on1y-glass-menu-item[data-highlighted] {
+  background: var(--on1y-glass-nav-hover);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.on1y-glass-menu-item[data-state="checked"] {
+  border-color: var(--on1y-glass-nav-border);
+  background: color-mix(in srgb, var(--on1y-glass-nav-bg) 88%, var(--on1y-glass-nav-mix));
+  backdrop-filter: blur(20px) saturate(var(--on1y-glass-nav-saturate))
+    brightness(var(--on1y-glass-nav-brightness));
+  -webkit-backdrop-filter: blur(20px) saturate(var(--on1y-glass-nav-saturate))
+    brightness(var(--on1y-glass-nav-brightness));
+  color: var(--on1y-glass-nav-fg);
+  font-weight: 500;
+}
+
+.on1y-glass-muted {
+  color: var(--on1y-glass-nav-muted);
 }

@@ -2,7 +2,10 @@ mod boot;
 
 use std::sync::Mutex;
 
-use boot::{boot, find_on1y_root, read_open_window_pref, BootConfig, ManagedServers};
+use boot::{
+    boot, find_on1y_root, prepare_portable_runtime, read_close_window_action, read_open_window_pref,
+    resolve_runtime_layout, BootConfig, ManagedServers,
+};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -14,38 +17,55 @@ use tauri_plugin_opener::OpenerExt;
 struct AppState {
     servers: Mutex<Option<ManagedServers>>,
     frontend_url: Mutex<Option<String>>,
+    on1y_root: Mutex<String>,
+    bundled: Mutex<bool>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let autostart = std::env::args().any(|a| a == "--autostart");
-    let root = find_on1y_root();
-    std::env::set_var("ON1Y_ROOT", &root);
-
-    // Manual launch always shows the window; login autostart follows the settings toggle.
-    let show_pref = read_open_window_pref(&root);
-    let open_window = if autostart { show_pref } else { true };
-
-    let boot_config = BootConfig {
-        root: root.clone(),
-        open_window,
-    };
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![open_external_url])
+        .invoke_handler(tauri::generate_handler![
+            open_external_url,
+            pick_data_folder,
+            save_archive_file
+        ])
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             focus_main_window(app);
         }))
         .manage(AppState {
             servers: Mutex::new(None),
             frontend_url: Mutex::new(None),
+            on1y_root: Mutex::new(String::new()),
+            bundled: Mutex::new(false),
         })
         .setup(move |app| {
+            let resource_dir = app.path().resource_dir().ok();
+            let (root, backend_exe, bundled) = resolve_runtime_layout(resource_dir);
+            let data_dir = prepare_portable_runtime(&root, bundled);
+            std::env::set_var("ON1Y_ROOT", &root);
+            if let Some(state) = app.try_state::<AppState>() {
+                *state.on1y_root.lock().unwrap() = root.to_string_lossy().into_owned();
+                *state.bundled.lock().unwrap() = bundled;
+            }
+            let open_window = if autostart {
+                read_open_window_pref(&root, bundled)
+            } else {
+                true
+            };
+            let boot_config = BootConfig {
+                root: root.clone(),
+                data_dir,
+                backend_exe,
+                bundled,
+                open_window,
+            };
             setup_tray(app.handle())?;
             create_splash_window(app.handle())?;
             let handle = app.handle().clone();
-            let cfg = boot_config.clone();
+            let cfg = boot_config;
             std::thread::spawn(move || {
                 if let Err(err) = run_boot_sequence(&handle, &cfg) {
                     let message = err.to_string();
@@ -117,7 +137,16 @@ fn create_workbench_window(app: &AppHandle, frontend_url: &str, show: bool) -> R
         })
         .build()
         .map_err(|e| format!("无法创建工作台窗口: {e}"))?;
-    attach_hide_on_close(&window);
+    let (root_str, bundled) = app
+        .try_state::<AppState>()
+        .map(|state| {
+            (
+                state.on1y_root.lock().unwrap().clone(),
+                *state.bundled.lock().unwrap(),
+            )
+        })
+        .unwrap_or_else(|| (find_on1y_root().to_string_lossy().to_string(), false));
+    attach_close_handler(&window, &root_str, bundled);
     if show {
         let _ = window.set_focus();
     }
@@ -189,12 +218,30 @@ fn open_workspace(app: &AppHandle, frontend_url: &str, show: bool) -> Result<(),
     create_workbench_window(app, frontend_url, show)
 }
 
-fn attach_hide_on_close(window: &tauri::WebviewWindow) {
+fn stop_managed_servers(app: &AppHandle) {
+    if let Some(state) = app.try_state::<AppState>() {
+        if let Ok(mut guard) = state.servers.lock() {
+            if let Some(mut servers) = guard.take() {
+                servers.stop_started();
+            }
+        }
+    }
+}
+
+fn attach_close_handler(window: &tauri::WebviewWindow, root: &str, bundled: bool) {
     let w = window.clone();
+    let root = root.to_string();
     window.on_window_event(move |event| {
         if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            let action = read_close_window_action(std::path::Path::new(&root), bundled);
             api.prevent_close();
-            let _ = w.hide();
+            if action == "quit" {
+                let app = w.app_handle().clone();
+                stop_managed_servers(&app);
+                app.exit(0);
+            } else {
+                let _ = w.hide();
+            }
         }
     });
 }
@@ -230,6 +277,25 @@ fn focus_main_window(app: &AppHandle) {
 }
 
 #[tauri::command]
+fn pick_data_folder() -> Option<String> {
+    rfd::FileDialog::new()
+        .set_title("选择 On1y 数据目录")
+        .pick_folder()
+        .map(|path| path.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn save_archive_file(default_name: String, data: Vec<u8>) -> Option<String> {
+    let path = rfd::FileDialog::new()
+        .set_title("保存知识库导出")
+        .set_file_name(default_name.trim())
+        .add_filter("On1y Archive", &["on1y.zip", "zip"])
+        .save_file()?;
+    std::fs::write(&path, data).ok()?;
+    Some(path.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
 fn open_external_url(app: AppHandle, url: String) -> Result<(), String> {
     let trimmed = url.trim();
     if !(trimmed.starts_with("http://") || trimmed.starts_with("https://")) {
@@ -252,13 +318,7 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => focus_main_window(app),
             "quit" => {
-                if let Some(state) = app.try_state::<AppState>() {
-                    if let Ok(mut guard) = state.servers.lock() {
-                        if let Some(mut servers) = guard.take() {
-                            servers.stop_started();
-                        }
-                    }
-                }
+                stop_managed_servers(app);
                 app.exit(0);
             }
             _ => {}

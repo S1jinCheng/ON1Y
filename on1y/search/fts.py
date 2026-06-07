@@ -232,8 +232,12 @@ def _search_fts_bm25(
         params.extend(collection_params)
 
     if platform:
-        where_parts.append("r.platform = ?")
-        params.append(platform)
+        from on1y.utils.platform import knowledge_platform_filter_sql
+
+        clause, platform_params = knowledge_platform_filter_sql(platform)
+        if clause:
+            where_parts.append(clause)
+            params.extend(platform_params)
     if source:
         where_parts.append("r.source = ?")
         params.append(source)
@@ -337,8 +341,12 @@ def _search_hybrid(
         params.extend([like, like, like, like])
 
     if platform:
-        where_parts.append("r.platform = ?")
-        params.append(platform)
+        from on1y.utils.platform import knowledge_platform_filter_sql
+
+        clause, platform_params = knowledge_platform_filter_sql(platform)
+        if clause:
+            where_parts.append(clause)
+            params.extend(platform_params)
     if source:
         where_parts.append("r.source = ?")
         params.append(source)

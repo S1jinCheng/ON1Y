@@ -15,7 +15,8 @@ from on1y.pipeline.video_meta import (
     with_subtitle_pending,
 )
 from on1y.ports.storage import StoragePort
-from on1y.exceptions import DuplicateVideoError, SkippedVideoError
+from on1y.exceptions import DuplicateVideoError, ExtractionError, SkippedVideoError
+from on1y.utils.video_unavailable import is_bilibili_video_unavailable
 from on1y.pipeline.video_author import enrich_video_source_meta
 from on1y.utils.bilibili_url import normalize_bilibili_url
 from on1y.utils.platform import PLATFORM_BILIBILI, PLATFORM_YOUTUBE, YTDLP_VIDEO_PLATFORMS, detect_platform, normalize_url
@@ -51,7 +52,16 @@ def process_video_fast(
 
     settings = get_settings()
     extractor = get_ytdlp_video_extractor(platform)
-    meta = extractor.fetch_metadata(normalized)
+    try:
+        meta = extractor.fetch_metadata(normalized)
+    except ExtractionError as exc:
+        if platform == PLATFORM_BILIBILI and is_bilibili_video_unavailable(str(exc)):
+            raise SkippedVideoError(
+                f"skipped unavailable Bilibili video: {normalized}",
+                url=normalized,
+                reason="bilibili_video_unavailable",
+            ) from exc
+        raise
 
     if platform == PLATFORM_YOUTUBE:
         reject = youtube_ingest_reject_reason(normalized, meta, settings)

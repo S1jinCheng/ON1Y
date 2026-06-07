@@ -10,7 +10,7 @@ from on1y.config import Settings, get_settings
 from on1y.hotlist.economist import sync_economist_hotlist
 from on1y.hotlist.github_economist import fetch_latest_economist_edition
 from on1y.auth.context import user_context
-from on1y.user.profile import load_user_profile, patch_user_profile
+from on1y.user.profile import kindle_delivery_address, load_user_profile, patch_user_profile
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +63,7 @@ def run_economist_auto_tick(
     """Check GitHub for a new weekly edition; ingest into DB; optionally email Kindle."""
     from on1y.adapters.sqlite_storage import get_storage
     from on1y.delivery.kindle import send_epub_to_kindle
-    from on1y.hotlist.epub_preview import economist_epub_cache_path
+    from on1y.hotlist.epub_preview import resolve_economist_epub_cache_path
     from on1y.user.accounts import UserStore
 
     settings = get_settings()
@@ -88,7 +88,7 @@ def run_economist_auto_tick(
 def _run_economist_auto_tick_for_user(*, force_edition: str | None = None) -> dict[str, Any]:
     from on1y.adapters.sqlite_storage import get_storage
     from on1y.delivery.kindle import send_epub_to_kindle
-    from on1y.hotlist.epub_preview import economist_epub_cache_path
+    from on1y.hotlist.epub_preview import resolve_economist_epub_cache_path
 
     settings = get_settings()
     profile = load_user_profile()
@@ -159,7 +159,7 @@ def _run_economist_auto_tick_for_user(*, force_edition: str | None = None) -> di
         storage.close()
 
     kindle_enabled = bool(profile["economist"].get("auto_kindle_enabled"))
-    kindle_to = str(profile["kindle"].get("send_to") or settings.kindle_send_to or "").strip()
+    kindle_to = kindle_delivery_address(profile)
     last_kindle = str(profile["economist"].get("last_kindle_edition") or "").strip()
 
     if (
@@ -168,8 +168,8 @@ def _run_economist_auto_tick_for_user(*, force_edition: str | None = None) -> di
         and kindle_to
         and (force_edition or edition_date != last_kindle)
     ):
-        cache = economist_epub_cache_path(settings, edition_date)
-        if cache.is_file():
+        cache = resolve_economist_epub_cache_path(settings, edition_date)
+        if cache is not None:
             title = str(latest.get("title") or f"The Economist {edition_date}")
             try:
                 send_epub_to_kindle(

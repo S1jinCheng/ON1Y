@@ -71,9 +71,13 @@ export default function LoginPage(): JSX.Element {
     <div className="flex min-h-screen items-center justify-center bg-neutral-50 px-4">
       <div className="w-full max-w-sm">
         <div className="mb-8 text-center">
-          <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-black text-lg font-semibold text-white">
-            O
-          </div>
+          <img
+            src="/on1y-logo.png"
+            alt="On1y"
+            width={56}
+            height={56}
+            className="mx-auto mb-3 h-14 w-14 object-contain"
+          />
           <h1 className="text-xl font-semibold tracking-tight text-neutral-900">On1y 知识库</h1>
           <p className="mt-1 text-sm text-neutral-500">
             {firstRun

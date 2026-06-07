@@ -42,7 +42,7 @@ const COMMON_TAGS_EN = [
 
 /** Gray chips on feed / hot-list column cards (matches theme feed rows). */
 export const feedItemListTagClass =
-  "rounded bg-neutral-100 px-1.5 py-0.5 text-[10px] text-neutral-700";
+  "rounded bg-soft px-1.5 py-0.5 text-[10px] text-muted";
 
 export function itemTagChipClass(name: string): string {
   return `rounded border px-1.5 py-0.5 text-[10px] ${tagColorClass(name)}`;
@@ -193,13 +193,13 @@ export function TagChipEditor(props: TagChipEditorProps): JSX.Element {
             <button
               type="button"
               onClick={toggleOpen}
-              className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-dashed border-neutral-300 text-neutral-600 hover:border-black hover:text-black"
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-dashed border-border text-muted hover:border-foreground hover:text-foreground"
               aria-label="Add tag"
             >
               <Plus className="h-4 w-4" />
             </button>
             {open ? (
-              <div className="absolute left-0 top-full z-50 mt-1 w-64 rounded-lg border border-border bg-white p-2 shadow-lg">
+              <div className="absolute left-0 top-full z-50 mt-1 w-64 rounded-lg border border-border bg-surface p-2 shadow-lg">
                 <input
                   ref={inputRef}
                   value={draft}
@@ -214,7 +214,7 @@ export function TagChipEditor(props: TagChipEditorProps): JSX.Element {
                     }
                   }}
                   placeholder={locale === "zh" ? "输入新标签…" : "New tag…"}
-                  className="mb-2 w-full rounded border border-border px-2 py-1 text-xs outline-none focus:border-black"
+                  className="mb-2 w-full rounded border border-border bg-surface px-2 py-1 text-xs text-foreground outline-none focus:border-foreground"
                 />
                 <div className="max-h-40 overflow-y-auto">
                   <div className="flex flex-wrap gap-1">

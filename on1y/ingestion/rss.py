@@ -13,6 +13,7 @@ import httpx
 import yaml
 
 from on1y.config import get_settings
+from on1y.network.proxy import effective_ytdlp_proxy
 from on1y.exceptions import ConfigurationError
 from on1y.ingestion.enqueue import enqueue_url
 from on1y.models.enums import ExtractStatus, SourceType
@@ -88,8 +89,9 @@ def fetch_feed_document(url: str) -> str:
         "follow_redirects": True,
         "headers": {"User-Agent": USER_AGENT},
     }
-    if settings.ytdlp_proxy:
-        client_kwargs["proxy"] = settings.ytdlp_proxy
+    proxy = effective_ytdlp_proxy(settings=settings)
+    if proxy:
+        client_kwargs["proxy"] = proxy
     with httpx.Client(**client_kwargs) as client:
         response = client.get(url)
         response.raise_for_status()

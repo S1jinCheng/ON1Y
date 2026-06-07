@@ -252,10 +252,10 @@ def sync_economist_hotlist(
             excerpt = item["title"]
             summary_text = excerpt
 
-        from on1y.hotlist.epub_preview import economist_epub_cache_path
+        from on1y.hotlist.epub_preview import resolve_economist_epub_cache_path
 
         cached_path = (
-            economist_epub_cache_path(settings, edition_date)
+            resolve_economist_epub_cache_path(settings, edition_date)
             if edition_date
             else None
         )
@@ -278,7 +278,7 @@ def sync_economist_hotlist(
                 body_text,
                 {**prior_meta, "preview_chars": preview_meta.get("preview_chars")},
             ),
-            "epub_cached": bool(cached_path and cached_path.is_file()),
+            "epub_cached": cached_path is not None,
             "published": item.get("published") or datetime.now(timezone.utc).isoformat(),
             "snapshot_date": snap,
         }
