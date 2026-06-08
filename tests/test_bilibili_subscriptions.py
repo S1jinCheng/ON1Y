@@ -18,7 +18,7 @@ from on1y.ingestion.bilibili_subscriptions import poll_bilibili_up_updates
 
 
 def test_slug_label_and_cursor() -> None:
-    assert slug_label("12345", "测试UP").startswith(BILI_UP_FEED_LABEL_PREFIX)
+    assert slug_label("12345", "测试UP") == f"{BILI_UP_FEED_LABEL_PREFIX}12345"
     assert up_cursor_key("12345") == "bilibili-up://12345"
     assert build_feed_url("https://rsshub.app", "12345") == (
         "https://rsshub.app/bilibili/user/video/12345"
@@ -134,58 +134,59 @@ def test_sync_bilibili_subscriptions_skipped_when_disabled() -> None:
     storage.enqueue.assert_not_called()
 
 
+@patch("on1y.ingestion.bilibili_subscriptions._enqueue_bilibili_video")
 @patch("on1y.subscriptions.settings.sync_since_timestamp", return_value=None)
 @patch("on1y.ingestion.bilibili_subscriptions._cookie_jar", return_value={"SESSDATA": "x"})
 @patch("on1y.ingestion.bilibili_subscriptions.iter_dynamic_video_feed")
 @patch("on1y.ingestion.bilibili_subscriptions.youtube_title_index", return_value={})
 def test_poll_bilibili_dynamic_updates(
     _title_index,
-    mock_dynamic,
+    mock_feed,
     _cookie_jar,
     _sync_since,
+    mock_enqueue,
 ) -> None:
     from on1y.ingestion.bilibili_subscriptions import poll_bilibili_dynamic_updates
 
-    mock_dynamic.return_value = iter(
+    mock_feed.return_value = iter(
         [
             {
-                "dynamic_id": "dyn-new",
-                "bvid": "BV1xx4111new",
+                "dynamic_id": "dyn1",
+                "bvid": "BV1234567891",
                 "title": "new",
                 "created": 1_740_000_000,
-                "description": "desc",
-                "pic": "http://example.com/cover.jpg",
-                "up_mid": "99",
-                "uname": "Bob",
-                "duration_sec": 120,
+                "up_mid": "42",
+                "uname": "UP",
             },
             {
-                "dynamic_id": "dyn-old",
-                "bvid": "BV1xx4111old",
+                "dynamic_id": "dyn0",
+                "bvid": "BV1234567890",
                 "title": "old",
                 "created": 1_700_000_000,
-                "description": "desc",
-                "pic": "http://example.com/cover.jpg",
-                "up_mid": "99",
-                "uname": "Bob",
-                "duration_sec": 120,
+                "up_mid": "42",
+                "uname": "UP",
             },
         ]
     )
-
     storage = MagicMock()
     storage.get_rss_feed_state.return_value = (None, None)
     storage.get_raw_by_url.return_value = None
     storage.url_in_rss_queue.return_value = False
+
+    def _fake_enqueue(_storage, *, report, **kwargs) -> None:
+        report["enqueued"] += 1
+
+    mock_enqueue.side_effect = _fake_enqueue
 
     report = poll_bilibili_dynamic_updates(
         storage,
         sync_since_ts=1_730_000_000,
     )
     assert report["mode"] == "dynamic"
+    assert report["source"] == "following_dynamics_video"
     assert report["enqueued"] == 1
     assert report["skipped_before_since"] == 1
-    storage.set_rss_feed_state.assert_called()
+    mock_feed.assert_called_once()
 
 
 def test_parse_dynamic_video_rejects_draw_and_article() -> None:
@@ -212,9 +213,22 @@ def test_parse_dynamic_video_rejects_draw_and_article() -> None:
             "module_author": {"mid": "1", "name": "u", "pub_ts": 1_740_000_000},
         },
     }
+    forward = {
+        "type": "DYNAMIC_TYPE_FORWARD",
+        "modules": {
+            "module_dynamic": {
+                "major": {
+                    "type": "MAJOR_TYPE_ARCHIVE",
+                    "archive": {"bvid": "BV1forward01", "title": "fwd"},
+                }
+            },
+            "module_author": {"mid": "1", "name": "u", "pub_ts": 1_740_000_000},
+        },
+    }
     assert parse_dynamic_video_item(draw) is None
     assert parse_dynamic_video_item(article) is None
     assert parse_dynamic_video_item(ad) is None
+    assert parse_dynamic_video_item(forward) is None
 
 
 def test_parse_dynamic_video_includes_up_face() -> None:

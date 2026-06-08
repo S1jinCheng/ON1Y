@@ -11,12 +11,13 @@ import sys
 from on1y.adapters.sqlite_storage import get_storage
 from on1y.pipeline.video_author import enrich_video_source_meta
 from on1y.utils.author_meta import resolve_author_avatar
+from on1y.utils.published_at import published_at_from_meta
 from on1y.utils.platform import YTDLP_VIDEO_PLATFORMS
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 log = logging.getLogger("backfill_author")
 
-_META_KEYS = ("author", "author_avatar", "author_url", "cover_image", "channel_id")
+_META_KEYS = ("author", "author_avatar", "author_url", "cover_image", "channel_id", "published")
 
 
 def main() -> int:
@@ -43,7 +44,7 @@ def main() -> int:
         url = str(row["url"])
         try:
             base = json.loads(row["source_meta"] or "{}")
-            if args.missing_only and resolve_author_avatar(base):
+            if args.missing_only and resolve_author_avatar(base) and published_at_from_meta(base):
                 skipped += 1
                 continue
             enriched = enrich_video_source_meta(base, platform=args.platform, url=url)

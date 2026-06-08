@@ -76,6 +76,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export type AuthStatus = {
   auth_required: boolean;
   allow_registration: boolean;
+  single_user_mode: boolean;
   multi_user: boolean;
   user_count: number;
 };
@@ -162,11 +163,21 @@ export function changePassword(input: {
 
 export type CookiePlatform = "youtube" | "bilibili" | "zhihu" | "xiaohongshu" | "twitter";
 
+export type CookieAccountInfo = {
+  valid: boolean | null;
+  account_id: string | null;
+  account_name: string | null;
+  avatar_url: string | null;
+  detail: string | null;
+  verified_at: string | null;
+};
+
 export type CookieStatus = {
   platform: CookiePlatform;
   exists: boolean;
   count: number;
   updated_at: string | null;
+  account?: CookieAccountInfo | null;
 };
 
 export type UserProfile = {
@@ -193,9 +204,81 @@ export type UserProfile = {
   integrations: {
     cookies: Record<string, { path: string; exists: boolean }>;
     llm: { base_url: string; model: string; api_key_configured: boolean };
-    smtp: { host: string; port: number; from: string; configured: boolean };
+    smtp: {
+      host: string;
+      port: number;
+      from: string;
+      user: string;
+      use_tls: boolean;
+      configured: boolean;
+      password_set: boolean;
+    };
   };
 };
+
+export type SmtpSettingsView = {
+  host: string;
+  port: number;
+  user: string;
+  from: string;
+  use_tls: boolean;
+  password_set: boolean;
+  configured: boolean;
+  defaults: { host: string; port: number; use_tls: boolean };
+  env_configured?: boolean;
+};
+
+export function getSmtpSettings(): Promise<SmtpSettingsView> {
+  return request<SmtpSettingsView>("/api/smtp/settings");
+}
+
+export function saveSmtpSettings(input: {
+  host?: string;
+  port?: number;
+  user?: string;
+  from_addr?: string;
+  password?: string;
+  use_tls?: boolean;
+  clear_password?: boolean;
+}): Promise<SmtpSettingsView & { saved: boolean }> {
+  return request("/api/smtp/settings", {
+    method: "POST",
+    body: JSON.stringify({
+      host: input.host,
+      port: input.port,
+      user: input.user,
+      from_addr: input.from_addr,
+      password: input.password ?? "",
+      use_tls: input.use_tls,
+      clear_password: input.clear_password ?? false
+    })
+  });
+}
+
+export function testSmtpSettings(input?: {
+  host?: string;
+  port?: number;
+  user?: string;
+  from_addr?: string;
+  password?: string;
+  use_tls?: boolean;
+}): Promise<{ ok: boolean; from?: string; host?: string; error?: string }> {
+  return request("/api/smtp/test", {
+    method: "POST",
+    body: JSON.stringify(
+      input
+        ? {
+            host: input.host,
+            port: input.port,
+            user: input.user,
+            from_addr: input.from_addr,
+            password: input.password ?? "",
+            use_tls: input.use_tls
+          }
+        : {}
+    )
+  });
+}
 
 export function getUserProfile(): Promise<UserProfile> {
   return request<UserProfile>("/api/user/profile");
@@ -211,11 +294,32 @@ export type DesktopAppStatus = {
   data_dir_override?: string | null;
   close_window_action?: "hide" | "quit";
   is_desktop_shell?: boolean;
+  is_bundled_release?: boolean;
   web_url: string;
 };
 
 export function getDesktopAppStatus(): Promise<DesktopAppStatus> {
   return request<DesktopAppStatus>("/api/app/desktop");
+}
+
+export type AppUpdateStatus = {
+  check_enabled: boolean;
+  current_version: string;
+  latest_version?: string | null;
+  has_update: boolean;
+  release_url?: string | null;
+  download_url?: string | null;
+  release_notes?: string | null;
+  published_at?: string | null;
+  checked_at?: string | null;
+  cached?: boolean;
+  reason?: string | null;
+  error?: string | null;
+};
+
+export function getAppUpdateStatus(force = false): Promise<AppUpdateStatus> {
+  const query = force ? "?force=true" : "";
+  return request<AppUpdateStatus>(`/api/app/update${query}`);
 }
 
 export function patchDesktopPrefs(input: {
@@ -255,15 +359,43 @@ export function patchUserProfile(input: {
   });
 }
 
-export function getCookieStatuses(): Promise<{ platforms: CookieStatus[] }> {
-  return request<{ platforms: CookieStatus[] }>("/api/user/cookies");
+export function getCookieStatuses(
+  verify = true,
+  options?: { quick?: boolean }
+): Promise<{ platforms: CookieStatus[] }> {
+  const params = new URLSearchParams();
+  if (!verify) {
+    params.set("verify", "false");
+  }
+  if (options?.quick === false) {
+    params.set("quick", "false");
+  }
+  const query = params.toString();
+  return request<{ platforms: CookieStatus[] }>(
+    `/api/user/cookies${query ? `?${query}` : ""}`
+  );
 }
+
+export function verifyCookiePlatform(
+  platform: CookiePlatform
+): Promise<{ platform: string; account: CookieAccountInfo }> {
+  return request<{ platform: string; account: CookieAccountInfo }>(
+    `/api/user/cookies/${platform}/verify`,
+    { method: "POST" }
+  );
+}
+
+export type CookieImportResult = {
+  platform: string;
+  count: number;
+  account?: CookieAccountInfo | null;
+};
 
 export function importCookieJson(
   platform: CookiePlatform,
   payload: unknown
-): Promise<{ platform: string; count: number }> {
-  return request<{ platform: string; count: number }>(`/api/user/cookies/${platform}/import`, {
+): Promise<CookieImportResult> {
+  return request<CookieImportResult>(`/api/user/cookies/${platform}/import`, {
     method: "POST",
     body: JSON.stringify({ payload })
   });
@@ -271,7 +403,7 @@ export function importCookieJson(
 
 export async function importCookieFromClipboard(
   platform: CookiePlatform
-): Promise<{ platform: string; count: number }> {
+): Promise<CookieImportResult> {
   if (typeof navigator === "undefined" || !navigator.clipboard?.readText) {
     throw new Error("当前浏览器不支持读取剪贴板");
   }
@@ -294,7 +426,7 @@ export async function importCookieFromClipboard(
 export async function uploadCookieFile(
   platform: CookiePlatform,
   file: File
-): Promise<{ platform: string; count: number }> {
+): Promise<CookieImportResult> {
   const token = getAuthToken();
   const form = new FormData();
   form.append("file", file);
@@ -315,7 +447,7 @@ export async function uploadCookieFile(
     }
     throw new Error(detail);
   }
-  return (await response.json()) as { platform: string; count: number };
+  return (await response.json()) as CookieImportResult;
 }
 
 export type ArchiveImportResult = {
@@ -830,6 +962,69 @@ export function saveSubscriptionSettings(payload: {
   });
 }
 
+export type SyncSettingsView = {
+  zhihu_api_poll_max_followees: number;
+  zhihu_api_poll_max_pages: number;
+  zhihu_api_poll_backfill_pages: number;
+  zhihu_follow_sync_mode: "api" | "rss";
+  zhihu_rsshub_base: string;
+  youtube_auto_refresh_channels: boolean;
+  zhihu_auto_refresh_follows: boolean;
+  auto_sync_enabled: boolean;
+  auto_sync_interval_minutes: number;
+  auto_sync_pipeline_batch_size: number;
+  collections_sync_enabled: boolean;
+  collections_sync_interval_seconds: number;
+  bilibili_up_poll_mode: "dynamic" | "space";
+  bilibili_up_poll_max_ups_per_run: number;
+  bilibili_dynamic_poll_max_pages: number;
+  bilibili_dynamic_poll_backfill_max_pages: number;
+  bilibili_up_poll_rate_limit_backoff_seconds: number;
+  bilibili_up_poll_rate_limit_cooldown_seconds: number;
+  rss_backfill_max_items_per_feed: number;
+  cold_start_bilibili_dynamic_days: number;
+  cold_start_bilibili_dynamic_max_pages: number;
+  economist_auto_sync_enabled: boolean;
+  economist_auto_sync_interval_minutes: number;
+  economist_github_raw_base: string;
+  alert_enabled: boolean;
+  alert_cooldown_seconds: number;
+  alert_webhook_url: string;
+  defaults: Record<string, string | number | boolean>;
+  user_overrides: Record<string, string | number | boolean>;
+};
+
+export function getSyncSettings(): Promise<SyncSettingsView> {
+  return request<SyncSettingsView>("/api/sync/settings");
+}
+
+export function saveSyncSettings(payload: Partial<SyncSettingsView>): Promise<SyncSettingsView & { saved: boolean }> {
+  return request("/api/sync/settings", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export type PipelineAlert = {
+  id: string;
+  kind: "rate_limit" | "antibot" | "cookie_expired" | string;
+  kind_label: string;
+  platform: string;
+  worker: string;
+  message: string;
+  url?: string | null;
+  created_at: string;
+  acknowledged?: boolean;
+};
+
+export function getPipelineAlerts(active = true): Promise<PipelineAlert[]> {
+  return request<PipelineAlert[]>(`/api/alerts?active=${active ? "true" : "false"}`);
+}
+
+export function acknowledgePipelineAlerts(clearAll = true): Promise<{ cleared: number }> {
+  return request(`/api/alerts/ack?clear_all=${clearAll ? "true" : "false"}`, { method: "POST" });
+}
+
 export function runHotlistSync(payload?: {
   sources?: HotlistSource[];
   snapshot_date?: string;
@@ -922,10 +1117,36 @@ export type PipelineBarMetrics = {
   total: number;
 };
 
+export type SubscriptionSyncActivity = {
+  running: boolean;
+  started_at?: string | null;
+  finished_at?: string | null;
+  error?: string | null;
+  user_id?: number | null;
+  mode?: "auto" | "manual" | null;
+  backfill?: boolean;
+  progress?: ColdStartProgressView | null;
+  last_report?: Record<string, unknown> | null;
+};
+
+export type AutoSyncSchedulerStatus = {
+  enabled?: boolean;
+  thread_alive?: boolean;
+  next_subscription_tick_at?: string | null;
+  startup_delay_seconds?: number;
+};
+
 export type FullSyncStatus = {
   running: boolean;
   active?: boolean;
   distill_running?: boolean;
+  sync_kind?: "cold_start" | "subscription" | "auto" | null;
+  auto_sync_enabled?: boolean;
+  auto_sync_scheduler?: AutoSyncSchedulerStatus | null;
+  resident_panel?: boolean;
+  pending_work?: boolean;
+  last_auto_sync_at?: string | null;
+  subscription_sync?: SubscriptionSyncActivity | null;
   started_at: string | null;
   finished_at: string | null;
   elapsed_ms?: number | null;

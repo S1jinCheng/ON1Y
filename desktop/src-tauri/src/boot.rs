@@ -132,6 +132,18 @@ pub fn prepare_portable_runtime(app_root: &Path, bundled: bool) -> PathBuf {
             body.push_str(&random_secret());
             body.push('\n');
         }
+        for line in [
+            "ON1Y_SINGLE_USER=true",
+            "ON1Y_AUTH_REQUIRED=false",
+            "ON1Y_AUTH_ALLOW_REGISTRATION=false",
+        ] {
+            let key = line.split('=').next().unwrap_or("");
+            if !body.contains(key) {
+                body.push('\n');
+                body.push_str(line);
+                body.push('\n');
+            }
+        }
         let _ = fs::write(&env_path, body);
     }
 
@@ -233,7 +245,9 @@ fn spawn_backend(
         .stdout(Stdio::null())
         .stderr(Stdio::null());
 
+    cmd.env("ON1Y_DESKTOP_SHELL", "1");
     if bundled {
+        cmd.env("ON1Y_BUNDLED", "1");
         cmd.env("ON1Y_ENV_FILE", &env_file);
         if feeds_path.is_file() {
             cmd.env("ON1Y_RSS_CONFIG_PATH", &feeds_path);

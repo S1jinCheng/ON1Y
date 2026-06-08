@@ -5,11 +5,11 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
-from zoneinfo import ZoneInfo
 
 from on1y.hotlist.sql import is_feed_row_sql
+from on1y.stats.timezone_util import stats_timezone
 
-_STATS_TZ = ZoneInfo("Asia/Shanghai")
+_STATS_TZ = stats_timezone()
 _WEEKDAY_ZH = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
 _WEEKDAY_EN = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 from on1y.utils.json_util import loads_meta

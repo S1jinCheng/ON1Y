@@ -83,6 +83,8 @@ def fetch_bilibili_me(
         return {
             "mid": mid,
             "name": str(data.get("uname") or mid),
+            "face": str(data.get("face") or "").strip(),
+            "is_login": bool(data.get("isLogin")),
         }
     finally:
         if own_client and client is not None:
@@ -380,22 +382,15 @@ def parse_dynamic_video_item(item: dict[str, Any]) -> dict[str, Any] | None:
     item_type = str(item.get("type") or "")
     if item_type in _SKIP_DYNAMIC_TYPES:
         return None
-    if item_type not in _VIDEO_DYNAMIC_TYPES and item_type != "DYNAMIC_TYPE_FORWARD":
+    if item_type == "DYNAMIC_TYPE_FORWARD":
+        return None
+    if item_type not in _VIDEO_DYNAMIC_TYPES:
         return None
 
     modules = item.get("modules") or {}
     author_mod = modules.get("module_author") or {}
     dynamic_mod = modules.get("module_dynamic") or {}
     major = dynamic_mod.get("major") or {}
-
-    if item_type == "DYNAMIC_TYPE_FORWARD":
-        orig = item.get("orig") or {}
-        if not isinstance(orig, dict) or orig.get("type") != "DYNAMIC_TYPE_AV":
-            return None
-        modules = orig.get("modules") or modules
-        author_mod = modules.get("module_author") or author_mod
-        dynamic_mod = modules.get("module_dynamic") or dynamic_mod
-        major = dynamic_mod.get("major") or major
 
     if str(major.get("type") or "") not in _VIDEO_MAJOR_TYPES:
         return None
@@ -447,6 +442,87 @@ def parse_dynamic_video_item(item: dict[str, Any]) -> dict[str, Any] | None:
     return parsed
 
 
+def _space_arc_to_parsed(arc: dict[str, Any], *, up_mid: str, uname: str, up_face: str = "") -> dict[str, Any]:
+    """Normalize space/arc/search row to the shape used by subscription enqueue."""
+    bvid = str(arc.get("bvid") or arc.get("bv_id") or "").strip()
+    created: int | None
+    try:
+        created = int(arc.get("created"))
+    except (TypeError, ValueError):
+        created = None
+    duration = arc.get("length") or arc.get("duration")
+    try:
+        duration_sec = int(duration) if duration is not None else None
+    except (TypeError, ValueError):
+        duration_sec = None
+    pic = str(arc.get("pic") or arc.get("cover") or "").strip()
+    parsed: dict[str, Any] = {
+        "dynamic_id": bvid,
+        "bvid": bvid,
+        "title": str(arc.get("title") or "").strip(),
+        "created": created,
+        "description": str(arc.get("description") or arc.get("desc") or "").strip(),
+        "pic": pic,
+        "up_mid": up_mid,
+        "uname": uname,
+        "duration_sec": duration_sec,
+    }
+    if up_face:
+        parsed["up_face"] = up_face
+    return parsed
+
+
+def iter_following_upload_videos(
+    *,
+    cookie_path=None,
+    settings: Settings | None = None,
+    max_ups: int | None = None,
+    max_pages_per_up: int = 1,
+    since_ts: int | None = None,
+    client: httpx.Client | None = None,
+    skip_stats: dict[str, int] | None = None,
+) -> Iterator[dict[str, Any]]:
+    """Yield direct video uploads from followed UPs only (no dynamics feed / 转发 / 推广)."""
+    settings = settings or get_settings()
+    path = cookie_path or resolve_cookie_path("bilibili", settings)
+    own_client = client is None
+    if own_client:
+        jar = _cookie_jar(path)
+        client = httpx.Client(headers=DEFAULT_HEADERS, cookies=jar, timeout=settings.http_timeout_seconds)
+    try:
+        assert client is not None
+        followings = fetch_bilibili_followings(
+            cookie_path=path,
+            settings=settings,
+            client=client,
+        )
+        if skip_stats is not None:
+            skip_stats["followings"] = len(followings)
+        limit = len(followings) if not max_ups or max_ups <= 0 else min(max_ups, len(followings))
+        for index, row in enumerate(followings[:limit]):
+            up_mid = str(row.get("mid") or "").strip()
+            if not up_mid:
+                continue
+            uname = str(row.get("uname") or up_mid)
+            up_face = str(row.get("face") or "").strip()
+            if index > 0 and settings.bilibili_up_poll_interval_seconds > 0:
+                time.sleep(settings.bilibili_up_poll_interval_seconds)
+            for arc in iter_up_recent_videos(
+                up_mid,
+                cookie_path=path,
+                settings=settings,
+                max_pages=max_pages_per_up,
+                since_ts=since_ts,
+                client=client,
+            ):
+                if skip_stats is not None:
+                    skip_stats["videos_seen"] = skip_stats.get("videos_seen", 0) + 1
+                yield _space_arc_to_parsed(arc, up_mid=up_mid, uname=uname, up_face=up_face)
+    finally:
+        if own_client and client is not None:
+            client.close()
+
+
 def iter_dynamic_video_feed(
     *,
     cookie_path=None,
@@ -457,15 +533,15 @@ def iter_dynamic_video_feed(
     client: httpx.Client | None = None,
     skip_stats: dict[str, int] | None = None,
 ) -> Iterator[dict[str, Any]]:
-    """Yield video uploads from the logged-in user's following dynamics feed.
+    """Yield video uploads from the logged-in user's following dynamics (type=video).
 
-    Uses ``type=video`` and drops 图文/专栏/广告等非投稿视频动态。
+    Uses one polymer feed; non-video dynamics are filtered by parse_dynamic_video_item.
     """
     settings = settings or get_settings()
     path = cookie_path or resolve_cookie_path("bilibili", settings)
-    jar = _cookie_jar(path)
     own_client = client is None
     if own_client:
+        jar = _cookie_jar(path)
         client = httpx.Client(headers=DEFAULT_HEADERS, cookies=jar, timeout=settings.http_timeout_seconds)
 
     page_offset = (offset or "").strip() or None

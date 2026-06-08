@@ -126,7 +126,7 @@ export function FeedItemCard(props: FeedItemCardProps): JSX.Element {
   const sourceLine = compact
     ? null
     : formatSourceLine({
-        publishedAt: item.published_at ?? item.ingested_at,
+        publishedAt: item.published_at,
         feedLabel: item.feed_label,
         source: item.source,
         hotRank: item.hot_rank,

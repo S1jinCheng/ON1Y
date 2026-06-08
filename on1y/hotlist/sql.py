@@ -13,3 +13,8 @@ def is_hotlist_row_sql(table_alias: str = "r") -> str:
 
 def is_feed_row_sql(table_alias: str = "r") -> str:
     return f"{hotlist_source_expr(table_alias)} = ''"
+
+
+def is_feed_row_meta(meta: dict[str, object] | None) -> bool:
+    """True when *meta* belongs to subscription/feed, not hot-list."""
+    return not str((meta or {}).get("hotlist_source") or "").strip()

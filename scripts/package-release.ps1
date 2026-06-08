@@ -1,4 +1,4 @@
-# Assemble dist/portable (backend + app assets) for Tauri NSIS / zip release.
+# Assemble dist/portable (backend + app assets) for Tauri NSIS installer.
 $ErrorActionPreference = "Stop"
 . "$PSScriptRoot\lib\on1y-windows.ps1"
 
@@ -15,10 +15,10 @@ Start-Sleep -Milliseconds 800
 
 Initialize-On1yConda
 
-Write-Host "[1/4] Frontend static export..."
+Write-Host "[1/3] Frontend static export..."
 Ensure-FrontendReady -ForceRebuild -Quiet
 
-Write-Host "[2/4] PyInstaller backend (first run may take several minutes)..."
+Write-Host "[2/3] PyInstaller backend (first run may take several minutes)..."
 $pyinstaller = Get-Command pyinstaller -ErrorAction SilentlyContinue
 if (-not $pyinstaller) {
     Write-Host "Installing PyInstaller into conda env on1y..."
@@ -33,7 +33,7 @@ finally {
     Pop-Location
 }
 
-Write-Host "[3/4] Staging portable app layout..."
+Write-Host "[3/3] Staging app resources for installer..."
 if (Test-Path $appDir) { Remove-Item -Recurse -Force $appDir }
 if (Test-Path $backendDir) { Remove-Item -Recurse -Force $backendDir }
 New-Item -ItemType Directory -Path $appDir -Force | Out-Null
@@ -56,25 +56,10 @@ foreach ($name in @("feeds.yaml.example", "zhihu_follows.txt.example", "youtube_
     }
 }
 
-Write-Host "[4/4] Creating zip archive..."
-Stop-On1yDesktopProcess | Out-Null
-Start-Sleep -Milliseconds 500
-$version = "0.1.0"
-$zipPath = Join-Path $root "dist\On1y-portable-$version-win64.zip"
-$zipStage = Join-Path $root "dist\zip-stage"
-if (Test-Path $zipStage) { Remove-Item -Recurse -Force $zipStage }
-New-Item -ItemType Directory -Path $zipStage | Out-Null
-Copy-Item -Recurse -Force $appDir (Join-Path $zipStage "app")
-Copy-Item -Recurse -Force $backendDir (Join-Path $zipStage "backend")
-if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
-Compress-Archive -Path (Join-Path $zipStage "*") -DestinationPath $zipPath -Force
-Remove-Item -Recurse -Force $zipStage -ErrorAction SilentlyContinue
-
 Write-Host ""
-Write-Host "Portable bundle ready:" -ForegroundColor Green
+Write-Host "Release resources ready:" -ForegroundColor Green
 Write-Host "  App assets:  $appDir"
 Write-Host "  Backend:     $(Join-Path $backendDir 'on1y\on1y.exe')"
-Write-Host "  Zip:         $zipPath"
 Write-Host ""
 Write-Host "Next: build NSIS installer"
 Write-Host "  powershell -ExecutionPolicy Bypass -File scripts\build-desktop.ps1"

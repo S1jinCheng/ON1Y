@@ -57,6 +57,52 @@ function phaseLabel(phase: string | null | undefined, ui: (key: UiKey) => string
   return ui("coldStartRunning");
 }
 
+function panelTitle(status: FullSyncStatus | null, ui: (key: UiKey) => string): string {
+  if (status?.sync_kind === "auto") {
+    return ui("syncActivityAuto");
+  }
+  if (status?.sync_kind === "subscription") {
+    return ui("syncActivityTitle");
+  }
+  if (status?.resident_panel && !status?.running) {
+    return ui("syncActivityTitle");
+  }
+  return ui("coldStartTitle");
+}
+
+function waitingPollMinutes(
+  scheduler: FullSyncStatus["auto_sync_scheduler"],
+  nowMs: number
+): number | null {
+  const iso = scheduler?.next_subscription_tick_at;
+  if (!iso) {
+    return null;
+  }
+  const target = Date.parse(iso);
+  if (!Number.isFinite(target) || target <= nowMs) {
+    return null;
+  }
+  const minutes = Math.ceil((target - nowMs) / 60_000);
+  return Math.max(1, minutes);
+}
+
+function formatLastSync(iso: string | null | undefined, locale: Locale): string {
+  if (!iso) {
+    return "—";
+  }
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString(locale === "zh" ? "zh-CN" : "en-US", {
+      month: "numeric",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit"
+    });
+  } catch {
+    return iso;
+  }
+}
+
 function formatBarFraction(bar: PipelineBarMetrics): string {
   return `${bar.done}/${bar.total}`;
 }
@@ -153,12 +199,18 @@ export function ColdStartFloatingPanel(props: {
   const ui = (key: UiKey): string => t(props.locale, key);
   const [collapsed, setCollapsed] = useState(false);
   const [dismissed, setDismissed] = useState(false);
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const wasActiveRef = useRef(false);
 
-  const ingestRunning = Boolean(props.status?.running);
+  const fullSyncRunning = Boolean(props.status?.running);
+  const subSyncRunning = Boolean(props.status?.subscription_sync?.running);
+  const ingestRunning = fullSyncRunning || subSyncRunning;
   const bg = props.status?.background_distill;
   const distillRunning = Boolean(bg?.running);
-  const active = ingestRunning || distillRunning;
+  const active = Boolean(props.status?.active) || ingestRunning || distillRunning;
+  const resident = Boolean(props.status?.resident_panel);
+  const pendingWork = Boolean(props.status?.pending_work);
+  const catchUp = Boolean(props.status?.subscription_sync?.backfill);
 
   useEffect(() => {
     try {
@@ -168,6 +220,15 @@ export function ColdStartFloatingPanel(props: {
       /* ignore */
     }
   }, []);
+
+  useEffect(() => {
+    if (!props.status?.auto_sync_scheduler?.next_subscription_tick_at || active) {
+      return;
+    }
+    setNowMs(Date.now());
+    const timer = window.setInterval(() => setNowMs(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, [active, props.status?.auto_sync_scheduler?.next_subscription_tick_at]);
 
   useEffect(() => {
     if (active) {
@@ -247,13 +308,8 @@ export function ColdStartFloatingPanel(props: {
 
   const barsSummary = `${formatBarFraction(bars.ingest)} · ${formatBarFraction(bars.subtitles)} · ${formatBarFraction(bars.distill)}`;
 
-  if (!active && dismissed) {
-    return null;
-  }
-  if (!active && !wasActiveRef.current) {
-    return null;
-  }
-  if (!active && wasActiveRef.current && dismissed) {
+  const shouldShow = active || resident || pendingWork || wasActiveRef.current;
+  if (!shouldShow || (!active && dismissed && !resident)) {
     return null;
   }
 
@@ -262,6 +318,38 @@ export function ColdStartFloatingPanel(props: {
     : distillRunning
       ? "background_distill"
       : props.status?.current_phase;
+
+  const subtitle = (() => {
+    if (ingestRunning) {
+      return phaseLabel(currentPhase, ui);
+    }
+    if (distillRunning) {
+      return ui("coldStartPhaseBackgroundDistill");
+    }
+    if (active) {
+      return ui("coldStartDone");
+    }
+    const waitMinutes = waitingPollMinutes(props.status?.auto_sync_scheduler, nowMs);
+    if (waitMinutes != null) {
+      return ui("syncActivityWaitingPoll").replace("{minutes}", String(waitMinutes));
+    }
+    const parts: string[] = [ui("syncActivityIdle")];
+    if (catchUp) {
+      parts.push(ui("syncActivityCatchUp"));
+    }
+    if (pendingWork) {
+      parts.push(ui("syncActivityPending"));
+    }
+    if (props.status?.last_auto_sync_at) {
+      parts.push(
+        ui("syncActivityLastSync").replace(
+          "{time}",
+          formatLastSync(props.status.last_auto_sync_at, props.locale)
+        )
+      );
+    }
+    return parts.join(" · ");
+  })();
 
   if (collapsed) {
     return (
@@ -276,7 +364,9 @@ export function ColdStartFloatingPanel(props: {
           <CheckCircle2 className="h-4 w-4 shrink-0 text-highlight" />
         )}
         <RefreshCw className="h-3.5 w-3.5 shrink-0 text-highlight" />
-        <span className="min-w-0 truncate font-medium tabular-nums text-foreground">{barsSummary}</span>
+        <span className="min-w-0 truncate font-medium tabular-nums text-foreground">
+          {active ? barsSummary : panelTitle(props.status, ui)}
+        </span>
         <ChevronUp className="h-4 w-4 shrink-0 text-muted" />
       </button>
     );
@@ -287,13 +377,11 @@ export function ColdStartFloatingPanel(props: {
       <div className="flex items-center gap-2 border-b border-border bg-panel/90 px-3 py-2">
         <RefreshCw className="h-4 w-4 shrink-0 text-highlight" />
         <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-semibold text-foreground">{ui("coldStartTitle")}</div>
+          <div className="truncate text-sm font-semibold text-foreground">
+            {panelTitle(props.status, ui)}
+          </div>
           <div className="truncate text-[11px] text-muted">
-            {ingestRunning
-              ? phaseLabel(currentPhase, ui)
-              : distillRunning
-                ? ui("coldStartPhaseBackgroundDistill")
-                : ui("coldStartDone")}
+            {subtitle}
             {elapsedMs != null && ingestRunning ? ` · ${formatMs(elapsedMs)}` : ""}
           </div>
         </div>
@@ -305,7 +393,7 @@ export function ColdStartFloatingPanel(props: {
         >
           <ChevronDown className="h-4 w-4" />
         </button>
-        {!active ? (
+        {!active && !resident ? (
           <button
             type="button"
             aria-label={ui("coldStartFloatClose")}
@@ -318,15 +406,21 @@ export function ColdStartFloatingPanel(props: {
       </div>
 
       <div className="space-y-2 px-3 py-2.5">
-        {ingestRunning ? (
+        {fullSyncRunning || subSyncRunning ? (
           <div className="flex flex-wrap gap-2 text-[11px]">
-            {(["collections", "subscriptions", "pipeline"] as const).map((phase) => {
-              const idx = ["collections", "subscriptions", "pipeline"].indexOf(
+            {(fullSyncRunning
+              ? (["collections", "subscriptions", "pipeline"] as const)
+              : (["subscriptions", "pipeline"] as const)
+            ).map((phase) => {
+              const phaseOrder = fullSyncRunning
+                ? ["collections", "subscriptions", "pipeline"]
+                : ["subscriptions", "pipeline"];
+              const idx = phaseOrder.indexOf(
                 props.status?.current_phase === "starting"
                   ? ""
                   : (props.status?.current_phase ?? "")
               );
-              const phaseIdx = ["collections", "subscriptions", "pipeline"].indexOf(phase);
+              const phaseIdx = phaseOrder.indexOf(phase);
               const done = phaseIdx < idx || props.status?.current_phase === "done";
               const activePhase = props.status?.current_phase === phase;
               return (
@@ -351,17 +445,17 @@ export function ColdStartFloatingPanel(props: {
           <PipelineBarRow
             label={ui("coldStartBarIngest")}
             bar={bars.ingest}
-            active={ingestRunning}
+            active={ingestRunning || subSyncRunning}
           />
           <PipelineBarRow
             label={ui("coldStartBarSubtitles")}
             bar={bars.subtitles}
-            active={ingestRunning}
+            active={ingestRunning || subSyncRunning}
           />
           <PipelineBarRow
             label={ui("coldStartBarDistill")}
             bar={bars.distill}
-            active={ingestRunning || distillRunning}
+            active={ingestRunning || subSyncRunning || distillRunning}
           />
         </div>
 

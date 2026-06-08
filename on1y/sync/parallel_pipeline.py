@@ -10,7 +10,8 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 IDLE_POLL_SECONDS = 0.5
-IDLE_ROUNDS_TO_STOP = 6
+IDLE_ROUNDS_TO_STOP = 24  # ~12s idle after workers drain in-flight jobs
+STALE_PROCESSING_MINUTES = 10
 
 
 def _open_storage():
@@ -32,6 +33,8 @@ def _pipeline_has_work(
 
     for platform in platforms:
         if storage.count_pending_for_platform(platform) > 0:
+            return True
+        if storage.count_pending_for_platform(platform, status="processing") > 0:
             return True
     sub_counts = storage.count_subtitles_by_status()
     if int(sub_counts.get("pending", 0)) > 0:
@@ -182,6 +185,20 @@ def _distill_worker(
         storage.close()
 
 
+def _reclaim_stale_processing(storage: Any) -> dict[str, int]:
+    """Reset orphaned processing rows left by killed workers."""
+    reclaimed = {"pending_urls": 0, "pending_subtitles": 0}
+    reclaim = getattr(storage, "reclaim_stale_processing_jobs", None)
+    if callable(reclaim):
+        try:
+            out = reclaim(older_than_minutes=STALE_PROCESSING_MINUTES)
+            if isinstance(out, dict):
+                reclaimed.update(out)
+        except Exception:
+            logger.debug("reclaim_stale_processing_jobs failed", exc_info=True)
+    return reclaimed
+
+
 def run_parallel_pipeline(
     storage: Any,
     *,
@@ -189,6 +206,8 @@ def run_parallel_pipeline(
     platforms: list[str],
     batch_size: int = 25,
     timer: Any | None = None,
+    use_ai_summary: bool = True,
+    poll_active: threading.Event | None = None,
 ) -> dict[str, Any]:
     """Ingest, subtitles, and distill run on three threads until all queues drain."""
     from on1y.auth.context import user_context
@@ -196,11 +215,16 @@ def run_parallel_pipeline(
     from on1y.sync.progress import get_cold_start_progress
     from on1y.sync.timing import SyncTimer, rollup_phase_totals
 
+    with user_context(user_id):
+        reclaimed = _reclaim_stale_processing(storage)
+    if reclaimed.get("pending_urls") or reclaimed.get("pending_subtitles"):
+        logger.info("Reclaimed stale processing jobs: %s", reclaimed)
+
     phase_timer = timer or SyncTimer()
     progress = get_cold_start_progress()
     progress and progress.set_phase("pipeline", detail="拉取、字幕与 AI 摘要并行处理")
 
-    distill_enabled = resolve_llm_settings(user_id=user_id).api_key_set
+    distill_enabled = use_ai_summary and resolve_llm_settings(user_id=user_id).api_key_set
     stop_event = threading.Event()
     stats_lock = threading.Lock()
     totals: dict[str, Any] = {
@@ -269,6 +293,9 @@ def run_parallel_pipeline(
                         distill_enabled=distill_enabled,
                     )
                     if has_work:
+                        idle_rounds = 0
+                    elif poll_active is not None and poll_active.is_set():
+                        # Subscription poll still running; new URLs may arrive soon.
                         idle_rounds = 0
                     else:
                         idle_rounds += 1

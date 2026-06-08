@@ -27,11 +27,17 @@ DEFAULT_HEADERS = {
 def _cookie_jar(cookie_path: Path) -> dict[str, str]:
     data = load_cookie_file(cookie_path)
     cookies = extract_cookie_list(data)
-    return {
-        str(c["name"]): str(c["value"])
-        for c in cookies
-        if "zhihu.com" in str(c.get("domain", ""))
-    }
+    jar: dict[str, str] = {}
+    for c in cookies:
+        domain = str(c.get("domain", "")).lower()
+        host = str(c.get("host") or "").lower()
+        if "zhihu.com" not in domain and "zhihu.com" not in host:
+            continue
+        name = str(c.get("name") or "").strip()
+        if not name:
+            continue
+        jar[name] = str(c["value"])
+    return jar
 
 
 def fetch_zhihu_me(*, cookie_path: Path | None = None, settings: Settings | None = None) -> dict[str, Any]:

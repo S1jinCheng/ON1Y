@@ -209,6 +209,12 @@ def backfill_bilibili_collections(
                     "backfill": True,
                     "source": "bilibili_fav_api",
                 }
+                pub_raw = media.get("pubtime") or media.get("publish_time")
+                if pub_raw is not None:
+                    try:
+                        meta["published"] = int(pub_raw)
+                    except (TypeError, ValueError):
+                        pass
                 meta.update(author_meta_from_media(media))
                 enqueue_url(storage, url, source=SourceType.RSS, source_meta=meta)
                 coll_stats["enqueued"] += 1

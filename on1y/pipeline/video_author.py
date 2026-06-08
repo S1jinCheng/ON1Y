@@ -7,6 +7,7 @@ from typing import Any
 
 from on1y.extract.ytdlp_video import get_ytdlp_video_extractor
 from on1y.utils.author_meta import author_meta_patch, merge_author_meta, resolve_author_avatar
+from on1y.utils.published_at import published_at_from_meta
 from on1y.utils.platform import PLATFORM_BILIBILI, PLATFORM_YOUTUBE, YTDLP_VIDEO_PLATFORMS
 
 logger = logging.getLogger(__name__)
@@ -26,6 +27,7 @@ def enrich_video_source_meta(
     if platform not in YTDLP_VIDEO_PLATFORMS:
         return out
 
+    vm = None
     try:
         vm = get_ytdlp_video_extractor(platform).fetch_metadata(url)
         out = merge_author_meta(
@@ -50,5 +52,8 @@ def enrich_video_source_meta(
         from on1y.utils.youtube_author import enrich_youtube_author_meta
 
         enrich_youtube_author_meta(out)
+
+    if published_at_from_meta(out) is None and vm and vm.upload_timestamp:
+        out["published"] = vm.upload_timestamp
 
     return out

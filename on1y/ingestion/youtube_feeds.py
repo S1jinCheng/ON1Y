@@ -55,13 +55,20 @@ def channels_from_file(path: Path) -> list[tuple[str, str | None]]:
     return rows
 
 
-def channels_from_ytdlp(*, max_channels: int, settings: Settings | None = None) -> list[tuple[str, str | None]]:
+def channels_from_ytdlp(
+    *,
+    max_channels: int,
+    settings: Settings | None = None,
+    cookie_path: Path | None = None,
+    user_id: int | None = None,
+) -> list[tuple[str, str | None]]:
     import yt_dlp
 
     settings = settings or get_settings()
     from on1y.cookies.loader import resolve_cookie_path
 
-    opts = build_ytdlp_opts(cookie_path=resolve_cookie_path("youtube", settings))
+    path = cookie_path or resolve_cookie_path("youtube", settings, user_id=user_id)
+    opts = build_ytdlp_opts(cookie_path=path)
     opts.update(
         {
             "quiet": True,

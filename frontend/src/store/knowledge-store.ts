@@ -75,7 +75,7 @@ export const useKnowledgeFilterStore = create<FilterState>((set) => ({
       selectedCreatorKey: key,
       selectedThemeId: undefined,
       sortMode:
-        state.sortMode === "hot_rank_asc" ? "ingested_desc" : state.sortMode
+        state.sortMode === "hot_rank_asc" ? "published_desc" : state.sortMode
     })),
   setTag: (id?: number) => set({ selectedTagId: id }),
   setQuery: (value: string) => set({ query: value }),

@@ -31,6 +31,7 @@ for pkg in (
     "multipart",
     "bcrypt",
     "jwt",
+    "tzdata",
 ):
     try:
         pkg_datas, pkg_binaries, pkg_hidden = collect_all(pkg)

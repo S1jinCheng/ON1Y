@@ -227,6 +227,7 @@ def poll_zhihu_follow_activities(
                             "platform": "zhihu",
                             "feed_label": label,
                             "entry_title": title,
+                            "published": created_ts,
                             "entry_published": _activity_created_iso(created_ts),
                             "subscription_source": "zhihu_api",
                             "author_name": name,

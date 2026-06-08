@@ -96,7 +96,7 @@ class Settings(BaseSettings):
     bilibili_rsshub_base: str = Field(default="https://rsshub.app")
     # Bilibili UP subscription sync (API poll + feeds.yaml merge).
     bilibili_up_sync_enabled: bool = Field(default=True)
-    # Poll strategy: dynamic = 关注动态(type=video); space = per-UP /x/space/arc/search
+    # Poll strategy: dynamic = 关注动态页 type=video; space = 逐个 UP /x/space/arc/search（慢、易 412）
     bilibili_up_poll_mode: str = Field(default="dynamic", pattern="^(dynamic|space)$")
     # Max recent videos to scan per UP during daily poll
     bilibili_up_poll_page_size: int = Field(default=30, ge=1, le=50)
@@ -114,7 +114,7 @@ class Settings(BaseSettings):
     bilibili_up_poll_rate_limit_stop_after: int = Field(default=5, ge=1, le=20)
     # 0 = poll all followed UPs in one run; otherwise cap per run to reduce 过于频繁
     bilibili_up_poll_max_ups_per_run: int = Field(default=10, ge=0, le=200)
-    # Following dynamics feed (/x/polymer/web-dynamic/v1/feed/all?type=video)
+    # dynamic 模式：关注动态 feed/all?type=video 翻页深度
     bilibili_dynamic_poll_max_pages: int = Field(default=5, ge=1, le=50)
     bilibili_dynamic_poll_backfill_max_pages: int = Field(default=20, ge=1, le=100)
     bilibili_dynamic_poll_page_interval_seconds: float = Field(default=1.0, ge=0.0, le=30.0)
@@ -183,9 +183,12 @@ class Settings(BaseSettings):
     auto_sync_interval_minutes: int = Field(default=30, ge=5, le=24 * 60)
     auto_sync_platform: str = Field(default="all", pattern="^(bilibili|youtube|zhihu|all)$")
     auto_sync_ingest: bool = Field(default=True)
-    auto_sync_ingest_limit: int = Field(default=10, ge=1, le=50)
-    auto_sync_subtitle_limit: int = Field(default=10, ge=0, le=50)
-    auto_sync_distill_limit: int = Field(default=50, ge=0, le=50)
+    # Parallel pipeline batch size (ingest / subtitles / distill — same as cold start).
+    auto_sync_pipeline_batch_size: int = Field(default=25, ge=5, le=100)
+    # Legacy per-tick caps (ignored when subscription sync uses parallel pipeline).
+    auto_sync_ingest_limit: int = Field(default=25, ge=1, le=200)
+    auto_sync_subtitle_limit: int = Field(default=25, ge=0, le=200)
+    auto_sync_distill_limit: int = Field(default=50, ge=0, le=500)
     # Wait before the first auto-sync tick so serve/UI can start responsive.
     auto_sync_startup_delay_seconds: int = Field(default=120, ge=0, le=3600)
     # First tick after delay: poll subscriptions only (no ingest/subtitles/distill).
@@ -233,6 +236,10 @@ class Settings(BaseSettings):
     # Local single-user desktop: False skips login UI; user profile/settings still use user id=1.
     auth_required: bool = Field(default=True)
     auth_allow_registration: bool = Field(default=True)
+    # Packaged release: one local account only (no switch-user UI, always user id=1).
+    single_user_mode: bool = Field(default=False)
+    # Dev multi-user DB: when false, background auto-sync only runs for user id=1.
+    multi_user_background_sync: bool = Field(default=False)
     bootstrap_username: str = Field(default="admin")
     bootstrap_password: str | None = Field(default=None)
     bootstrap_email: str | None = Field(default=None)

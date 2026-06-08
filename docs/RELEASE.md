@@ -1,24 +1,34 @@
-# On1y 发布打包
+# 发布说明
 
-面向「用户下载安装即可用」，不依赖 Conda / 源码环境。
+On1y 对外只发布 **一个正式版本**：Windows 安装程序 `On1y_<版本>_x64-setup.exe`。
 
-## 产物
+用户双击安装后，从开始菜单启动 **On1y** 即可使用，无需安装 Python、Conda 或 Node.js。
 
-| 文件 | 说明 |
-|------|------|
-| `dist/On1y-portable-0.1.0-win64.zip` | 便携资源包（后端 + 前端静态文件），供调试 |
-| `desktop/src-tauri/target/release/bundle/nsis/On1y_*.exe` | **推荐**：Windows 安装程序，双击安装后从开始菜单启动 On1y |
-| `desktop/src-tauri/target/release/On1y.exe` | 未打包的桌面壳（需已执行 `package-release.ps1`） |
+---
 
-安装后用户数据默认在：`%LOCALAPPDATA%\On1y\`（数据库、Cookie、配置），与程序目录分离。
+## 发布产物
 
-## 构建环境（仅维护者需要）
+
+| 文件                                                              | 说明                              |
+| --------------------------------------------------------------- | ------------------------------- |
+| `desktop/src-tauri/target/release/bundle/nsis/On1y_*-setup.exe` | **唯一对外分发物**，上传至 GitHub Releases |
+
+
+安装后用户数据在 `%LOCALAPPDATA%\On1y\`（数据库、Cookie、配置），与程序目录分离。
+
+构建过程中会在 `dist/portable/` 生成中间资源（前端静态文件 + PyInstaller 后端），供 Tauri 打进安装包，**不单独分发**。
+
+---
+
+## 构建环境（维护者）
 
 - Windows 10/11
-- Conda 环境 `on1y`（Python 3.11）
-- Node.js 18+（构建前端）
-- Rust + WebView2（构建 Tauri）
+- Conda 环境 `on1y`（Python 3.11+）
+- Node.js 18+
+- Rust + WebView2
 - 首次：`pip install -e ".[dev]"`（含 PyInstaller）
+
+---
 
 ## 一键打包
 
@@ -26,34 +36,67 @@
 cd D:\On1y
 conda activate on1y
 
-# 1. 组装便携资源（PyInstaller 后端 + frontend/out + sql）
-powershell -ExecutionPolicy Bypass -File scripts\package-release.ps1
+# 组装资源 + 构建 NSIS 安装包
+powershell -ExecutionPolicy Bypass -File scripts\build-release.ps1
+```
 
-# 2. 构建 NSIS 安装包（含上述资源）
+或分步执行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\package-release.ps1
 powershell -ExecutionPolicy Bypass -File scripts\build-desktop.ps1
 ```
 
-完成后将 `On1y_*-setup.exe` 分发给用户。
+完成后安装包位于：
+
+```
+desktop\src-tauri\target\release\bundle\nsis\On1y_0.1.0_x64-setup.exe
+```
+
+可复制到 `dist\` 便于上传：
+
+```powershell
+Copy-Item desktop\src-tauri\target\release\bundle\nsis\On1y_0.1.0_x64-setup.exe dist\
+```
+
+---
+
+## 发布到 GitHub Releases
+
+1. 确认版本号一致：`pyproject.toml`、`desktop/package.json`、`desktop/src-tauri/tauri.conf.json`、`desktop/src-tauri/Cargo.toml`
+2. 提交并推送源码，打标签：
+
+```powershell
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+1. 打开 [GitHub Releases](https://github.com/S1jinCheng/ON1Y/releases/new)
+2. 选择标签 `v0.1.0`，上传 `On1y_0.1.0_x64-setup.exe`
+3. 正文可参考 [RELEASE_NOTES_v0.1.0.md](RELEASE_NOTES_v0.1.0.md)
+
+---
 
 ## 用户安装后
 
-1. 运行安装程序，从开始菜单或桌面打开 **On1y**
-2. 首次启动自动创建 `%LOCALAPPDATA%\On1y\.env` 与数据目录
-3. 在网页设置中上传 **B 站 / YouTube / 知乎** Cookie（或使用浏览器扩展导出后上传）
-4. 注册/登录账号，按引导完成冷启动同步
+1. 从开始菜单或桌面快捷方式打开 **On1y**
+2. 注册 / 登录本机账号
+3. 按 [COOKIES.md](COOKIES.md) 导入各平台 Cookie
+4. 如需访问 YouTube 等，按 [PROXY.md](PROXY.md) 配置代理
+5. 在设置页完成首次订阅同步
 
-**说明**
+---
 
-- 无需安装 Python、Conda、Node.js
-- 知乎正文提取需本机已安装 Playwright Chromium；首次使用知乎可在设置页查看提示，或维护者预装：在打包机执行 `playwright install chromium` 后将浏览器缓存一并分发（可选，体积较大）
-- YouTube 访问可能需要用户在设置或 `.env` 中配置代理
+## 开发版 vs 安装版
 
-## 开发机 vs 发布版
 
-| | 开发 | 发布安装包 |
-|--|------|------------|
-| 后端 | `conda` 下的 `on1y.exe` | 捆绑的 `resources/backend/on1y/on1y.exe` |
-| 前端 | `frontend/out` 或 `npm run dev` | 捆绑在 `resources/app/frontend/out` |
-| 数据 | `D:\On1y\data` | `%LOCALAPPDATA%\On1y\data` |
+|      | 开发（源码）                         | 正式安装版                  |
+| ---- | ------------------------------ | ---------------------- |
+| 启动方式 | `on1y serve` 或开发树 `On1y.exe`   | 安装后的开始菜单 **On1y**      |
+| 后端   | Conda 环境 `on1y`                | 安装包内捆绑的 `on1y.exe`     |
+| 前端   | `frontend/out` 或 `npm run dev` | 安装包内捆绑的静态资源            |
+| 数据   | 默认 `D:\On1y\data`（开发）          | `%LOCALAPPDATA%\On1y\` |
 
-开发日常仍用 `on1y serve`；发布流程不影响源码开发。
+
+日常开发仍用 `on1y serve`，发布流程不影响源码开发。
+

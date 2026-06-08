@@ -18,7 +18,7 @@ if (-not (Initialize-RustPath)) {
 }
 
 if (-not (Test-Path (Join-Path (Get-On1yRoot) "dist\portable\app\frontend\out\index.html"))) {
-    Write-Host "Packaging portable backend + app assets..."
+    Write-Host "Packaging release resources..."
     & (Join-Path $PSScriptRoot "package-release.ps1")
     if ($LASTEXITCODE -ne 0) { throw "package-release.ps1 failed" }
 }

@@ -37,6 +37,21 @@ def _llm_integration_defaults(*, user_id: int | None = None) -> dict[str, Any]:
     }
 
 
+def _smtp_integration_defaults(*, user_id: int | None = None) -> dict[str, Any]:
+    from on1y.delivery.smtp_settings import public_settings_view
+
+    pub = public_settings_view(user_id=user_id)
+    return {
+        "host": pub["host"],
+        "port": pub["port"],
+        "from": pub["from"],
+        "user": pub["user"],
+        "use_tls": pub["use_tls"],
+        "configured": pub["configured"],
+        "password_set": pub["password_set"],
+    }
+
+
 def kindle_delivery_address(profile: dict[str, Any]) -> str:
     """Per-user Kindle recipient from profile only (never global .env)."""
     kindle = profile.get("kindle") if isinstance(profile.get("kindle"), dict) else {}
@@ -74,12 +89,7 @@ def _default_payload(settings: Settings | None = None, *, user_id: int | None = 
         "integrations": {
             "cookies": cookies,
             "llm": _llm_integration_defaults(user_id=uid),
-            "smtp": {
-                "host": settings.smtp_host or "",
-                "port": settings.smtp_port,
-                "from": settings.smtp_from or "",
-                "user_configured": bool(settings.smtp_user),
-            },
+            "smtp": _smtp_integration_defaults(user_id=uid),
         },
     }
 
@@ -217,7 +227,7 @@ def public_profile_view(user_id: int | None = None) -> dict[str, Any]:
     profile = load_user_profile(user_id)
     integrations = profile.get("integrations") or {}
     llm = _llm_integration_defaults(user_id=user_id)
-    smtp = integrations.get("smtp") if isinstance(integrations.get("smtp"), dict) else {}
+    smtp = _smtp_integration_defaults(user_id=user_id)
     cookies = integrations.get("cookies") if isinstance(integrations.get("cookies"), dict) else {}
     cookie_status = {}
     for platform, path_str in cookies.items():
@@ -250,12 +260,7 @@ def public_profile_view(user_id: int | None = None) -> dict[str, Any]:
                 "model": llm.get("model"),
                 "api_key_configured": llm.get("api_key_configured"),
             },
-            "smtp": {
-                "host": smtp.get("host"),
-                "port": smtp.get("port"),
-                "from": smtp.get("from"),
-                "configured": bool(smtp.get("user_configured")),
-            },
+            "smtp": smtp,
         },
     }
 

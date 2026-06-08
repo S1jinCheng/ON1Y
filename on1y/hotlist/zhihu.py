@@ -12,6 +12,7 @@ import httpx
 from on1y.config import Settings, get_settings
 from on1y.exceptions import ConfigurationError
 from on1y.hotlist.constants import HOTLIST_ZHIHU, HOTLIST_ZHIHU_CURSOR, HOTLIST_ZHIHU_LABEL
+from on1y.hotlist.sql import is_feed_row_meta
 from on1y.ingestion.zhihu_follow_list import DEFAULT_HEADERS, _cookie_jar
 from on1y.models.enums import ContentType, ExtractStatus, SourceType
 from on1y.models.raw import RawItemCreate
@@ -154,6 +155,7 @@ def sync_zhihu_hotlist(
         "theme_assigned": 0,
         "distilled": 0,
         "tagged": 0,
+        "skipped_feed_overlap": 0,
         "errors": [],
     }
 
@@ -188,6 +190,10 @@ def sync_zhihu_hotlist(
         }
 
         existing = storage.get_raw_by_url(url)
+        if existing is not None and is_feed_row_meta(existing.source_meta):
+            # Same URL already in subscription feed — do not attach hot-list snapshot.
+            report["skipped_feed_overlap"] += 1
+            continue
         prior_meta = dict(existing.source_meta or {}) if existing else {}
         try:
             raw = storage.upsert_raw_item(

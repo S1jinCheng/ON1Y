@@ -29,6 +29,10 @@ def user_llm_settings_path(user_id: int) -> Path:
     return user_dir(user_id) / "llm_settings.json"
 
 
+def user_smtp_settings_path(user_id: int) -> Path:
+    return user_dir(user_id) / "smtp_settings.json"
+
+
 def user_economist_cache_dir(user_id: int) -> Path:
     path = user_dir(user_id) / "economist"
     path.mkdir(parents=True, exist_ok=True)

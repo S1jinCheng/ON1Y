@@ -279,6 +279,27 @@ function Test-FrontendBuildMissing {
     return -not (Test-Path (Join-Path $FrontendDir "out\index.html"))
 }
 
+function Sync-FrontendToPortableBundle {
+    param([string]$Root)
+    $src = Join-Path $Root "frontend\out"
+    $dest = Join-Path $Root "dist\portable\app\frontend\out"
+    if (-not (Test-Path (Join-Path $src "index.html"))) {
+        return $false
+    }
+    if (-not (Test-Path (Join-Path $Root "dist\portable\app"))) {
+        return $false
+    }
+    if (Test-Path $dest) {
+        Remove-Item -Recurse -Force $dest
+    }
+    $parent = Split-Path $dest -Parent
+    if (-not (Test-Path $parent)) {
+        New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    }
+    Copy-Item -Recurse -Force $src $dest
+    return $true
+}
+
 function Invoke-FrontendBuild {
     param(
         [string]$FrontendDir,

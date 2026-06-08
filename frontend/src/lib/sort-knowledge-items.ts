@@ -21,7 +21,7 @@ export const SORT_MODES: SortMode[] = [
   "relevance"
 ];
 
-export const DEFAULT_SORT_MODE: SortMode = "ingested_desc";
+export const DEFAULT_SORT_MODE: SortMode = "published_desc";
 
 const STORAGE_KEY = "on1y-knowledge-sort-mode";
 
@@ -125,10 +125,10 @@ export function sortOptionsForUi(
 ): Array<{ value: SortMode; label: string }> {
   const zh = locale === "zh";
   const base: Array<{ value: SortMode; label: string }> = [
-    { value: "ingested_desc", label: zh ? "时间 ↓" : "Time ↓" },
-    { value: "ingested_asc", label: zh ? "时间 ↑" : "Time ↑" },
     { value: "published_desc", label: zh ? "发布时间 ↓" : "Published ↓" },
     { value: "published_asc", label: zh ? "发布时间 ↑" : "Published ↑" },
+    { value: "ingested_desc", label: zh ? "入库时间 ↓" : "Ingested ↓" },
+    { value: "ingested_asc", label: zh ? "入库时间 ↑" : "Ingested ↑" },
     { value: "title_asc", label: zh ? "标题 A→Z" : "Title A→Z" },
     { value: "title_desc", label: zh ? "标题 Z→A" : "Title Z→A" },
     { value: "hot_rank_asc", label: zh ? "热榜排名" : "Hot rank" }

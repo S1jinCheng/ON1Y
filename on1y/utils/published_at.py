@@ -9,7 +9,7 @@ from typing import Any
 
 def published_at_from_meta(meta: dict[str, Any] | None) -> datetime | None:
     meta = meta or {}
-    for key in ("published", "published_at", "upload_date", "pubdate"):
+    for key in ("published", "published_at", "entry_published", "upload_date", "pubdate"):
         parsed = _parse_published_value(meta.get(key))
         if parsed is not None:
             return parsed
@@ -39,6 +39,11 @@ def _parse_published_value(raw: Any) -> datetime | None:
     if not text:
         return None
     if text.isdigit():
+        if len(text) == 8:
+            try:
+                return datetime.strptime(text, "%Y%m%d").replace(tzinfo=timezone.utc)
+            except ValueError:
+                pass
         try:
             return datetime.fromtimestamp(int(text), tz=timezone.utc)
         except (TypeError, ValueError, OSError):

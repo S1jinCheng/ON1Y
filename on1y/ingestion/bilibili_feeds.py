@@ -21,9 +21,12 @@ def dynamic_video_cursor_key() -> str:
 
 
 def slug_label(up_mid: str, uname: str | None = None) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "-", (uname or up_mid).strip().lower()).strip("-")[:40]
-    slug = slug or up_mid
-    return f"{BILI_UP_FEED_LABEL_PREFIX}{slug}"
+    """Stable per-UP label (mid-based; avoids 魔兽争霸3 → bili-up-3 collisions)."""
+    mid = str(up_mid or "").strip()
+    if mid:
+        return f"{BILI_UP_FEED_LABEL_PREFIX}{mid}"
+    slug = re.sub(r"[^a-z0-9]+", "-", (uname or "").strip().lower()).strip("-")[:40]
+    return f"{BILI_UP_FEED_LABEL_PREFIX}{slug or 'unknown'}"
 
 
 def build_feed_url(rsshub_base: str, up_mid: str) -> str:

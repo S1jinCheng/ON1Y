@@ -20,23 +20,9 @@ _stop = threading.Event()
 
 def start_economist_auto_loop() -> None:
     global _thread
-    settings = get_settings()
-    if not settings.economist_auto_sync_enabled:
-        return
-    from on1y.adapters.sqlite_storage import get_storage
-    from on1y.user.accounts import UserStore
+    from on1y.sync_settings.settings import any_economist_auto_sync_enabled, min_economist_sync_interval_minutes
 
-    storage = get_storage()
-    try:
-        any_auto = False
-        for uid in UserStore(storage).list_active_user_ids():
-            with user_context(uid):
-                if load_user_profile(uid)["economist"]["auto_ingest_enabled"]:
-                    any_auto = True
-                    break
-    finally:
-        storage.close()
-    if not any_auto:
+    if not any_economist_auto_sync_enabled():
         return
     profile = load_user_profile()
     if _thread is not None and _thread.is_alive():
@@ -46,7 +32,7 @@ def start_economist_auto_loop() -> None:
     _thread.start()
     logger.info(
         "Economist auto-ingest enabled (every %s min, Kindle=%s)",
-        settings.economist_auto_sync_interval_minutes,
+        min_economist_sync_interval_minutes(),
         profile["economist"]["auto_kindle_enabled"],
     )
 
@@ -64,12 +50,12 @@ def run_economist_auto_tick(
     from on1y.adapters.sqlite_storage import get_storage
     from on1y.delivery.kindle import send_epub_to_kindle
     from on1y.hotlist.epub_preview import resolve_economist_epub_cache_path
-    from on1y.user.accounts import UserStore
+    from on1y.user.accounts import list_sync_user_ids
 
     settings = get_settings()
     storage = get_storage()
     try:
-        user_ids = [user_id] if user_id is not None else UserStore(storage).list_active_user_ids()
+        user_ids = [user_id] if user_id is not None else list_sync_user_ids(storage)
     finally:
         storage.close()
 
@@ -90,8 +76,19 @@ def _run_economist_auto_tick_for_user(*, force_edition: str | None = None) -> di
     from on1y.delivery.kindle import send_epub_to_kindle
     from on1y.hotlist.epub_preview import resolve_economist_epub_cache_path
 
-    settings = get_settings()
+    from on1y.sync_settings.settings import resolve_settings
+
+    settings = resolve_settings()
     profile = load_user_profile()
+    if not settings.economist_auto_sync_enabled and not force_edition:
+        return {
+            "skipped": True,
+            "reason": "economist_auto_sync_disabled",
+            "edition_date": None,
+            "ingested": False,
+            "kindle_sent": False,
+            "errors": [],
+        }
     report: dict[str, Any] = {
         "skipped": False,
         "edition_date": None,
@@ -190,8 +187,9 @@ def _run_economist_auto_tick_for_user(*, force_edition: str | None = None) -> di
 
 
 def _loop() -> None:  # noqa: C901 — background loop
-    settings = get_settings()
-    interval = max(15, settings.economist_auto_sync_interval_minutes) * 60
+    from on1y.sync_settings.settings import min_economist_sync_interval_minutes
+
+    interval = min_economist_sync_interval_minutes() * 60
     while not _stop.is_set():
         if _stop.wait(timeout=interval):
             break

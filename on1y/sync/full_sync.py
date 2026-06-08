@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from on1y.config import Settings, get_settings
+from on1y.sync_settings.settings import resolve_settings
 from on1y.exceptions import ConfigurationError
 from on1y.ingestion.bilibili_collections import backfill_bilibili_collections
 from on1y.ingestion.bilibili_subscriptions import (
@@ -118,17 +119,104 @@ def pipeline_bar_metrics(*, user_id: int) -> dict[str, dict[str, int]]:
     }
 
 
+def _mask_foreign_sync_status(st: dict[str, Any], *, viewer_user_id: int | None) -> dict[str, Any]:
+    """Hide another account's cold-start job from the UI (global in-memory state)."""
+    if viewer_user_id is None:
+        return st
+    owner = st.get("user_id")
+    if owner in (None, viewer_user_id):
+        return st
+    masked = dict(st)
+    masked.update(
+        {
+            "running": False,
+            "started_at": None,
+            "finished_at": None,
+            "last_report": None,
+            "last_timing": None,
+            "current_phase": None,
+            "phases_ms": {},
+            "progress": None,
+            "error": None,
+            "user_id": None,
+        }
+    )
+    return masked
+
+
+def _mask_foreign_subscription_status(
+    sub: dict[str, Any],
+    *,
+    viewer_user_id: int | None,
+) -> dict[str, Any]:
+    if viewer_user_id is None:
+        return sub
+    owner = sub.get("user_id")
+    if owner in (None, viewer_user_id):
+        return sub
+    masked = dict(sub)
+    masked.update(
+        {
+            "running": False,
+            "started_at": None,
+            "finished_at": None,
+            "last_report": None,
+            "error": None,
+            "user_id": None,
+            "mode": None,
+            "backfill": False,
+            "progress": None,
+        }
+    )
+    return masked
+
+
+def _pending_pipeline_work(bars: dict[str, dict[str, int]] | None) -> bool:
+    if not bars:
+        return False
+    for key in ("ingest", "subtitles", "distill"):
+        block = bars.get(key) or {}
+        done = int(block.get("done") or 0)
+        total = int(block.get("total") or 0)
+        if total > done:
+            return True
+    return False
+
+
 def full_sync_status() -> dict[str, Any]:
     from on1y.auth.context import get_current_user_id, user_context
     from on1y.distill.batch_job import distill_batch_status
+    from on1y.subscriptions.sync_job import subscription_sync_status
+    from on1y.sync.auto_sync_state import read_last_auto_sync_at
+    from on1y.sync_settings.settings import resolve_settings
 
+    uid = get_current_user_id()
     with _lock:
-        st = dict(_state)
+        st = _mask_foreign_sync_status(dict(_state), viewer_user_id=uid)
+    sub = _mask_foreign_subscription_status(subscription_sync_status(), viewer_user_id=uid)
+    st["subscription_sync"] = sub
+    sub_running = bool(sub.get("running"))
     bg = distill_batch_status()
+    if uid is not None and bg.get("user_id") not in (None, uid):
+        bg = {**bg, "running": False, "user_id": None}
     st["background_distill"] = bg
     st["distill_running"] = bool(bg.get("running"))
-    st["active"] = bool(st.get("running")) or st["distill_running"]
-    if st.get("running") and st.get("started_at"):
+    full_running = bool(st.get("running"))
+    st["active"] = full_running or sub_running or st["distill_running"]
+    if sub_running and not full_running:
+        st["sync_kind"] = "subscription"
+        if sub.get("progress"):
+            st["progress"] = sub["progress"]
+            st["current_phase"] = (sub["progress"] or {}).get("phase")
+            if sub.get("started_at") and not st.get("started_at"):
+                st["started_at"] = sub["started_at"]
+        if sub.get("mode") == "auto":
+            st["sync_kind"] = "auto"
+    elif full_running:
+        st["sync_kind"] = "cold_start"
+    else:
+        st["sync_kind"] = None
+    if (full_running or sub_running) and st.get("started_at"):
         try:
             started = datetime.fromisoformat(str(st["started_at"]).replace("Z", "+00:00"))
             elapsed_ms = round(
@@ -144,11 +232,21 @@ def full_sync_status() -> dict[str, Any]:
         except (TypeError, ValueError, OSError):
             pass
 
-    uid = get_current_user_id()
+    from on1y.subscriptions.auto_sync import auto_sync_scheduler_status
+
+    st["auto_sync_scheduler"] = auto_sync_scheduler_status()
     if uid is not None:
         try:
             with user_context(uid):
+                settings = resolve_settings(user_id=uid)
                 bars = pipeline_bar_metrics(user_id=uid)
+                last_auto = read_last_auto_sync_at(user_id=uid)
+            st["auto_sync_enabled"] = bool(settings.auto_sync_enabled)
+            st["last_auto_sync_at"] = (
+                last_auto.astimezone(timezone.utc).isoformat() if last_auto else None
+            )
+            st["resident_panel"] = bool(settings.auto_sync_enabled)
+            st["pending_work"] = _pending_pipeline_work(bars)
             if st.get("running") and st.get("user_id") == uid:
                 counters = (st.get("progress") or {}).get("counters") or {}
                 enqueued = int(counters.get("enqueued", 0))
@@ -164,6 +262,11 @@ def full_sync_status() -> dict[str, Any]:
             st["pipeline_bars"] = bars
         except Exception:
             logger.debug("pipeline_bar_metrics failed for user %s", uid, exc_info=True)
+    else:
+        st["auto_sync_enabled"] = False
+        st["resident_panel"] = False
+        st["pending_work"] = False
+        st["last_auto_sync_at"] = None
 
     return st
 
@@ -280,12 +383,11 @@ def _sync_subscriptions_phase(
         try:
             progress and progress.set_phase("subscriptions", detail=f"同步订阅 · {rss_platform}")
             if rss_platform == "youtube":
-                if settings.youtube_auto_refresh_channels:
-                    with phase_timer.span(f"subscriptions.{rss_platform}.config"):
-                        rss_report["config"] = refresh_youtube_feeds(
-                            settings=settings,
-                            max_channels=settings.youtube_refresh_max_channels,
-                        )
+                with phase_timer.span(f"subscriptions.{rss_platform}.config"):
+                    rss_report["config"] = refresh_youtube_feeds(
+                        settings=settings,
+                        max_channels=settings.youtube_refresh_max_channels,
+                    )
                 with phase_timer.span(f"subscriptions.{rss_platform}.poll"):
                     rss_report["poll"] = sync_rss_subscriptions(
                         storage,
@@ -304,9 +406,8 @@ def _sync_subscriptions_phase(
                         backfill=True,
                     )
             else:
-                if settings.zhihu_auto_refresh_follows:
-                    with phase_timer.span(f"subscriptions.{rss_platform}.config"):
-                        rss_report["config"] = refresh_zhihu_follow_feeds(settings=settings)
+                with phase_timer.span(f"subscriptions.{rss_platform}.config"):
+                    rss_report["config"] = refresh_zhihu_follow_feeds(settings=settings)
                 with phase_timer.span(f"subscriptions.{rss_platform}.poll"):
                     rss_report["poll"] = sync_rss_subscriptions(
                         storage,
@@ -486,7 +587,10 @@ def _execute_full_sync(
     if subscription_sync_status().get("running"):
         return None, "订阅同步正在进行中，请稍后再试"
 
-    settings = get_settings()
+    settings = resolve_settings(user_id=user_id)
+    from on1y.user.feeds_config import ensure_user_feeds_config
+
+    ensure_user_feeds_config(settings=get_settings(), user_id=user_id)
     if bilibili_dynamic_days is None:
         bilibili_dynamic_days = settings.cold_start_bilibili_dynamic_days
     collection_platforms = parse_collections_platforms(settings.collections_sync_platforms)
@@ -503,11 +607,47 @@ def _execute_full_sync(
     from on1y.sync.progress import ColdStartProgress
 
     progress = ColdStartProgress(user_id=user_id, on_update=_on_cold_start_progress)
+    from on1y.sync.parallel_pipeline import run_parallel_pipeline
+    from on1y.subscriptions.sync_job import user_has_pipeline_backlog
+
+    poll_active = threading.Event()
+    pipeline_holder: dict[str, Any] = {}
+    pipeline_exc: list[BaseException] = []
+    pipeline_batch_size = settings.auto_sync_pipeline_batch_size
     try:
         with user_context(user_id):
             with progress.activate():
                 progress.set_phase("starting", detail="准备初始同步")
+                poll_active.set()
+                if user_has_pipeline_backlog(user_id=user_id):
+                    progress.log_step(
+                        phase="pipeline",
+                        title="并行处理积压",
+                        detail="收藏/订阅拉取与入库/字幕/摘要同时进行",
+                    )
+
+                def _pipeline_runner() -> None:
+                    try:
+                        pipeline_holder["report"] = run_parallel_pipeline(
+                            storage,
+                            user_id=user_id,
+                            platforms=pipeline_platforms,
+                            batch_size=pipeline_batch_size,
+                            timer=timer,
+                            poll_active=poll_active,
+                        )
+                    except BaseException as exc:
+                        pipeline_exc.append(exc)
+
+                pipeline_thread = threading.Thread(
+                    target=_pipeline_runner,
+                    name="on1y-coldstart-pipeline",
+                    daemon=True,
+                )
+                pipeline_thread.start()
+
                 _set_sync_progress(phase="collections", phases_ms=rollup_phase_totals(timer.spans_ms))
+                progress.set_phase("collections", detail="同步收藏夹")
                 report["collections"] = _sync_collections_phase(
                     storage,
                     settings=settings,
@@ -517,6 +657,7 @@ def _execute_full_sync(
                 _set_sync_progress(
                     phase="subscriptions", phases_ms=rollup_phase_totals(timer.spans_ms)
                 )
+                progress.set_phase("subscriptions", detail="同步订阅")
                 report["subscriptions"] = _sync_subscriptions_phase(
                     storage,
                     settings=settings,
@@ -524,13 +665,15 @@ def _execute_full_sync(
                     bilibili_dynamic_days=bilibili_dynamic_days,
                     timer=timer,
                 )
+
+                poll_active.clear()
+                pipeline_thread.join(timeout=6 * 3600)
+                if pipeline_thread.is_alive():
+                    logger.warning("Cold-start pipeline still running after poll phases finished")
+                if pipeline_exc:
+                    raise pipeline_exc[0]
+                report["pipeline"] = pipeline_holder.get("report") or {}
                 _set_sync_progress(phase="pipeline", phases_ms=rollup_phase_totals(timer.spans_ms))
-                report["pipeline"] = _drain_ingest_pipeline(
-                    storage,
-                    platforms=pipeline_platforms,
-                    timer=timer,
-                    user_id=user_id,
-                )
                 distill_stats = (report.get("pipeline") or {}).get("distill") or {}
                 if distill_stats.get("enabled"):
                     progress.set_phase("done", detail="初始同步完成（含 AI 摘要）")
@@ -549,6 +692,9 @@ def _execute_full_sync(
 
         finished_at = datetime.now(timezone.utc).isoformat()
         phase_totals = rollup_phase_totals(timer.spans_ms)
+        started_dt = datetime.fromisoformat(sync_started_at.replace("Z", "+00:00"))
+        finished_dt = datetime.fromisoformat(finished_at.replace("Z", "+00:00"))
+        wall_ms = round((finished_dt - started_dt).total_seconds() * 1000, 1)
         timing = build_timing_record(
             user_id=user_id,
             started_at=sync_started_at,
@@ -556,10 +702,13 @@ def _execute_full_sync(
             phases_ms=phase_totals,
             detail={
                 "spans_ms": timer.spans_ms,
-                "pipeline_rounds": report.get("pipeline", {}).get("rounds"),
-                "pipeline_round_timings_ms": report.get("pipeline", {}).get("round_timings_ms"),
+                "pipeline_mode": (report.get("pipeline") or {}).get("mode"),
+                "pipeline_parallel": True,
+                "wall_ms": wall_ms,
             },
         )
+        timing["total_ms"] = wall_ms
+        timing["total_human"] = format_duration_ms(wall_ms)
         report["timing"] = timing
         report["progress"] = progress.snapshot()
         append_timing_record(timing)
@@ -695,7 +844,7 @@ def start_full_sync_job(
             }
         )
 
-    settings = get_settings()
+    settings = resolve_settings(user_id=user_id)
     dynamic_days = (
         bilibili_dynamic_days
         if bilibili_dynamic_days is not None

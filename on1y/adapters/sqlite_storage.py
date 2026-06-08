@@ -456,11 +456,11 @@ class SqliteStorage:
     def _user_scope_parts(self, conn: sqlite3.Connection) -> tuple[str, list[Any]]:
         if self._current_schema_version(conn) < 9:
             return "", []
-        from on1y.auth.context import get_current_user_id
+        from on1y.auth.context import get_current_user_id, get_effective_user_id
 
         uid = get_current_user_id()
         if uid is None:
-            return "", []
+            uid = get_effective_user_id()
         return "r.user_id = ?", [uid]
 
     def _write_user_id(self, conn: sqlite3.Connection) -> int | None:
@@ -761,6 +761,36 @@ class SqliteStorage:
             (status, *params, *user_params),
         ).fetchone()
         return int(row["n"]) if row else 0
+
+    def reclaim_stale_processing_jobs(self, *, older_than_minutes: int = 45) -> dict[str, int]:
+        """Move stuck processing rows back to pending (killed worker / crashed pipeline)."""
+        minutes = max(5, int(older_than_minutes))
+        out = {"pending_urls": 0, "pending_subtitles": 0}
+        with self.transaction() as conn:
+            user_clause, user_params = self._pending_user_clause(conn)
+            user_sql = f"AND {user_clause}" if user_clause else ""
+            cur = conn.execute(
+                f"""
+                UPDATE pending_urls
+                SET status = 'pending', updated_at = datetime('now')
+                WHERE status = 'processing'
+                  AND updated_at < datetime('now', ?)
+                  {user_sql}
+                """,
+                (f"-{minutes} minutes", *user_params),
+            )
+            out["pending_urls"] = int(cur.rowcount or 0)
+            cur2 = conn.execute(
+                """
+                UPDATE pending_subtitles
+                SET status = 'pending', updated_at = datetime('now')
+                WHERE status = 'processing'
+                  AND updated_at < datetime('now', ?)
+                """,
+                (f"-{minutes} minutes",),
+            )
+            out["pending_subtitles"] = int(cur2.rowcount or 0)
+        return out
 
     def mark_pending_done(self, pending_id: int) -> None:
         with self.transaction() as conn:
@@ -2730,8 +2760,11 @@ class SqliteStorage:
     def _collection_clause_for_conn(
         self, conn: sqlite3.Connection, collection: str | None
     ) -> str:
+        key = (collection or "feed").strip().lower()
+        if self._current_schema_version(conn) >= 8 and key == "hotlist":
+            # Membership comes from hotlist_snapshots join; avoid tagging feed rows via meta.
+            return "r.deleted_at IS NULL"
         if self._current_schema_version(conn) < 7:
-            key = (collection or "feed").strip().lower()
             if key == "trash":
                 return "0"
             if key == "favorites":

@@ -22,6 +22,8 @@ import ReactMarkdown from "react-markdown";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 
 import { ColdStartFloatingPanel } from "@/components/cold-start-floating-panel";
+import { AppUpdateBanner } from "@/components/app-update-banner";
+import { PipelineAlertsBanner } from "@/components/pipeline-alerts-banner";
 import { FirstRunGuide } from "@/components/first-run-guide";
 import { FeedItemCard } from "@/components/feed-item-card";
 import { ThemeMovePopover } from "@/components/theme-move-popover";
@@ -705,10 +707,14 @@ export default function KnowledgeWorkbench(): JSX.Element {
   const coldStartActive =
     Boolean(coldStartStatus?.active) ||
     Boolean(coldStartStatus?.running) ||
+    Boolean(coldStartStatus?.subscription_sync?.running) ||
     Boolean(coldStartStatus?.background_distill?.running);
 
+  const syncPanelResident =
+    Boolean(coldStartStatus?.resident_panel) || Boolean(coldStartStatus?.pending_work);
+
   useEffect(() => {
-    if (!coldStartActive) {
+    if (!coldStartActive && !syncPanelResident) {
       return;
     }
     const poll = async (): Promise<void> => {
@@ -717,6 +723,9 @@ export default function KnowledgeWorkbench(): JSX.Element {
         setColdStartStatus(status);
         if (status.error) {
           setMessage(status.error);
+        }
+        if (!coldStartActive) {
+          return;
         }
         const [itemResp, taxonomy, creatorsResp] = await Promise.all([
           getKnowledgeItems(buildItemsQuery(0, INITIAL_FEED_BATCH)),
@@ -732,12 +741,26 @@ export default function KnowledgeWorkbench(): JSX.Element {
         /* background poll */
       }
     };
+    void poll();
+    const intervalMs = coldStartActive ? 4000 : syncPanelResident ? 5000 : 30000;
     const timer = window.setInterval(() => {
       void poll();
-    }, 4000);
+    }, intervalMs);
     return () => window.clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [coldStartActive, locale]);
+  }, [
+    coldStartActive,
+    syncPanelResident,
+    locale,
+    collection,
+    hotlistDate,
+    hotlistSource,
+    selectedThemeId,
+    selectedCreatorKey,
+    selectedTagId,
+    platform,
+    query
+  ]);
 
   const feedFiltersReadyRef = useRef(false);
   useEffect(() => {
@@ -894,7 +917,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
         setHotlistDate(todayIsoDate());
       }
     } else if (sortMode === "hot_rank_asc") {
-      setSortMode("ingested_desc");
+      setSortMode("published_desc");
     }
   }
 
@@ -1128,7 +1151,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
           </div>
           <div className="flex items-center gap-2">
             <Link
-              href="/stats"
+              href="/stats/"
               className="inline-flex items-center gap-2 rounded-md border border-border bg-surface px-3 py-1.5 text-sm hover:bg-soft"
             >
               <BarChart3 className="h-4 w-4" />
@@ -1177,6 +1200,9 @@ export default function KnowledgeWorkbench(): JSX.Element {
           {message ? <span className="text-sm text-muted">{message}</span> : null}
         </div>
       </div>
+
+      <AppUpdateBanner locale={locale} />
+      <PipelineAlertsBanner locale={locale} />
 
       {readerExpanded && active ? (
         <PanelGroup key="reader-expanded" direction="horizontal" className="min-h-0 flex-1">

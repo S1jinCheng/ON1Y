@@ -67,10 +67,13 @@ def register_auth_routes(app: Any) -> None:
         storage = get_storage()
         try:
             store = UserStore(storage)
+            single = settings.single_user_mode
+            schema_multi = storage._current_schema_version(storage._connect()) >= 9
             return {
-                "auth_required": settings.auth_required,
-                "allow_registration": settings.auth_allow_registration,
-                "multi_user": storage._current_schema_version(storage._connect()) >= 9,
+                "auth_required": False if single else settings.auth_required,
+                "allow_registration": False if single else settings.auth_allow_registration,
+                "single_user_mode": single,
+                "multi_user": False if single else schema_multi,
                 "user_count": store.count_users(),
             }
         finally:
@@ -79,6 +82,8 @@ def register_auth_routes(app: Any) -> None:
     @app.post("/api/auth/register")
     def auth_register(body: RegisterRequest) -> dict[str, Any]:
         settings = get_settings()
+        if settings.single_user_mode:
+            raise HTTPException(status_code=403, detail="single-user mode: registration disabled")
         if not settings.auth_allow_registration:
             raise HTTPException(status_code=403, detail="registration disabled")
         from on1y.adapters.sqlite_storage import get_storage
@@ -122,7 +127,8 @@ def register_auth_routes(app: Any) -> None:
 
         storage = get_storage()
         try:
-            if storage._current_schema_version(storage._connect()) < 9:
+            settings = get_settings()
+            if settings.single_user_mode or storage._current_schema_version(storage._connect()) < 9:
                 return {"users": [], "multi_user": False}
             store = UserStore(storage)
             users = [user_public_dict(u) for u in store.list_users_public()]
@@ -243,7 +249,7 @@ def install_auth_middleware(app: Any) -> None:
             return await call_next(request)
 
         settings = get_settings()
-        if not settings.auth_required:
+        if settings.single_user_mode or not settings.auth_required:
             set_current_user_id(1)
             try:
                 return await call_next(request)

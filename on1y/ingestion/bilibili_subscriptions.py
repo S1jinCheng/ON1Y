@@ -26,6 +26,7 @@ from on1y.ingestion.bilibili_feeds import (
     slug_label,
     up_cursor_key,
 )
+from on1y.cookies.loader import resolve_cookie_path
 from on1y.ingestion.enqueue import enqueue_url
 from on1y.models.enums import SourceType
 from on1y.ports.storage import StoragePort
@@ -133,12 +134,14 @@ def _fetch_up_videos_with_retry(
     since_ts: int | None = None,
     backfill: bool = False,
     since_backfill: bool = False,
+    max_pages: int | None = None,
 ) -> list[dict[str, Any]]:
-    max_pages = settings.bilibili_up_poll_max_pages
-    if backfill:
-        max_pages = max(max_pages, settings.bilibili_up_poll_backfill_max_pages)
-    elif since_backfill:
-        max_pages = max(max_pages, settings.bilibili_up_poll_since_max_pages)
+    if max_pages is None:
+        max_pages = settings.bilibili_up_poll_max_pages
+        if backfill:
+            max_pages = max(max_pages, settings.bilibili_up_poll_backfill_max_pages)
+        elif since_backfill:
+            max_pages = max(max_pages, settings.bilibili_up_poll_since_max_pages)
     last_exc: Exception | None = None
     retries = settings.bilibili_up_poll_rate_limit_retries
     for attempt in range(retries):
@@ -202,7 +205,7 @@ def poll_bilibili_dynamic_updates(
     sync_since_ts: int | None = None,
     max_pages: int | None = None,
 ) -> dict[str, Any]:
-    """Enqueue new video uploads from the logged-in user's following dynamics feed."""
+    """Enqueue new videos from following dynamics (polymer feed, type=video)."""
     settings = settings or get_settings()
     if sync_since_ts is None:
         from on1y.subscriptions.settings import sync_since_timestamp
@@ -213,12 +216,11 @@ def poll_bilibili_dynamic_updates(
     last_id, last_published = storage.get_rss_feed_state(cursor_key)
     first_run = last_id is None and last_published is None
 
-    if max_pages is None:
-        max_pages = settings.bilibili_dynamic_poll_max_pages
-        if backfill or (sync_since_ts is not None and first_run):
-            max_pages = settings.bilibili_dynamic_poll_backfill_max_pages
-
-    from on1y.cookies.loader import resolve_cookie_path
+    pages_max = settings.bilibili_dynamic_poll_max_pages
+    if backfill or (sync_since_ts is not None and first_run):
+        pages_max = settings.bilibili_dynamic_poll_backfill_max_pages
+    if max_pages is not None:
+        pages_max = max_pages
 
     path = resolve_cookie_path("bilibili", settings)
     jar = _cookie_jar(path)
@@ -227,7 +229,8 @@ def poll_bilibili_dynamic_updates(
     report: dict[str, Any] = {
         "platform": "bilibili",
         "mode": "dynamic",
-        "pages_max": max_pages,
+        "source": "following_dynamics_video",
+        "pages_max": pages_max,
         "videos_seen": 0,
         "enqueued": 0,
         "skipped_existing": 0,
@@ -244,15 +247,11 @@ def poll_bilibili_dynamic_updates(
     newest_id = last_id
     newest_pub = last_published
 
-    from on1y.sync.progress import get_cold_start_progress
-
-    progress = get_cold_start_progress()
-
     with httpx.Client(headers=DEFAULT_HEADERS, cookies=jar, timeout=settings.http_timeout_seconds) as client:
         try:
             for parsed in iter_dynamic_video_feed(
                 settings=settings,
-                max_pages=max_pages,
+                max_pages=pages_max,
                 since_ts=sync_since_ts if use_since_in_fetch else None,
                 client=client,
                 skip_stats=skip_stats,
@@ -286,7 +285,6 @@ def poll_bilibili_dynamic_updates(
                 label = slug_label(up_mid, uname)
                 entry_id = str(parsed.get("bvid") or url)
                 published = _video_created_iso(parsed.get("created"))
-                title = str(parsed.get("title") or url).strip()
 
                 if _should_skip_url(storage, url):
                     report["skipped_existing"] += 1
@@ -303,14 +301,6 @@ def poll_bilibili_dynamic_updates(
                         report=report,
                         backfill=backfill or use_since_in_fetch,
                         subscription_source="bilibili_dynamic",
-                    )
-                    progress and progress.log_item(
-                        phase="subscriptions",
-                        title=title,
-                        platform="bilibili",
-                        status="enqueued",
-                        url=url,
-                        detail=uname,
                     )
 
                 if _is_newer(entry_id, published, newest_id, newest_pub):
@@ -341,7 +331,9 @@ def poll_bilibili_up_updates(
     backfill: bool = False,
     max_items_per_up: int | None = None,
     max_ups_per_run: int | None = None,
+    max_pages_per_up: int | None = None,
     sync_since_ts: int | None = None,
+    subscription_source: str = "bilibili_up",
 ) -> dict[str, Any]:
     """
     Enqueue new uploads from followed UPs via Bilibili API.
@@ -430,6 +422,7 @@ def poll_bilibili_up_updates(
                     since_ts=sync_since_ts if (effective_backfill or since_backfill) else None,
                     backfill=effective_backfill,
                     since_backfill=since_backfill,
+                    max_pages=max_pages_per_up,
                 )
             except Exception as exc:
                 logger.warning("Bilibili UP poll failed mid=%s: %s", up_mid, exc)
@@ -473,6 +466,7 @@ def poll_bilibili_up_updates(
                         title_index=title_index,
                         report=report,
                         initial_snapshot=True,
+                        subscription_source=subscription_source,
                     )
                     storage.set_rss_feed_state(
                         cursor_key,
@@ -531,6 +525,7 @@ def poll_bilibili_up_updates(
                         title_index=title_index,
                         report=report,
                         backfill=effective_backfill or since_backfill,
+                        subscription_source=subscription_source,
                     )
                 if _is_newer(entry_id, published, newest_id, newest_pub):
                     newest_id = entry_id
@@ -603,6 +598,18 @@ def _enqueue_bilibili_video(
     )
     enqueue_url(storage, normalized, source=SourceType.RSS, source_meta=meta)
     report["enqueued"] += 1
+    from on1y.sync.progress import get_cold_start_progress
+
+    progress = get_cold_start_progress()
+    if progress is not None:
+        progress.log_item(
+            phase="subscriptions",
+            title=title,
+            platform="bilibili",
+            status="enqueued",
+            url=normalized,
+            detail=uname,
+        )
 
 
 def sync_bilibili_subscriptions(

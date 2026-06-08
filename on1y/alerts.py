@@ -134,7 +134,10 @@ def emit_alert(
     Record and notify about a rate-limit or anti-bot event.
     Returns the alert dict when emitted, None if suppressed by cooldown/disabled.
     """
-    settings = settings or get_settings()
+    if settings is None:
+        from on1y.sync_settings.settings import resolve_settings
+
+        settings = resolve_settings()
     if not settings.alert_enabled:
         return None
     if _in_cooldown(kind, platform, worker, settings):

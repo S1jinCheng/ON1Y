@@ -182,9 +182,9 @@ def sync_since_date(platform: str, *, user_id: int | None = None) -> date | None
     return _parse_iso_date(load_subscription_settings(user_id=user_id).get(key))
 
 
-def sync_since_timestamp(platform: str) -> int | None:
+def sync_since_timestamp(platform: str, *, user_id: int | None = None) -> int | None:
     """UTC start-of-day timestamp for the configured sync-since date."""
-    day = sync_since_date(platform)
+    day = sync_since_date(platform, user_id=user_id)
     if day is None:
         return None
     return int(datetime(day.year, day.month, day.day, tzinfo=timezone.utc).timestamp())

@@ -1,129 +1,93 @@
-# 全平台登录态（Cookie）配置
+# 如何导出各平台 Cookie
 
-On1y **不会**在代码里替你输入账号密码。登录态只能来自**你已登录的浏览器会话**，由你导出一次，程序自动读取。
+你需要在自己常用的浏览器里先登录各网站，再把登录状态（Cookie）导出出来，导入到 On1y 的设置里。下面介绍一种简单做法：用浏览器扩展 **Cookie-Editor** 导出 JSON 文件。
 
-| 平台 | 技术 | 默认 Cookie 文件 | WSL 推荐导入方式 |
-|------|------|------------------|------------------|
-| YouTube | yt-dlp + Netscape | `data/cookies/youtube.json` | `import_cookies.py youtube`（须含 **.google.com** 登录 Cookie，见下） |
-| Bilibili | yt-dlp + Netscape | `data/cookies/bilibili.json` | `import_cookies.py bilibili` |
-| 知乎 | Playwright | `data/cookies/zhihu.json` | `import_cookies.py zhihu` |
-| 小红书 | Playwright | `data/cookies/xiaohongshu.json` | `import_cookies.py xiaohongshu` |
-| X (Twitter) | Playwright | `data/cookies/twitter.json` | `import_cookies.py twitter` |
-
-`.env` 可覆盖路径，例如 `ON1Y_YOUTUBE_COOKIES_PATH`。
+导出的 Cookie 只保存在你的电脑上，不要发给他人，也不要上传到公开的地方。
 
 ---
 
-## 开源 / Linux 推荐方案：本机安装 Chrome
+## 安装 Cookie-Editor
 
-对开源用户最省事、可复现的路径：
+Cookie-Editor 是一款常见的浏览器扩展，用来查看和导出当前网站的 Cookie。Chrome 和 Edge 都可以装。
 
-```bash
-bash scripts/setup_linux_browser.sh    # 安装 Google Chrome (.deb)
-python scripts/export_cookies.py youtube
-python scripts/export_cookies.py bilibili
-on1y cookies status
-```
-
-- Playwright **优先使用系统 Chrome**，不依赖 `playwright install chromium`（Ubuntu 26 上常失败）。
-- 需要 **图形界面**：WSL2 + Windows 11 一般自带 **WSLg**；纯 SSH 服务器可用 `import_cookies.py` 或 X11 转发。
-- CI / Docker 建议 **Ubuntu 22.04** + `playwright install --with-deps chromium`（见后续 Dockerfile）。
-
-| 方案 | 适合开源 | 说明 |
-|------|----------|------|
-| Linux + Chrome + `export_cookies.py` | 是 | 默认推荐，文档一条命令 |
-| Cookie-Editor + `import_cookies.py` | 是 | 无 GUI 时的备选 |
-| Windows 路径 + 中文用户名 | 否 | 贡献者环境差异大，仅作个人备选 |
-| 仅 `playwright install chromium` | 部分 | 22.04 可行；26.04 目前不行 |
+1. 打开扩展官网：[https://cookie-editor.cgagnier.ca/](https://cookie-editor.cgagnier.ca/)
+2. 页面上会有 **Chrome** 和 **Edge** 的下载入口，点你正在用的浏览器那一项。
+3. 在商店页面点「添加至 Chrome」或「获取」完成安装。
+4. 装好后，浏览器工具栏会出现 Cookie-Editor 的图标（一个小饼干）。如果没有，点工具栏右侧的拼图图标，把它固定到工具栏上。
 
 ---
 
-## WSL / Ubuntu 26：`export_cookies.py` 打不开浏览器？
+## 通用导出步骤
 
-若报错 `Executable doesn't exist` 或 `does not support chromium`，说明 **Playwright 装不了 Chromium**，请用 **方案 A**，不要跑 `playwright install`。
+每个平台的流程都一样，只是打开的网址不同：
 
-### 方案 A：Cookie-Editor 扩展（推荐）
+1. 用 **Chrome 或 Edge** 打开目标网站，**确认已经登录**（能看到你的头像、关注列表等，而不是游客页面）。
+2. 停留在该网站的任意页面（建议打开首页或个人主页）。
+3. 点击工具栏上的 **Cookie-Editor** 图标，打开扩展面板。
+4. 点 **Export**（导出），选择 **JSON** 格式。
+5. 扩展会把 JSON 复制到剪贴板，或者提示你保存为一个 `.json` 文件——两种都可以。
+6. 打开 On1y → **设置** → **订阅** 标签页，找到对应平台的 Cookie 区域：
+  - 如果 JSON 已在剪贴板里，点 **粘贴**；
+  - 如果保存成了文件，点 **上传** 选择该文件。
+7. 导入成功后，设置页会**自动验证**并显示对应平台的**头像与昵称**（绿点表示有效）；也可点「验证」重新检查。
 
-1. 在 **Windows** Chrome/Edge 登录目标站（youtube.com、bilibili.com 等）
-2. 安装扩展 [Cookie-Editor](https://cookie-editor.cgagnier.ca/)
-3. 打开该站 → 扩展 → **Export** → 保存为 JSON
-4. 在 WSL 导入：
-
-```bash
-python scripts/import_cookies.py youtube ~/Downloads/cookies.json
-python scripts/import_cookies.py bilibili ~/Downloads/cookies.json
-on1y cookies status
-```
-
-### 方案 B：在 Windows PowerShell 运行 Playwright 导出
-
-```powershell
-cd \\wsl$\<你的发行版>\home\sijin\On1y
-python scripts/export_cookies.py youtube
-```
-
-生成的 `data/cookies/*.json` 在 WSL 中可直接使用。
-
-### 方案 C：WSL 内已安装 Linux Chrome 时
-
-```bash
-python scripts/export_cookies_browser.py youtube --browser chrome
-```
+每个平台单独导出、单独导入一次。导出一个平台的 Cookie 不能拿去填另一个平台。
 
 ---
 
-## 常规流程（Playwright 可用的系统）
+## 各平台注意事项
 
-```bash
-source venv/bin/activate
-playwright install chromium
+### 哔哩哔哩
 
-python scripts/export_cookies.py youtube
-python scripts/export_cookies.py bilibili
-# ...
-on1y cookies status
-```
+1. 打开 [https://www.bilibili.com](https://www.bilibili.com)，登录你的账号。
+2. 按上面的通用步骤导出 JSON。
+3. 在 On1y 设置里导入到 **哔哩哔哩** 一栏。
 
-## YouTube Cookie 要点
+导出时最好在 bilibili.com 页面上操作，不要在其他域名下导出。
 
-导出时须在 **已登录** 的 `youtube.com` 页面操作（Cookie-Editor → Export）。有效文件通常有 **20+** 条，且包含 `__Secure-1PSID`、`SAPISID` 等 **`.google.com`** 域 Cookie。  
-若只有 10 条左右的 `VISITOR_*` / `YSC`，说明是访客态：RSS 订阅列表拉不到，yt-dlp 也会报 “Sign in to confirm you’re not a bot”。
+### YouTube
 
-```bash
-python scripts/import_cookies.py youtube ~/Downloads/youtube.json
-python scripts/sync_youtube_feeds.py   # 或维护 config/youtube_channels.txt
-```
+YouTube 的登录状态和 Google 账号绑在一起，导出时要注意是否真的是「已登录」状态。
+
+1. 打开 [https://www.youtube.com](https://www.youtube.com)，确认右上角是你的头像，而不是「登录」按钮。
+2. 在 **youtube.com** 页面上打开 Cookie-Editor，导出 JSON。
+3. 在 On1y 设置里导入到 **YouTube** 一栏。
+
+如何判断导出是否有效：JSON 里通常有 **二十条以上** Cookie，并且能看到 `.google.com` 域名下的条目。如果只有十来条且多为访客 Cookie，说明还是游客状态，需要重新登录 YouTube 后再导出一次。
+
+### 知乎
+
+1. 打开 [https://www.zhihu.com](https://www.zhihu.com)，登录你的账号。
+2. 按通用步骤导出 JSON。
+3. 在 On1y 设置里导入到 **知乎** 一栏。
+
+如果之后同步时频繁出现「安全验证」，多半是知乎识别了自动化访问。可以先在浏览器里正常浏览几分钟知乎，再重新导出一份 Cookie 导入。
+
+### 小红书
+
+1. 打开 [https://www.xiaohongshu.com](https://www.xiaohongshu.com)，登录你的账号。
+2. 按通用步骤导出 JSON。
+3. 在 On1y 设置里导入到 **小红书** 一栏。
+
+### X（Twitter）
+
+1. 打开 [https://x.com](https://x.com)，登录你的账号。
+2. 按通用步骤导出 JSON。
+3. 在 On1y 设置里导入到 **X / Twitter** 一栏。
 
 ---
 
-## 知乎 Playwright：被「安全验证」拦截？
+## Cookie 失效了怎么办
 
-若 ingest 报错含 `安全验证`、`/account/unhuman` 或只抓到标题「进入知乎」，通常是 **自动化指纹** 被知乎识别，而非 Cookie 文件缺失。
+网站会定期让你重新登录，Cookie 也会过期。如果发现某个平台突然同步不了、提示需要登录，按上面的步骤重新导出一份，在设置里覆盖导入即可。不需要卸载或重装 On1y。
 
-On1y 启动 Chrome 时会关闭 `AutomationControlled` 等标志。若仍失败：
-
-1. 重新导出 Cookie：`python scripts/import_cookies.py zhihu <导出.json>`
-2. 确认使用系统 Chrome：`bash scripts/setup_linux_browser.sh`
-3. 在 Windows 浏览器登录知乎后再导出 Cookie
+在设置里也可以点 **删除** 清掉某个平台的 Cookie，再重新导入。
 
 ---
 
-## 代码自动完成的部分
+## 安全提醒
 
-- 读取 `data/cookies/<平台>.json`
-- YouTube / B站：转为 `*.json.netscape.txt` 供 yt-dlp
-- 知乎 / 小红书 / X：注入 Playwright（抓取时同样需要 Cookie 文件；若 Playwright 不可用则这些平台也需先 `import_cookies.py`）
+- Cookie 相当于你的登录凭证，泄露后别人可能以你的身份访问对应网站。
+- On1y 把 Cookie 存在本机数据目录里，不会上传到云端。
+- 不要把 Cookie 文件发给陌生人，更不要公开分享。
 
-## 环境变量
-
-```env
-ON1Y_REQUIRE_LOGIN_COOKIES=true
-ON1Y_YOUTUBE_COOKIES_PATH=./data/cookies/youtube.json
-ON1Y_BILIBILI_COOKIES_PATH=./data/cookies/bilibili.json
-```
-
-调试可设 `ON1Y_REQUIRE_LOGIN_COOKIES=false`。
-
-## 安全
-
-- `data/cookies/` 已 gitignore，**勿提交仓库**

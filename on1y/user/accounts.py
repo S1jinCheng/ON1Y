@@ -312,6 +312,16 @@ class UserStore:
             )
 
 
+def list_sync_user_ids(storage: Any) -> list[int]:
+    """User ids for background sync loops; single-user installs always use id=1."""
+    from on1y.config import get_settings
+
+    settings = get_settings()
+    if settings.single_user_mode or not settings.multi_user_background_sync:
+        return [1]
+    return UserStore(storage).list_active_user_ids()
+
+
 def bootstrap_default_user(storage: Any, *, settings: Settings | None = None) -> UserRow | None:
     """Create the first user from env and import legacy data/user_profile.json."""
     settings = settings or get_settings()
@@ -358,10 +368,6 @@ def bootstrap_default_user(storage: Any, *, settings: Settings | None = None) ->
                 user_id=1,
             )
         else:
-            kindle_to = (settings.kindle_send_to or "").strip()
-            if kindle_to:
-                profile["kindle"]["send_to"] = kindle_to
-                profile["kindle"]["enabled"] = bool(settings.economist_auto_kindle)
             profile["economist"]["auto_ingest_enabled"] = bool(
                 settings.economist_auto_sync_enabled
             )

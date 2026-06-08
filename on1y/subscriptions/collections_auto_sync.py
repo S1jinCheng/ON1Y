@@ -26,9 +26,11 @@ def start_collections_sync_loop() -> None:
     global _thread
     from on1y.config import get_settings
 
-    settings = get_settings()
-    if not settings.collections_sync_enabled:
+    from on1y.sync_settings.settings import any_collections_sync_enabled
+
+    if not any_collections_sync_enabled():
         return
+    settings = get_settings()
     if _thread is not None and _thread.is_alive():
         return
 
@@ -55,17 +57,21 @@ def _run_tick(*, ingest: bool) -> None:
     from on1y.auth.context import user_context
     from on1y.config import get_settings
     from on1y.ingestion.collections_sync import sync_collections
-    from on1y.user.accounts import UserStore
+    from on1y.user.accounts import list_sync_user_ids
 
-    settings = get_settings()
+    from on1y.sync_settings.settings import resolve_settings
+
     storage = get_storage()
     try:
-        user_ids = UserStore(storage).list_active_user_ids()
+        user_ids = list_sync_user_ids(storage)
     finally:
         storage.close()
 
     for uid in user_ids:
         with user_context(uid):
+            settings = resolve_settings(user_id=uid)
+            if not settings.collections_sync_enabled:
+                continue
             storage = get_storage()
             try:
                 report = sync_collections(
@@ -114,7 +120,9 @@ def _loop() -> None:
                 _state["running"] = False
             first = False
 
-        settings = get_settings()
+        from on1y.sync_settings.settings import resolve_settings
+
+        settings = resolve_settings()
         interval = max(30, settings.collections_sync_interval_seconds)
         if _stop.wait(timeout=interval):
             break

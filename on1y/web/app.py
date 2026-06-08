@@ -52,6 +52,46 @@ class NetworkSettingsRequest(BaseModel):
     test_proxy: str | None = None
 
 
+class SmtpSettingsRequest(BaseModel):
+    host: str | None = None
+    port: int | None = Field(default=None, ge=1, le=65535)
+    user: str | None = None
+    password: str = ""
+    from_addr: str | None = None
+    use_tls: bool | None = None
+    clear_password: bool = False
+
+
+class SyncSettingsRequest(BaseModel):
+    zhihu_api_poll_max_followees: int | None = None
+    zhihu_api_poll_max_pages: int | None = None
+    zhihu_api_poll_backfill_pages: int | None = None
+    zhihu_follow_sync_mode: str | None = None
+    zhihu_rsshub_base: str | None = None
+    youtube_auto_refresh_channels: bool | None = None
+    zhihu_auto_refresh_follows: bool | None = None
+    auto_sync_enabled: bool | None = None
+    auto_sync_interval_minutes: int | None = None
+    auto_sync_pipeline_batch_size: int | None = None
+    collections_sync_enabled: bool | None = None
+    collections_sync_interval_seconds: int | None = None
+    bilibili_up_poll_mode: str | None = None
+    bilibili_up_poll_max_ups_per_run: int | None = None
+    bilibili_dynamic_poll_max_pages: int | None = None
+    bilibili_dynamic_poll_backfill_max_pages: int | None = None
+    bilibili_up_poll_rate_limit_backoff_seconds: float | None = None
+    bilibili_up_poll_rate_limit_cooldown_seconds: float | None = None
+    rss_backfill_max_items_per_feed: int | None = None
+    cold_start_bilibili_dynamic_days: int | None = None
+    cold_start_bilibili_dynamic_max_pages: int | None = None
+    economist_auto_sync_enabled: bool | None = None
+    economist_auto_sync_interval_minutes: int | None = None
+    economist_github_raw_base: str | None = None
+    alert_enabled: bool | None = None
+    alert_cooldown_seconds: float | None = None
+    alert_webhook_url: str | None = None
+
+
 class SubscriptionSettingsRequest(BaseModel):
     bilibili_sync_since: str | None = None
     youtube_sync_since: str | None = None
@@ -65,9 +105,10 @@ class SubscriptionSyncRequest(BaseModel):
     backfill: bool = False
     ingest: bool = True
     use_ai_summary: bool = True
-    ingest_limit: int = Field(default=30, ge=1, le=50)
-    subtitle_limit: int = Field(default=30, ge=0, le=50)
-    distill_limit: int = Field(default=50, ge=0, le=50)
+    ingest_limit: int = Field(default=30, ge=1, le=200)
+    subtitle_limit: int = Field(default=30, ge=0, le=200)
+    distill_limit: int = Field(default=50, ge=0, le=500)
+    pipeline_batch_size: int | None = Field(default=None, ge=5, le=100)
     refresh_feeds: bool = False
     sync_hotlist: bool = False
 
@@ -438,6 +479,42 @@ def create_app() -> FastAPI:
         )
         return {"saved": True, **public_settings_view()}
 
+    @app.get("/api/smtp/settings")
+    def smtp_settings_get() -> dict[str, Any]:
+        from on1y.delivery.smtp_settings import public_settings_view
+
+        return public_settings_view()
+
+    @app.post("/api/smtp/settings")
+    def smtp_settings_save(body: SmtpSettingsRequest) -> dict[str, Any]:
+        from on1y.delivery.smtp_settings import public_settings_view, save_file_settings
+
+        save_file_settings(
+            host=body.host,
+            port=body.port,
+            user=body.user,
+            password=body.password if body.password.strip() else None,
+            from_addr=body.from_addr,
+            use_tls=body.use_tls,
+            clear_password=body.clear_password,
+        )
+        return {"saved": True, **public_settings_view()}
+
+    @app.post("/api/smtp/test")
+    def smtp_settings_test(body: SmtpSettingsRequest | None = None) -> dict[str, Any]:
+        from on1y.delivery.smtp_settings import test_smtp_connection
+
+        if body is None:
+            return test_smtp_connection()
+        return test_smtp_connection(
+            host=body.host,
+            port=body.port,
+            user=body.user,
+            password=body.password.strip() or None,
+            from_addr=body.from_addr,
+            use_tls=body.use_tls,
+        )
+
     @app.get("/api/network/settings")
     def network_settings_get() -> dict[str, Any]:
         from on1y.network.settings import public_settings_view
@@ -458,6 +535,28 @@ def create_app() -> FastAPI:
             proxy_mode=mode,  # type: ignore[arg-type]
             manual_proxy=body.manual_proxy,
         )
+        return {"saved": True, **public_settings_view()}
+
+    @app.get("/api/sync/settings")
+    def sync_settings_get() -> dict[str, Any]:
+        from on1y.sync_settings.settings import public_settings_view
+
+        return public_settings_view()
+
+    @app.post("/api/sync/settings")
+    def sync_settings_save(body: SyncSettingsRequest) -> dict[str, Any]:
+        from on1y.sync_settings.settings import public_settings_view, save_sync_settings
+
+        payload = body.model_dump(exclude_none=True)
+        if body.zhihu_follow_sync_mode is not None:
+            mode = body.zhihu_follow_sync_mode.strip().lower()
+            if mode not in {"api", "rss"}:
+                raise HTTPException(status_code=400, detail="zhihu_follow_sync_mode must be api or rss")
+        if body.bilibili_up_poll_mode is not None:
+            mode = body.bilibili_up_poll_mode.strip().lower()
+            if mode not in {"dynamic", "space"}:
+                raise HTTPException(status_code=400, detail="bilibili_up_poll_mode must be dynamic or space")
+        save_sync_settings(**payload)
         return {"saved": True, **public_settings_view()}
 
     @app.get("/api/subscriptions/settings")
@@ -534,10 +633,16 @@ def create_app() -> FastAPI:
         distill_limit = body.distill_limit if body.use_ai_summary else 0
 
         from on1y.auth.context import get_current_user_id, get_effective_user_id
+        from on1y.sync_settings.settings import resolve_settings
 
         uid = get_current_user_id()
         if uid is None:
             uid = get_effective_user_id()
+        pipeline_batch = (
+            body.pipeline_batch_size
+            if body.pipeline_batch_size is not None
+            else resolve_settings(user_id=uid).auto_sync_pipeline_batch_size
+        )
 
         return start_subscription_sync_job(
             platforms=targets,
@@ -550,6 +655,7 @@ def create_app() -> FastAPI:
             sync_hotlist=body.sync_hotlist,
             refresh_feeds=body.refresh_feeds or None,
             user_id=uid,
+            pipeline_batch_size=pipeline_batch,
         )
 
     @app.post("/api/hotlist/sync")
@@ -621,6 +727,7 @@ def create_app() -> FastAPI:
     @app.get("/api/app/desktop")
     def app_desktop_status() -> dict[str, Any]:
         from on1y import __version__
+        from on1y.app_update import is_bundled_release
         from on1y.config import PROJECT_ROOT, get_settings
         from on1y.desktop.windows_autostart import autostart_installed, is_windows
 
@@ -638,8 +745,17 @@ def create_app() -> FastAPI:
             "data_dir_override": prefs.get("data_dir_override"),
             "close_window_action": prefs.get("close_window_action") or "quit",
             "is_desktop_shell": bool(os.environ.get("ON1Y_DESKTOP_SHELL")),
+            "is_bundled_release": is_bundled_release(),
             "web_url": f"http://{settings.web_host}:{settings.web_port}",
         }
+
+    @app.get("/api/app/update")
+    def app_update_status(
+        force: bool = Query(default=False),
+    ) -> dict[str, Any]:
+        from on1y.app_update import check_app_update
+
+        return check_app_update(force=force)
 
     @app.patch("/api/app/desktop-prefs")
     def patch_desktop_prefs(body: DesktopPrefsPatchRequest) -> dict[str, Any]:
@@ -668,18 +784,24 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         return {"autostart_enabled": autostart_installed()}
 
-    def _user_cookie_rows() -> list[dict[str, Any]]:
+    def _user_cookie_rows(
+        *,
+        verify: bool = True,
+        force_verify: bool = False,
+        quick_verify: bool = True,
+    ) -> list[dict[str, Any]]:
         from on1y.auth.context import get_effective_user_id
-        from on1y.cookies.loader import PLATFORM_COOKIE_ATTR
-        from on1y.user.paths import user_cookie_path
+        from on1y.cookies.loader import PLATFORM_COOKIE_ATTR, resolve_cookie_path
+        from on1y.cookies.verify import verify_cookie_account
 
         uid = get_effective_user_id()
         rows: list[dict[str, Any]] = []
         for platform in PLATFORM_COOKIE_ATTR:
-            path = user_cookie_path(uid, platform)
+            path = resolve_cookie_path(platform, user_id=uid)
             count = 0
             updated_at: str | None = None
-            if path.is_file():
+            exists = path.is_file()
+            if exists:
                 try:
                     import json as _json
 
@@ -695,23 +817,51 @@ def create_app() -> FastAPI:
                     )
                 except Exception:
                     count = 0
+            account: dict[str, Any] | None = None
+            if exists and verify and platform in {"bilibili", "youtube", "zhihu"}:
+                account = verify_cookie_account(
+                    platform,
+                    user_id=uid,
+                    force=force_verify,
+                    quick=quick_verify and not force_verify,
+                )
             rows.append(
                 {
                     "platform": platform,
-                    "exists": path.is_file(),
+                    "exists": exists,
                     "count": count,
                     "updated_at": updated_at,
+                    "path": str(path) if exists else None,
+                    "account": account,
                 }
             )
         return rows
 
     @app.get("/api/user/cookies")
-    def user_cookies_list() -> dict[str, Any]:
-        return {"platforms": _user_cookie_rows()}
+    def user_cookies_list(
+        verify: bool = Query(default=True),
+        quick: bool = Query(default=True),
+    ) -> dict[str, Any]:
+        return {"platforms": _user_cookie_rows(verify=verify, quick_verify=quick)}
 
     @app.get("/api/user/cookies/status")
-    def user_cookies_status() -> dict[str, Any]:
-        return {"platforms": _user_cookie_rows()}
+    def user_cookies_status(
+        verify: bool = Query(default=True),
+        quick: bool = Query(default=True),
+    ) -> dict[str, Any]:
+        return {"platforms": _user_cookie_rows(verify=verify, quick_verify=quick)}
+
+    @app.post("/api/user/cookies/{platform}/verify")
+    def verify_user_cookies(platform: str) -> dict[str, Any]:
+        from on1y.auth.context import get_effective_user_id
+        from on1y.cookies.loader import PLATFORM_COOKIE_ATTR
+        from on1y.cookies.verify import verify_cookie_account
+
+        if platform not in PLATFORM_COOKIE_ATTR:
+            raise HTTPException(status_code=400, detail=f"unknown platform: {platform}")
+        uid = get_effective_user_id()
+        account = verify_cookie_account(platform, user_id=uid, force=True)
+        return {"platform": platform, "account": account}
 
     @app.delete("/api/user/cookies/{platform}")
     def delete_user_cookies(platform: str) -> dict[str, Any]:
@@ -1178,24 +1328,37 @@ def create_app() -> FastAPI:
 
     @app.get("/api/stats/overview")
     def stats_overview(days: int = Query(default=90, ge=7, le=366)) -> dict[str, Any]:
+        import logging
+
         from on1y.stats.overview import build_stats_overview
 
+        logger = logging.getLogger(__name__)
         storage = get_storage()
         try:
-            return build_stats_overview(storage, days=days)
+            try:
+                return build_stats_overview(storage, days=days)
+            except Exception as exc:
+                logger.exception("stats overview failed")
+                raise HTTPException(status_code=500, detail=str(exc)) from exc
         finally:
             storage.close()
 
     @app.get("/api/stats/daily")
     def stats_daily(day: str = Query(..., min_length=10, max_length=10)) -> dict[str, Any]:
+        import logging
+
         from on1y.stats.overview import build_daily_digest
 
+        logger = logging.getLogger(__name__)
         storage = get_storage()
         try:
             try:
                 return build_daily_digest(storage, day=day)
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
+            except Exception as exc:
+                logger.exception("stats daily failed")
+                raise HTTPException(status_code=500, detail=str(exc)) from exc
         finally:
             storage.close()
 

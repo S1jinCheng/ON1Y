@@ -4,10 +4,26 @@ from __future__ import annotations
 
 from typing import Any
 
+from datetime import datetime, timezone
+
 from on1y.models.video_extract import VideoMetadata
 from on1y.utils.youtube_video_filter import live_flags_from_info
 
 _YT_VIDEO_THUMB = "/vi/"
+
+
+def upload_timestamp_from_info(info: dict[str, Any]) -> int | None:
+    ts = info.get("timestamp")
+    if isinstance(ts, (int, float)) and ts > 0:
+        return int(ts)
+    upload_date = info.get("upload_date")
+    if isinstance(upload_date, str) and len(upload_date) == 8 and upload_date.isdigit():
+        try:
+            dt = datetime.strptime(upload_date, "%Y%m%d").replace(tzinfo=timezone.utc)
+            return int(dt.timestamp())
+        except ValueError:
+            return None
+    return None
 
 
 def youtube_channel_avatar_url(channel_id: str | None) -> str | None:
@@ -38,6 +54,7 @@ def video_metadata_from_info(info: dict[str, Any] | None) -> VideoMetadata:
         cover_image=_cover_from_info(info),
         channel_id=channel_id,
         duration_sec=duration_sec,
+        upload_timestamp=upload_timestamp_from_info(info),
         live_status=live_status,
         is_live=is_live,
         was_live=was_live,

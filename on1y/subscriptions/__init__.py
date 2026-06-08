@@ -5,9 +5,14 @@ from __future__ import annotations
 from typing import Any
 
 from on1y.config import Settings, get_settings
+from on1y.sync_settings.settings import resolve_settings
 from on1y.ingestion.bilibili_subscriptions import sync_bilibili_subscriptions
 from on1y.ports.storage import StoragePort
-from on1y.subscriptions.feeds_refresh import refresh_youtube_feeds, refresh_zhihu_follow_feeds
+from on1y.subscriptions.feeds_refresh import (
+    refresh_youtube_feeds,
+    refresh_zhihu_follow_feeds,
+    youtube_feeds_stale,
+)
 from on1y.subscriptions.rss_sync import RSS_PLATFORM_PREFIXES, sync_rss_subscriptions
 
 SYNC_PLATFORMS = frozenset({"bilibili", "youtube", "zhihu", "all"})
@@ -34,7 +39,7 @@ def sync_subscriptions(
     - all: bilibili + youtube + zhihu RSS (no hotlist; use hotlist sync separately)
     - zhihu platform does NOT include hotlist (use on1y hotlist sync / Web 热榜按钮).
     """
-    settings = settings or get_settings()
+    settings = settings or resolve_settings()
     if platform not in SYNC_PLATFORMS:
         raise ValueError(f"unsupported platform for subscriptions sync: {platform}")
 
@@ -79,13 +84,16 @@ def sync_subscriptions(
                 backfill=backfill,
             )
         else:
-            if do_refresh or auto_refresh:
+            stale_youtube = rss_platform == "youtube" and youtube_feeds_stale(settings=settings)
+            if do_refresh or auto_refresh or stale_youtube:
                 try:
                     if rss_platform == "youtube":
                         rss_report["config"] = refresh_youtube_feeds(
                             settings=settings,
                             max_channels=settings.youtube_refresh_max_channels,
                         )
+                        if stale_youtube and not do_refresh and not auto_refresh:
+                            rss_report["config"]["refreshed_reason"] = "cookie_newer_than_feeds"
                     else:
                         rss_report["config"] = refresh_zhihu_follow_feeds(settings=settings)
                 except Exception as exc:
