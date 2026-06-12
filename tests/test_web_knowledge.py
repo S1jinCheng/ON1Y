@@ -82,11 +82,7 @@ def test_move_item_theme(storage) -> None:
     assert response.json()["theme"]["slug"] == "film"
 
 
-def test_create_theme(storage, monkeypatch) -> None:
-    monkeypatch.setenv("ON1Y_AUTH_REQUIRED", "false")
-    from on1y.config import get_settings
-
-    get_settings.cache_clear()
+def test_create_theme(storage) -> None:
     client = TestClient(create_app())
     with patch("on1y.taxonomy.absorb.schedule_absorb_from_other") as mock_absorb:
         mock_absorb.return_value = {"started": True, "theme_id": 99}

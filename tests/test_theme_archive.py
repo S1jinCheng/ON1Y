@@ -50,9 +50,7 @@ def test_archive_theme_remaps_items(storage: SqliteStorage) -> None:
     themes = storage.list_themes_with_counts()
     assert all(int(t["id"]) != theme_id for t in themes)
 
-    updated = storage.get_raw_by_id(raw.id)
-    assert updated is not None
-    assert updated.theme_id == other_id
+    assert raw.id in storage.list_raw_ids_by_theme(other_id)
 
     with pytest.raises(StorageError, match="built-in"):
         storage.archive_theme(other_id)

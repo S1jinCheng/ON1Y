@@ -8,6 +8,16 @@ import pytest
 from on1y.adapters.sqlite_storage import SqliteStorage
 
 
+@pytest.fixture(autouse=True)
+def _disable_auth_for_tests(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Most API tests use TestClient without login; individual tests may override."""
+    monkeypatch.setenv("ON1Y_AUTH_REQUIRED", "false")
+    monkeypatch.setenv("ON1Y_AUTH_SECRET_KEY", "test-secret-key")
+    from on1y.config import get_settings
+
+    get_settings.cache_clear()
+
+
 @pytest.fixture
 def tmp_db_path(tmp_path: Path) -> Path:
     return tmp_path / "test_on1y.db"
