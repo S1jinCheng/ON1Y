@@ -1,15 +1,20 @@
-# On1y
+<div align="center">
 
-**English** | [简体中文](README.zh-CN.md)
+# On1y
 
 **Turn subscriptions and saves scattered across platforms into a local knowledge base that belongs only to you.**
 
-[License: MIT](LICENSE)
-[Release](https://github.com/S1jinCheng/ON1Y/releases/latest)
-[Python](https://www.python.org/)
-[Platform](https://github.com/S1jinCheng/ON1Y/releases/latest)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/S1jinCheng/ON1Y?label=release&color=brightgreen)](https://github.com/S1jinCheng/ON1Y/releases/latest)
+[![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Platform](https://img.shields.io/badge/Platform-Windows-0078D4?logo=windows&logoColor=white)](https://github.com/S1jinCheng/ON1Y/releases/latest)
+[![Tauri](https://img.shields.io/badge/Tauri-2-FFC131?logo=tauri&logoColor=black)](https://tauri.app/)
+
+**English** | [简体中文](README.zh-CN.md)
 
 [Download](https://github.com/S1jinCheng/ON1Y/releases/latest) · [Quick start](#install--run) · [Demo](#demo) · [Docs](docs/)
+
+</div>
 
 ---
 

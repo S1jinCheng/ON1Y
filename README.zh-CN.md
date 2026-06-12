@@ -1,15 +1,20 @@
-# On1y
+<div align="center">
 
-**English** | **简体中文**
+# On1y
 
 **把分散在各平台的订阅与收藏，收进一座只属于你自己的本地知识库。**
 
-[License: MIT](LICENSE)
-[Release](https://github.com/S1jinCheng/ON1Y/releases/latest)
-[Python](https://www.python.org/)
-[Platform](https://github.com/S1jinCheng/ON1Y/releases/latest)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/S1jinCheng/ON1Y?label=release&color=brightgreen)](https://github.com/S1jinCheng/ON1Y/releases/latest)
+[![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Platform](https://img.shields.io/badge/Platform-Windows-0078D4?logo=windows&logoColor=white)](https://github.com/S1jinCheng/ON1Y/releases/latest)
+[![Tauri](https://img.shields.io/badge/Tauri-2-FFC131?logo=tauri&logoColor=black)](https://tauri.app/)
+
+[English](README.md) | **简体中文**
 
 [下载安装包](https://github.com/S1jinCheng/ON1Y/releases/latest) · [快速开始](#安装与启动) · [演示](#演示) · [文档](docs/)
+
+</div>
 
 ---
 
