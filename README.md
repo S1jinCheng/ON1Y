@@ -1,108 +1,82 @@
-
-
-
-
-
-
-
-
 # On1y
 
-**把分散在各平台的订阅与收藏，收进一座只属于你自己的本地知识库。**
+**English** | [简体中文](README.zh-CN.md)
+
+**Turn subscriptions and saves scattered across platforms into a local knowledge base that belongs only to you.**
 
 [License: MIT](LICENSE)
 [Release](https://github.com/S1jinCheng/ON1Y/releases/latest)
 [Python](https://www.python.org/)
 [Platform](https://github.com/S1jinCheng/ON1Y/releases/latest)
 
-[下载安装包](https://github.com/S1jinCheng/ON1Y/releases/latest) · [快速开始](#安装与启动) · [演示](#演示) · [文档](docs/)
-
-
+[Download](https://github.com/S1jinCheng/ON1Y/releases/latest) · [Quick start](#install--run) · [Demo](#demo) · [Docs](docs/)
 
 ---
 
-## 描述
+## Overview
 
-你在 B 站、YouTube、知乎里关注了很多创作者，收藏了很多内容——但它们散落在各个 App 的信息流里，很难回顾、很难搜索、换一台电脑就接不上。
+- Data stays on your machine — nothing is uploaded to the cloud
+- Multi-user support with backup and migration
+- Windows desktop installer — ready to use out of the box
 
-**On1y** 做一件事：把这些你已经「关注」和「收藏」的内容，自动汇聚到**本机**，提取字幕与正文，可选生成 AI 摘要，再用全文搜索和主题整理把它们变成一座**个人知识库**。
+### What it does
 
-- 数据在本地，不上传云端
-- 支持多账号、备份迁移
-- 提供 Windows 桌面安装版，开箱即用
-
-
-
-> On1y 想做的，不是再造一个信息流，而是让你**已经消费过的内容**真正留下来、找得到、用得上。
-
-### 能做什么
-
-
-|        |                                      |
-| ------ | ------------------------------------ |
-| **采集** | B 站关注动态 · YouTube 频道 · 知乎关注；收藏夹与稍后观看 |
-| **提取** | 视频字幕 · 知乎正文 · 文章正文                   |
-| **蒸馏** | LLM 摘要、要点、自动标签（可选）                   |
-| **检索** | 本地 FTS 全文搜索，标题 / 正文 / 摘要             |
-| **整理** | 按创作者、标签浏览；笔记、收藏、相关推荐                 |
-| **扩展** | 知乎热榜、《经济学人》周刊、Kindle 推送              |
-| **迁移** | 导出 `.on1y.zip`，换机可恢复                 |
-
-
-
+| | |
+| --- | --- |
+| **Ingest** | Bilibili following feed · YouTube channels · Zhihu follows; favorites & Watch Later |
+| **Extract** | Video subtitles · Zhihu articles · web article body text |
+| **Distill** | LLM summaries, key points, and auto tags (optional) |
+| **Search** | Local FTS full-text search over titles, body, and summaries |
+| **Organize** | Browse by creator and tags; notes, bookmarks, related items |
+| **Extras** | Zhihu hot list · *The Economist* weekly · Kindle delivery |
+| **Migrate** | Export `.on1y.zip` and restore on another PC |
 
 ---
 
-## 演示
+## Demo
 
-On1y 是**本地优先**应用，没有公网在线 Demo（数据与 Cookie 都在你的电脑上）。
+On1y is **local-first**. There is no public online demo — your data and cookies stay on your computer.
 
-<div align="center">
-  <img src="assets/demo.gif" alt="On1y 工作台演示：同步、浏览、搜索与摘要" width="90%" />
-</div>
-
-<p align="center"><em>安装 → 导入 Cookie → 同步订阅 → 浏览、搜索与 AI 摘要</em></p>
+*Install → import cookies → sync subscriptions → browse, search, and AI summaries*
 
 ---
 
-## 技术栈
+## Tech stack
 
-
-| 层级      | 技术                                                                                 |
-| ------- | ---------------------------------------------------------------------------------- |
-| **桌面壳** | [Tauri 2](https://tauri.app/) · WebView2                                           |
-| **前端**  | [Next.js 14](https://nextjs.org/) · React 18 · TypeScript · Tailwind CSS · Zustand |
-| **后端**  | [FastAPI](https://fastapi.tiangolo.com/) · Uvicorn · Pydantic                      |
-| **存储**  | SQLite · FTS5 全文索引                                                                 |
-| **采集**  | B 站 API · RSS / feedparser · yt-dlp                                                |
-| **提取**  | Playwright（知乎等）· Jina Reader · BeautifulSoup                                       |
-| **AI**  | 可配置 OpenAI 兼容 API（摘要 / 标签）                                                         |
-| **打包**  | PyInstaller · NSIS 安装程序                                                            |
-
+| Layer | Technologies |
+| --- | --- |
+| **Desktop** | [Tauri 2](https://tauri.app/) · WebView2 |
+| **Frontend** | [Next.js 14](https://nextjs.org/) · React 18 · TypeScript · Tailwind CSS · Zustand |
+| **Backend** | [FastAPI](https://fastapi.tiangolo.com/) · Uvicorn · Pydantic |
+| **Storage** | SQLite · FTS5 full-text index |
+| **Ingestion** | Bilibili API · RSS / feedparser · yt-dlp |
+| **Extraction** | Playwright (Zhihu, etc.) · Jina Reader · BeautifulSoup |
+| **AI** | Configurable OpenAI-compatible API (summaries / tags) |
+| **Packaging** | PyInstaller · NSIS installer |
 
 ```
-订阅源 / 收藏 / 热榜
-    → 入队 → Worker
-    → 字幕 Worker→ 正文提取
+Feeds / favorites / hot list
+    → queue → workers
+    → subtitle worker → body extraction
     → SQLite + FTS5
-    → FastAPI ←→ Next.js 工作台
+    → FastAPI ←→ Next.js workbench
 ```
 
 ---
 
-## 安装与启动
+## Install & run
 
-### 用户：Windows 安装包（推荐）
+### Users: Windows installer (recommended)
 
-1. 从 [GitHub Releases](https://github.com/S1jinCheng/ON1Y/releases/latest) 下载 `On1y_*-setup.exe`
-2. 双击安装，从开始菜单打开 **On1y**
-3. 注册 / 登录 → 按 [docs/COOKIES.md](docs/COOKIES.md) 导入 Cookie
-4. 需要 YouTube 时按 [docs/PROXY.md](docs/PROXY.md) 配置代理
-5. 设置页选择订阅平台与起始日期，执行首次同步
+1. Download `On1y_*-setup.exe` from [GitHub Releases](https://github.com/S1jinCheng/ON1Y/releases/latest)
+2. Run the installer and launch **On1y** from the Start menu
+3. Register / sign in → import cookies per [docs/COOKIES.md](docs/COOKIES.md)
+4. For YouTube, configure a proxy per [docs/PROXY.md](docs/PROXY.md)
+5. In Settings, pick platforms and sync start dates, then run the first sync
 
-系统要求：Windows 10/11 x64 · [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/)
+Requirements: Windows 10/11 x64 · [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/)
 
-### 开发者：从源码运行
+### Developers: run from source
 
 ```powershell
 conda create -n on1y python=3.11 -y
@@ -115,7 +89,7 @@ on1y init
 on1y serve
 ```
 
-前端更新：
+Frontend (separate terminal):
 
 ```powershell
 cd frontend
@@ -123,31 +97,27 @@ npm install
 npm run dev
 ```
 
+### Common commands
 
-
-### 常用命令
-
-
-| 命令                                           | 说明           |
-| -------------------------------------------- | ------------ |
-| `on1y serve`                                 | 启动后端与工作台     |
-| `on1y subscriptions --platform all --ingest` | 同步订阅并入库      |
-| `on1y cookies status`                        | 检查 Cookie 状态 |
-| `on1y search -q "关键词"`                       | 全文搜索         |
-| `pytest -q`                                  | 运行测试         |
-
+| Command | Description |
+| --- | --- |
+| `on1y serve` | Start backend and workbench |
+| `on1y subscriptions --platform all --ingest` | Sync subscriptions and ingest |
+| `on1y cookies status` | Check cookie status |
+| `on1y search -q "keyword"` | Full-text search |
+| `pytest -q` | Run tests |
 
 ---
 
-## 如何贡献
+## Contributing
 
-欢迎 Issue 与 Pull Request。
+Issues and pull requests are welcome.
 
-1. **Fork** 本仓库，创建分支 `feat/your-feature`
-2. 开发环境见上方「从源码运行」与 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)；改动后运行 `ruff check on1y tests` 与 `pytest -q`
-3. 提交 PR 时请简要说明改动动机与测试方式
-4. 不要提交 `.env`、`data/`、Cookie 等敏感文件
+1. **Fork** this repo and create a branch `feat/your-feature`
+2. See **Run from source** above and [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md); run `ruff check on1y tests` and `pytest -q` before submitting
+3. In your PR, briefly explain the motivation and how you tested
+4. Do not commit `.env`, `data/`, cookies, or other secrets
 
 ## License
 
-[MIT](LICENSE) · 仓库 [github.com/S1jinCheng/ON1Y](https://github.com/S1jinCheng/ON1Y)
+[MIT](LICENSE) · [github.com/S1jinCheng/ON1Y](https://github.com/S1jinCheng/ON1Y)
