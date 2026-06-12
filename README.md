@@ -37,7 +37,11 @@
 
 On1y is **local-first**. There is no public online demo — your data and cookies stay on your computer.
 
-*Install → import cookies → sync subscriptions → browse, search, and AI summaries*
+<div align="center">
+  <img src="assets/demo.gif" alt="On1y demo: sync, browse, search, and AI summaries" width="90%" />
+</div>
+
+<p align="center"><em>Install → import cookies → sync subscriptions → browse, search, and AI summaries</em></p>
 
 ---
 

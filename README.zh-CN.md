@@ -37,7 +37,11 @@
 
 On1y 是**本地优先**应用，没有公网在线 Demo，数据与 Cookie 都在你的电脑上。
 
-*安装 → 导入 Cookie → 同步订阅 → 浏览、搜索与 AI 摘要*
+<div align="center">
+  <img src="assets/demo.gif" alt="On1y 演示：同步、浏览、搜索与 AI 摘要" width="90%" />
+</div>
+
+<p align="center"><em>安装 → 导入 Cookie → 同步订阅 → 浏览、搜索与 AI 摘要</em></p>
 
 ---
 
