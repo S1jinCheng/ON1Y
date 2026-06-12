@@ -58,7 +58,7 @@ dev = [
 on1y = "on1y.cli.main:app"
 
 [project.urls]
-Homepage = "https://github.com/on1y/on1y"
+Homepage = "https://github.com/S1jinCheng/ON1Y"
 
 [tool.hatch.build.targets.wheel]
 packages = ["on1y"]
