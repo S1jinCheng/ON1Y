@@ -183,6 +183,7 @@ class ThemeCreateRequest(BaseModel):
     description_zh: str = ""
     description_en: str = ""
     sort_order: int | None = None
+    absorb_from_other: bool = True
 
 
 class ThemeUpdateRequest(BaseModel):
@@ -1195,7 +1196,10 @@ def create_app() -> FastAPI:
             storage.close()
 
     @app.post("/api/knowledge/themes")
-    def knowledge_themes_create(body: ThemeCreateRequest) -> dict[str, Any]:
+    def knowledge_themes_create(
+        body: ThemeCreateRequest,
+        locale: str = Query(default="zh"),
+    ) -> dict[str, Any]:
         storage = get_storage()
         try:
             row = storage.create_theme(
@@ -1206,7 +1210,34 @@ def create_app() -> FastAPI:
                 description_en=body.description_en,
                 sort_order=body.sort_order,
             )
-            return {"theme": row}
+            absorb: dict[str, Any] = {"started": False}
+            theme_id = row.get("id")
+            if body.absorb_from_other and theme_id is not None:
+                from on1y.taxonomy.absorb import schedule_absorb_from_other
+
+                absorb = schedule_absorb_from_other(
+                    theme_id=int(theme_id),
+                    locale=locale,
+                )
+            return {"theme": row, "absorb": absorb}
+        finally:
+            storage.close()
+
+    @app.post("/api/knowledge/themes/{theme_id}/absorb-from-other")
+    def knowledge_themes_absorb_from_other(
+        theme_id: int,
+        locale: str = Query(default="zh"),
+    ) -> dict[str, Any]:
+        storage = get_storage()
+        try:
+            theme = storage.get_theme_by_id(theme_id)
+            if theme is None:
+                raise HTTPException(status_code=404, detail="theme not found")
+            if theme.get("archived_at"):
+                raise HTTPException(status_code=400, detail="theme archived")
+            from on1y.taxonomy.absorb import schedule_absorb_from_other
+
+            return schedule_absorb_from_other(theme_id=theme_id, locale=locale)
         finally:
             storage.close()
 

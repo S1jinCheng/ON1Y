@@ -36,6 +36,7 @@ import { TagChipEditor } from "@/components/tag-chip-editor";
 import { ThemeSidebar } from "@/components/theme-sidebar";
 import { CreatorSidebar } from "@/components/creator-sidebar";
 import {
+  absorbThemeFromOther,
   createTheme,
   batchDeleteKnowledgeItems,
   deleteKnowledgeItem,
@@ -1083,14 +1084,33 @@ export default function KnowledgeWorkbench(): JSX.Element {
 
   async function handleCreateTheme(name: string, description: string): Promise<void> {
     try {
-      await createTheme({
-        name_zh: name,
-        name_en: name,
-        description_zh: description,
-        description_en: description
-      });
+      const result = await createTheme(
+        {
+          name_zh: name,
+          name_en: name,
+          description_zh: description,
+          description_en: description
+        },
+        locale
+      );
       await refreshData();
-      setMessage(ui("addTheme"));
+      let absorb = result.absorb;
+      if (result.theme?.id && !absorb?.started) {
+        try {
+          absorb = await absorbThemeFromOther(result.theme.id, locale);
+        } catch {
+          /* older backend without absorb endpoint */
+        }
+      }
+      if (absorb?.started) {
+        setMessage(ui("themeAbsorbStarted"));
+      } else if (absorb?.reason === "no_llm_key") {
+        setMessage(ui("themeAbsorbNoLlm"));
+      } else if (absorb?.reason === "already_running") {
+        setMessage(ui("themeAbsorbStarted"));
+      } else {
+        setMessage(ui("addTheme"));
+      }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "create theme failed");
     }
@@ -1316,6 +1336,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
                   allThemes: ui("allThemes"),
                   addTheme: ui("addTheme"),
                   themeName: ui("themeName"),
+                  themeDesc: ui("themeDesc"),
                   deleteTheme: ui("deleteTheme"),
                   confirmDeleteTheme: ui("confirmDeleteTheme"),
                   themeDeleted: ui("themeDeleted"),

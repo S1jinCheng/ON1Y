@@ -1862,11 +1862,20 @@ class SqliteStorage:
                     ((index + 1) * 10, theme_id),
                 )
 
-    def list_raw_ids_by_theme(self, theme_id: int) -> list[int]:
-        rows = self._connect().execute(
-            "SELECT id FROM raw_items WHERE theme_id = ? ORDER BY id ASC",
-            (theme_id,),
-        ).fetchall()
+    def list_raw_ids_by_theme(
+        self,
+        theme_id: int,
+        *,
+        exclude_theme_sources: tuple[str, ...] | None = None,
+    ) -> list[int]:
+        sql = "SELECT id FROM raw_items WHERE theme_id = ?"
+        params: list[Any] = [theme_id]
+        if exclude_theme_sources:
+            placeholders = ", ".join("?" * len(exclude_theme_sources))
+            sql += f" AND theme_source NOT IN ({placeholders})"
+            params.extend(exclude_theme_sources)
+        sql += " ORDER BY id ASC"
+        rows = self._connect().execute(sql, params).fetchall()
         return [int(r["id"]) for r in rows]
 
     def get_raw_theme_source(self, raw_id: int) -> str | None:

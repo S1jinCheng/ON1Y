@@ -45,6 +45,7 @@ type ThemeSidebarProps = {
     allThemes: string;
     addTheme: string;
     themeName: string;
+    themeDesc: string;
     deleteTheme: string;
     confirmDeleteTheme: string;
     themeDeleted: string;
@@ -194,6 +195,7 @@ export function ThemeSidebar(props: ThemeSidebarProps): JSX.Element {
   const [editMode, setEditMode] = useState(false);
   const [orderedThemes, setOrderedThemes] = useState<ThemeRow[]>(themes);
   const [newName, setNewName] = useState("");
+  const [newDescription, setNewDescription] = useState("");
   const [adding, setAdding] = useState(false);
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [activeTheme, setActiveTheme] = useState<ThemeRow | null>(null);
@@ -250,8 +252,9 @@ export function ThemeSidebar(props: ThemeSidebarProps): JSX.Element {
     if (!name) {
       return;
     }
-    await onCreateTheme(name, "");
+    await onCreateTheme(name, newDescription.trim());
     setNewName("");
+    setNewDescription("");
     setAdding(false);
   }
 
@@ -415,11 +418,13 @@ export function ThemeSidebar(props: ThemeSidebarProps): JSX.Element {
                     onChange={(e) => setNewName(e.target.value)}
                     placeholder={labels.themeName}
                     className="mb-2 w-full rounded border border-border bg-surface px-2 py-1 text-sm text-foreground"
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        void handleAdd();
-                      }
-                    }}
+                  />
+                  <textarea
+                    value={newDescription}
+                    onChange={(e) => setNewDescription(e.target.value)}
+                    placeholder={labels.themeDesc}
+                    rows={2}
+                    className="mb-2 w-full resize-none rounded border border-border bg-surface px-2 py-1 text-sm text-foreground"
                   />
                   <div className="flex gap-2">
                     <button
@@ -434,6 +439,7 @@ export function ThemeSidebar(props: ThemeSidebarProps): JSX.Element {
                       onClick={() => {
                         setAdding(false);
                         setNewName("");
+                        setNewDescription("");
                       }}
                       className="rounded border border-border px-2 py-1 text-xs hover:bg-soft"
                     >

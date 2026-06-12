@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 from fastapi.testclient import TestClient
 from on1y.models.enums import ContentType, ExtractStatus, SourceType
 from on1y.models.raw import RawItemCreate
@@ -80,14 +82,23 @@ def test_move_item_theme(storage) -> None:
     assert response.json()["theme"]["slug"] == "film"
 
 
-def test_create_theme(storage) -> None:
+def test_create_theme(storage, monkeypatch) -> None:
+    monkeypatch.setenv("ON1Y_AUTH_REQUIRED", "false")
+    from on1y.config import get_settings
+
+    get_settings.cache_clear()
     client = TestClient(create_app())
-    response = client.post(
-        "/api/knowledge/themes",
-        json={"slug": "ai", "name_zh": "人工智能", "name_en": "AI"},
-    )
+    with patch("on1y.taxonomy.absorb.schedule_absorb_from_other") as mock_absorb:
+        mock_absorb.return_value = {"started": True, "theme_id": 99}
+        response = client.post(
+            "/api/knowledge/themes",
+            json={"slug": "ai", "name_zh": "人工智能", "name_en": "AI"},
+        )
     assert response.status_code == 200
-    assert response.json()["theme"]["slug"] == "ai"
+    payload = response.json()
+    assert payload["theme"]["slug"] == "ai"
+    assert payload["absorb"]["started"] is True
+    mock_absorb.assert_called_once()
 
 
 def test_reader_content(storage) -> None:

@@ -867,10 +867,25 @@ export function patchItemClassification(
   });
 }
 
-export function createTheme(payload: ThemeCreateInput): Promise<{ theme: { id: number } }> {
-  return request("/api/knowledge/themes", {
+export function createTheme(
+  payload: ThemeCreateInput,
+  locale: Locale = "zh"
+): Promise<{
+  theme: { id: number };
+  absorb?: { started?: boolean; reason?: string };
+}> {
+  return request(`/api/knowledge/themes?locale=${locale}`, {
     method: "POST",
     body: JSON.stringify(payload)
+  });
+}
+
+export function absorbThemeFromOther(
+  themeId: number,
+  locale: Locale = "zh"
+): Promise<{ started?: boolean; reason?: string; theme_id?: number }> {
+  return request(`/api/knowledge/themes/${themeId}/absorb-from-other?locale=${locale}`, {
+    method: "POST"
   });
 }
 
