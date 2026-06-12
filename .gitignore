@@ -30,7 +30,8 @@ htmlcov/
 .mypy_cache/
 .ruff_cache/
 
-# IDE
+# IDE / editor (local rules may contain machine-specific paths)
+.cursor/
 .idea/
 .vscode/
 *.swp
