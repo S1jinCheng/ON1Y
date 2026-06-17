@@ -71,6 +71,7 @@ def _default_payload(settings: Settings | None = None, *, user_id: int | None = 
             "locale": "zh",
             "appearance": "system",
             "open_browser_on_start": True,
+            "last_today_visit_at": None,
         },
         "kindle": {
             "enabled": False,
@@ -107,6 +108,8 @@ def _normalize_profile(data: dict[str, Any], *, user_id: int | None = None) -> d
     base["app"]["open_browser_on_start"] = bool(
         app_in.get("open_browser_on_start", base["app"]["open_browser_on_start"])
     )
+    visit = app_in.get("last_today_visit_at")
+    base["app"]["last_today_visit_at"] = str(visit).strip() if visit else None
     if "enabled" in kindle_in:
         base["kindle"]["enabled"] = bool(kindle_in["enabled"])
     if "send_to" in kindle_in:

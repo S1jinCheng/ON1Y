@@ -16,7 +16,7 @@ from on1y.ingestion.rss import (
     poll_rss_feeds_backfill,
 )
 from on1y.ports.storage import StoragePort
-from on1y.subscriptions.settings import sync_since_timestamp
+from on1y.subscriptions.settings import resolve_sync_since_ts
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +34,7 @@ def sync_rss_subscriptions(
     sync_since_ts: int | None = None,
     max_items_per_feed: int | None = None,
     settings: Settings | None = None,
+    backfill_max_days: int | None = None,
 ) -> dict[str, Any]:
     """
     Poll RSS feeds for a platform (youtube / zhihu) by label prefix.
@@ -45,7 +46,11 @@ def sync_rss_subscriptions(
         raise ValueError(f"unsupported RSS subscription platform: {platform}")
 
     if sync_since_ts is None:
-        sync_since_ts = sync_since_timestamp(platform)
+        sync_since_ts = resolve_sync_since_ts(
+            platform,
+            backfill=backfill,
+            backfill_max_days=backfill_max_days,
+        )
 
     report: dict[str, Any] = {
         "platform": platform,

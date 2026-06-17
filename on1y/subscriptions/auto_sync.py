@@ -135,7 +135,10 @@ def _drain_backlog_for_users() -> None:
 def _run_auto_sync_tick(*, poll_only: bool = False) -> None:
     from on1y.auth.context import user_context
     from on1y.config import get_settings
-    from on1y.subscriptions.sync_job import run_subscription_sync_blocking
+    from on1y.subscriptions.sync_job import (
+        AUTO_SYNC_GAP_BACKFILL_MAX_DAYS,
+        run_subscription_sync_blocking,
+    )
     from on1y.sync.auto_sync_state import (
         should_backfill_after_gap,
         write_last_auto_sync_at,
@@ -168,6 +171,7 @@ def _run_auto_sync_tick(*, poll_only: bool = False) -> None:
             report = run_subscription_sync_blocking(
                 platform=user_settings.auto_sync_platform,
                 backfill=backfill,
+                backfill_max_days=AUTO_SYNC_GAP_BACKFILL_MAX_DAYS if backfill else None,
                 ingest=ingest,
                 pipeline_batch_size=user_settings.auto_sync_pipeline_batch_size,
                 user_id=uid,

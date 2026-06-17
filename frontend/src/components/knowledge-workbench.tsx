@@ -8,6 +8,7 @@ import {
   ExternalLink,
   Flame,
   Forward,
+  Inbox,
   RefreshCw,
   RotateCcw,
   Search,
@@ -33,6 +34,7 @@ import { ContentTypeIndicator } from "@/components/content-type-indicator";
 import { RelatedItemsSection } from "@/components/related-items-section";
 import { AccountMenu } from "@/components/account-menu";
 import { TagChipEditor } from "@/components/tag-chip-editor";
+import { FeedDatePicker } from "@/components/feed-date-calendar";
 import { ThemeSidebar } from "@/components/theme-sidebar";
 import { CreatorSidebar } from "@/components/creator-sidebar";
 import {
@@ -52,10 +54,13 @@ import {
   economistEpubDownloadUrl,
   getEconomistWeeks,
   getKnowledgeItems,
+  getStatsOverview,
   type EconomistWeekOption,
   type HotlistSource,
   getReaderContent,
   getRelatedItems,
+  markItemRead,
+  patchItemRead,
   postRelatedLessRelevant,
   getTaxonomy,
   moveItemTheme,
@@ -238,6 +243,8 @@ export default function KnowledgeWorkbench(): JSX.Element {
   const isTrash = collection === "trash";
   const isFavorites = collection === "favorites";
   const isHotlist = collection === "hotlist";
+  const isUnread = collection === "unread";
+  const isFeedBrowse = !isTrash && !isFavorites && !isHotlist && !isUnread;
 
   const ui = (key: UiKey): string => t(locale, key);
 
@@ -273,11 +280,19 @@ export default function KnowledgeWorkbench(): JSX.Element {
     favorites: number;
     trash: number;
     hotlist: number;
+    unread: number;
   }>({
     favorites: 0,
     trash: 0,
-    hotlist: 0
+    hotlist: 0,
+    unread: 0
   });
+  const [feedDate, setFeedDate] = useState<string | null>(null);
+  const [calendarMonth, setCalendarMonth] = useState<Date>(() => {
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth(), 1);
+  });
+  const [feedDayCounts, setFeedDayCounts] = useState<Map<string, number>>(new Map());
 
   const platformOptions = useMemo(
     () => [
@@ -468,16 +483,77 @@ export default function KnowledgeWorkbench(): JSX.Element {
       tagId: isHotlist ? undefined : selectedTagId,
       q: isHotlist ? undefined : query,
       platform: isHotlist ? undefined : filterValue(platform),
-      collection,
+      collection: (isFeedBrowse ? "feed" : collection) as KnowledgeCollection,
       hotlistDate: isHotlist ? hotlistDate : undefined,
       hotlistSource: isHotlist ? hotlistSource : undefined,
+      feedDate: isFeedBrowse && feedDate ? feedDate : undefined,
       limit,
       offset
     };
   }
 
+  function applyReadLocally(rawId: number, readAt: string | null): void {
+    const patch = (row: KnowledgeItem): KnowledgeItem => ({
+      ...row,
+      read_at: readAt,
+      is_read: Boolean(readAt)
+    });
+    setItems((prev) => prev.map((row) => (row.raw_id === rawId ? patch(row) : row)));
+    setActive((prev) => (prev?.raw_id === rawId ? patch(prev) : prev));
+    setCollectionCounts((prev) => ({
+      ...prev,
+      unread: readAt
+        ? Math.max(0, prev.unread - 1)
+        : prev.unread +
+          (items.some((row) => row.raw_id === rawId && !row.read_at) || isUnread ? 0 : 1)
+    }));
+  }
+
+  async function handleMarkItemRead(rawId: number): Promise<void> {
+    try {
+      const result = await markItemRead(rawId);
+      applyReadLocally(rawId, result.read_at);
+    } catch {
+      /* best effort */
+    }
+  }
+
+  function handleOpenOriginalLink(
+    event: React.MouseEvent<HTMLAnchorElement>,
+    url: string,
+    rawId: number
+  ): void {
+    void handleMarkItemRead(rawId);
+    handleExternalLinkClick(event, url);
+  }
+
+  async function handleMarkUnread(): Promise<void> {
+    if (!active) {
+      return;
+    }
+    try {
+      const result = await patchItemRead(active.raw_id, false);
+      applyReadLocally(active.raw_id, result.read_at);
+      setMessage(ui("markUnread"));
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "mark unread failed");
+    }
+  }
+
+  function handleFeedDateSelect(date: string | null): void {
+    setFeedDate(date);
+    if (date) {
+      const [y, m] = date.split("-").map(Number);
+      if (y && m) {
+        setCalendarMonth(new Date(y, m - 1, 1));
+      }
+    }
+  }
+
   const hasMoreItems =
-    itemTotal !== undefined && items.length > 0 && items.length < itemTotal;
+    itemTotal !== undefined &&
+    items.length > 0 &&
+    items.length < itemTotal;
 
   async function loadMoreItems(): Promise<boolean> {
     if (loadingMoreRef.current || loading || !hasMoreItems) {
@@ -584,12 +660,10 @@ export default function KnowledgeWorkbench(): JSX.Element {
     loadingMoreRef.current = false;
     setLoadingMore(false);
     try {
-      const [taxonomy, itemResp] = await Promise.all([
-        getTaxonomy(locale),
-        getKnowledgeItems(buildItemsQuery(0, INITIAL_FEED_BATCH))
-      ]);
+      const taxonomy = await getTaxonomy(locale);
       setThemes(taxonomy.themes);
       setDynamicTags(taxonomy.tags);
+      const itemResp = await getKnowledgeItems(buildItemsQuery(0, INITIAL_FEED_BATCH));
       await applyItemResponse(itemResp);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "load failed");
@@ -760,8 +834,35 @@ export default function KnowledgeWorkbench(): JSX.Element {
     selectedCreatorKey,
     selectedTagId,
     platform,
-    query
+    query,
+    feedDate
   ]);
+
+  useEffect(() => {
+    if (!isFeedBrowse) {
+      return;
+    }
+    let cancelled = false;
+    void getStatsOverview(120)
+      .then((stats) => {
+        if (cancelled) {
+          return;
+        }
+        const counts = new Map<string, number>();
+        for (const row of stats.timeline) {
+          if (row.total > 0) {
+            counts.set(row.date, row.total);
+          }
+        }
+        setFeedDayCounts(counts);
+      })
+      .catch(() => {
+        /* optional */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isFeedBrowse, locale]);
 
   const feedFiltersReadyRef = useRef(false);
   useEffect(() => {
@@ -789,7 +890,8 @@ export default function KnowledgeWorkbench(): JSX.Element {
     query,
     collection,
     hotlistDate,
-    hotlistSource
+    hotlistSource,
+    feedDate
   ]);
 
   async function selectItem(item: KnowledgeItem): Promise<void> {
@@ -910,6 +1012,9 @@ export default function KnowledgeWorkbench(): JSX.Element {
     setItemTotal(undefined);
     setActive(undefined);
     setReader(undefined);
+    if (next !== "feed") {
+      setFeedDate(null);
+    }
     setCollection(next);
     if (next === "hotlist") {
       setPlatform(ALL_FILTER);
@@ -1236,7 +1341,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
                     href={active.url}
                     target="_blank"
                     rel="noreferrer"
-                    onClick={(e) => handleExternalLinkClick(e, active.url)}
+                    onClick={(e) => handleOpenOriginalLink(e, active.url, active.raw_id)}
                     className="inline-flex items-center gap-1 hover:text-foreground hover:underline"
                   >
                     {ui("openLink")}
@@ -1373,6 +1478,21 @@ export default function KnowledgeWorkbench(): JSX.Element {
                 <div className="space-y-0.5">
                   <button
                     type="button"
+                    onClick={() => switchCollection("unread")}
+                    className={`flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-sm transition-colors ${glassNavClass(
+                      isUnread
+                    )}`}
+                  >
+                    <span className="inline-flex items-center gap-1.5">
+                      <Inbox className="h-3.5 w-3.5" />
+                      {ui("collectionUnread")}
+                    </span>
+                    <span className={`text-xs ${isUnread ? GLASS_MUTED : "text-muted"}`}>
+                      {collectionCounts.unread}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => switchCollection("hotlist")}
                     className={`flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-sm transition-colors ${glassNavClass(
                       isHotlist
@@ -1435,10 +1555,14 @@ export default function KnowledgeWorkbench(): JSX.Element {
                     ? ui("creatorFeed").replace("{name}", selectedCreator.name)
                     : isFavorites
                       ? ui("collectionFavorites")
+                      : isUnread
+                        ? ui("collectionUnread")
                       : isTrash
                         ? ui("collectionTrash")
                         : isHotlist
                           ? ui("collectionHotlist")
+                          : feedDate
+                            ? feedDate
                           : ui("feed")}{" "}
                   {feedCountLabel()}
                 </h2>
@@ -1552,12 +1676,29 @@ export default function KnowledgeWorkbench(): JSX.Element {
                     </button>
                   </>
                 ) : (
-                  <FilterSelect
-                    placeholder={ui("sortBy")}
-                    value={sortMode}
-                    onChange={(value) => setSortMode(value as typeof sortMode)}
-                    options={sortOptions}
-                  />
+                  <>
+                    {isFeedBrowse ? (
+                      <FeedDatePicker
+                        locale={locale}
+                        month={calendarMonth}
+                        selectedDate={feedDate}
+                        dayCounts={feedDayCounts}
+                        onMonthChange={setCalendarMonth}
+                        onSelectDate={handleFeedDateSelect}
+                        ariaLabel={ui("feedDatePicker")}
+                        labels={{
+                          clear: ui("feedDateClear"),
+                          today: ui("feedDateToday")
+                        }}
+                      />
+                    ) : null}
+                    <FilterSelect
+                      placeholder={ui("sortBy")}
+                      value={sortMode}
+                      onChange={(value) => setSortMode(value as typeof sortMode)}
+                      options={sortOptions}
+                    />
+                  </>
                 )}
                 </div>
               </div>
@@ -1700,6 +1841,8 @@ export default function KnowledgeWorkbench(): JSX.Element {
                         ? ui("trashEmpty")
                         : isFavorites
                           ? ui("favoritesEmpty")
+                          : isUnread
+                            ? ui("unreadEmpty")
                           : isHotlist
                             ? hotlistSource === "economist"
                               ? ui("hotlistEmptyEconomist")
@@ -1732,7 +1875,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
                           href={active.url}
                           target="_blank"
                           rel="noreferrer"
-                          onClick={(e) => handleExternalLinkClick(e, active.url)}
+                          onClick={(e) => handleOpenOriginalLink(e, active.url, active.raw_id)}
                           className="block overflow-hidden rounded-lg border border-border bg-panel"
                         >
                           <img
@@ -1806,12 +1949,21 @@ export default function KnowledgeWorkbench(): JSX.Element {
                         href={active.url}
                         target="_blank"
                         rel="noreferrer"
-                        onClick={(e) => handleExternalLinkClick(e, active.url)}
+                        onClick={(e) => handleOpenOriginalLink(e, active.url, active.raw_id)}
                         className="inline-flex items-center gap-1 text-xs text-muted underline-offset-2 hover:text-foreground hover:underline"
                       >
                         {ui("openLink")}
                         <ExternalLink className="h-3 w-3" />
                       </a>
+                    ) : null}
+                    {active.is_read || active.read_at ? (
+                      <button
+                        type="button"
+                        onClick={() => void handleMarkUnread()}
+                        className="text-xs text-muted underline-offset-2 hover:text-foreground hover:underline"
+                      >
+                        {ui("markUnread")}
+                      </button>
                     ) : null}
                   </div>
                 </div>
@@ -1839,7 +1991,10 @@ export default function KnowledgeWorkbench(): JSX.Element {
                   onExpand={
                     isHotlist || isEconomistHotlist
                       ? undefined
-                      : () => setReaderExpanded(true)
+                      : () => {
+                          void handleMarkItemRead(active.raw_id);
+                          setReaderExpanded(true);
+                        }
                   }
                 />
               </div>

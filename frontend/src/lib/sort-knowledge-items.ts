@@ -121,7 +121,7 @@ export function sortKnowledgeItems(
 export function sortOptionsForUi(
   locale: Locale,
   hasSearch: boolean,
-  collection: "feed" | "favorites" | "trash" | "hotlist" = "feed"
+  collection: "feed" | "favorites" | "trash" | "hotlist" | "unread" = "feed"
 ): Array<{ value: SortMode; label: string }> {
   const zh = locale === "zh";
   const base: Array<{ value: SortMode; label: string }> = [

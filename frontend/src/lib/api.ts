@@ -643,6 +643,7 @@ export function getCollectionCounts(params?: {
   favorites: number;
   trash: number;
   hotlist: number;
+  unread: number;
 }> {
   const query = new URLSearchParams();
   if (params?.hotlistDate) {
@@ -652,7 +653,7 @@ export function getCollectionCounts(params?: {
     query.set("hotlist_source", params.hotlistSource);
   }
   const suffix = query.toString() ? `?${query.toString()}` : "";
-  return request<{ favorites: number; trash: number; hotlist: number }>(
+  return request<{ favorites: number; trash: number; hotlist: number; unread: number }>(
     `/api/knowledge/collections${suffix}`
   );
 }
@@ -724,9 +725,10 @@ export function getKnowledgeItems(params: {
   q?: string;
   platform?: string;
   source?: string;
-  collection?: "feed" | "favorites" | "trash" | "hotlist";
+  collection?: "feed" | "favorites" | "trash" | "hotlist" | "unread";
   hotlistDate?: string;
   hotlistSource?: HotlistSource;
+  feedDate?: string;
   limit?: number;
   offset?: number;
 }): Promise<KnowledgeItemsResponse> {
@@ -761,6 +763,9 @@ export function getKnowledgeItems(params: {
   }
   if (params.hotlistSource) {
     query.set("hotlist_source", params.hotlistSource);
+  }
+  if (params.feedDate) {
+    query.set("feed_date", params.feedDate);
   }
   return request<KnowledgeItemsResponse>(`/api/knowledge/items?${query.toString()}`);
 }
@@ -818,6 +823,22 @@ export function toggleItemFavorite(
   return request(`/api/knowledge/items/${rawId}/favorite`, {
     method: "PATCH",
     body: JSON.stringify({ starred })
+  });
+}
+
+export function markItemRead(
+  rawId: number
+): Promise<{ raw_id: number; read_at: string; is_read: boolean }> {
+  return request(`/api/knowledge/items/${rawId}/read`, { method: "POST" });
+}
+
+export function patchItemRead(
+  rawId: number,
+  read: boolean
+): Promise<{ raw_id: number; read_at: string | null; is_read: boolean }> {
+  return request(`/api/knowledge/items/${rawId}/read`, {
+    method: "PATCH",
+    body: JSON.stringify({ read })
   });
 }
 

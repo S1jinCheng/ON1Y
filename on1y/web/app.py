@@ -215,6 +215,10 @@ class FavoriteUpdate(BaseModel):
     starred: bool = False
 
 
+class ReadStateUpdate(BaseModel):
+    read: bool = True
+
+
 class BatchDeleteRequest(BaseModel):
     raw_ids: list[int] = Field(min_length=1, max_length=200)
 
@@ -1353,6 +1357,7 @@ def create_app() -> FastAPI:
                 "hotlist": storage.count_collection_items(
                     "hotlist", hotlist_date=hot_day, hotlist_source=src
                 ),
+                "unread": storage.count_collection_items("unread"),
             }
         finally:
             storage.close()
@@ -1418,16 +1423,25 @@ def create_app() -> FastAPI:
         collection: str = Query(default="feed"),
         hotlist_date: str | None = Query(default=None),
         hotlist_source: str = Query(default="zhihu"),
+        feed_date: str | None = Query(default=None),
     ) -> dict[str, Any]:
         from on1y.hotlist.constants import SUPPORTED_HOTLIST_SOURCES
 
         storage = get_storage()
         try:
             coll = collection.strip().lower()
-            if coll not in {"feed", "favorites", "trash", "hotlist"}:
+            if coll not in {
+                "feed",
+                "favorites",
+                "trash",
+                "hotlist",
+                "unread",
+                "continue",
+            }:
                 raise HTTPException(status_code=400, detail=f"unsupported collection: {collection}")
             hot_day: str | None = None
             hot_src: str | None = None
+            feed_day: str | None = None
             if coll == "hotlist":
                 from datetime import date as date_cls
 
@@ -1441,6 +1455,15 @@ def create_app() -> FastAPI:
                     date_cls.fromisoformat(hot_day)
                 except ValueError as exc:
                     raise HTTPException(status_code=400, detail="invalid hotlist_date") from exc
+            if feed_date and feed_date.strip() and coll == "feed":
+                from datetime import date as date_cls
+
+                from on1y.knowledge.feed_dates import parse_feed_date
+
+                try:
+                    feed_day = parse_feed_date(feed_date.strip()).isoformat()
+                except ValueError as exc:
+                    raise HTTPException(status_code=400, detail="invalid feed_date") from exc
             tag_ids = [tag_id] if tag_id is not None else None
             if include_descendants and tag_id is not None:
                 tag_ids = [tag_id]
@@ -1457,6 +1480,7 @@ def create_app() -> FastAPI:
                     collection=coll,
                     hotlist_date=hot_day,
                     hotlist_source=hot_src,
+                    feed_date=feed_day,
                 )
                 return {
                     "items": result["items"],
@@ -1466,6 +1490,7 @@ def create_app() -> FastAPI:
                     "collection": coll,
                     "hotlist_date": hot_day,
                     "hotlist_source": hot_src,
+                    "feed_date": feed_day,
                 }
             rows = storage.list_knowledge_items(
                 limit=limit,
@@ -1478,6 +1503,7 @@ def create_app() -> FastAPI:
                 collection=coll,
                 hotlist_date=hot_day,
                 hotlist_source=hot_src,
+                feed_date=feed_day,
             )
             total = storage.count_knowledge_items(
                 platform=platform,
@@ -1488,6 +1514,7 @@ def create_app() -> FastAPI:
                 collection=coll,
                 hotlist_date=hot_day,
                 hotlist_source=hot_src,
+                feed_date=feed_day,
             )
             return {
                 "items": rows,
@@ -1496,6 +1523,7 @@ def create_app() -> FastAPI:
                 "collection": coll,
                 "hotlist_date": hot_day,
                 "hotlist_source": hot_src,
+                "feed_date": feed_day,
             }
         finally:
             storage.close()
@@ -1791,6 +1819,28 @@ def create_app() -> FastAPI:
                 raise HTTPException(status_code=404, detail="raw item not found")
             storage.merge_source_meta(raw_id, {"starred": body.starred})
             return {"raw_id": raw_id, "starred": body.starred}
+        finally:
+            storage.close()
+
+    @app.patch("/api/knowledge/items/{raw_id}/read")
+    def patch_item_read(raw_id: int, body: ReadStateUpdate) -> dict[str, Any]:
+        storage = get_storage()
+        try:
+            raw = storage.get_raw_by_id_for_user(raw_id)
+            if raw is None:
+                raise HTTPException(status_code=404, detail="raw item not found")
+            return storage.set_item_read_state(raw_id, read=body.read)
+        finally:
+            storage.close()
+
+    @app.post("/api/knowledge/items/{raw_id}/read")
+    def post_item_read(raw_id: int) -> dict[str, Any]:
+        storage = get_storage()
+        try:
+            raw = storage.get_raw_by_id_for_user(raw_id)
+            if raw is None:
+                raise HTTPException(status_code=404, detail="raw item not found")
+            return storage.touch_item_reading(raw_id)
         finally:
             storage.close()
 

@@ -123,13 +123,18 @@ def poll_zhihu_follow_activities(
     sync_since_ts: int | None = None,
     max_followees_per_run: int | None = None,
     max_pages_per_followee: int | None = None,
+    backfill_max_days: int | None = None,
 ) -> dict[str, Any]:
     """Enqueue new content from followed Zhihu users via API (cookie only)."""
     settings = settings or get_settings()
-    if sync_since_ts is None:
-        from on1y.subscriptions.settings import sync_since_timestamp
+    from on1y.subscriptions.settings import resolve_sync_since_ts
 
-        sync_since_ts = sync_since_timestamp("zhihu")
+    sync_since_ts = resolve_sync_since_ts(
+        "zhihu",
+        sync_since_ts=sync_since_ts,
+        backfill=backfill,
+        backfill_max_days=backfill_max_days,
+    )
 
     path = resolve_cookie_path("zhihu", settings)
     jar = _cookie_jar(path)

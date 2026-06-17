@@ -11,6 +11,9 @@ logger = logging.getLogger(__name__)
 
 SYNC_PLATFORM_ORDER = ("bilibili", "youtube", "zhihu")
 
+# Routine auto-sync gap backfill: cap lookback even if user sync_since is older.
+AUTO_SYNC_GAP_BACKFILL_MAX_DAYS = 7
+
 _lock = threading.Lock()
 _state: dict[str, Any] = {
     "running": False,
@@ -66,6 +69,7 @@ def _execute_subscription_sync(
     refresh_feeds: bool | None = None,
     user_id: int | None = None,
     pipeline_batch_size: int | None = None,
+    backfill_max_days: int | None = None,
 ) -> tuple[dict[str, Any] | None, str | None]:
     from on1y.adapters.sqlite_storage import get_storage
     from on1y.auth.context import get_current_user_id
@@ -133,6 +137,7 @@ def _execute_subscription_sync(
                     backfill=backfill,
                     sync_hotlist=False,
                     refresh_feeds=refresh_feeds,
+                    backfill_max_days=backfill_max_days,
                 )
                 nested = platform_report.get(name)
                 poll = (
@@ -289,6 +294,7 @@ def run_subscription_sync_blocking(
     user_id: int | None = None,
     mode: str | None = None,
     pipeline_batch_size: int | None = None,
+    backfill_max_days: int | None = None,
 ) -> dict[str, Any] | None:
     """Run sync in the current thread; return None if another sync is running."""
     from on1y.auth.context import get_current_user_id
@@ -324,6 +330,7 @@ def run_subscription_sync_blocking(
         refresh_feeds=refresh_feeds,
         user_id=uid,
         pipeline_batch_size=pipeline_batch_size,
+        backfill_max_days=backfill_max_days,
     )
     with _lock:
         _state["running"] = False
@@ -347,6 +354,7 @@ def start_subscription_sync_job(
     refresh_feeds: bool | None = None,
     user_id: int | None = None,
     pipeline_batch_size: int | None = None,
+    backfill_max_days: int | None = None,
 ) -> dict[str, Any]:
     try:
         targets = normalize_sync_platforms(platform=platform, platforms=platforms)
@@ -394,6 +402,7 @@ def start_subscription_sync_job(
                 refresh_feeds=refresh_feeds,
                 user_id=uid,
                 pipeline_batch_size=pipeline_batch_size,
+                backfill_max_days=backfill_max_days,
             )
         with _lock:
             _state["running"] = False

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -188,3 +188,53 @@ def sync_since_timestamp(platform: str, *, user_id: int | None = None) -> int | 
     if day is None:
         return None
     return int(datetime(day.year, day.month, day.day, tzinfo=timezone.utc).timestamp())
+
+
+def effective_sync_since_timestamp(
+    platform: str,
+    *,
+    user_id: int | None = None,
+    backfill: bool = False,
+    backfill_max_days: int | None = None,
+) -> int | None:
+    """
+    sync_since for a poll/backfill run.
+
+    When ``backfill_max_days`` is set (routine auto-sync catch-up), never look further
+    back than that many days even if the user configured an older sync_since.
+    """
+    base = sync_since_timestamp(platform, user_id=user_id)
+    if not backfill or backfill_max_days is None or backfill_max_days < 1:
+        return base
+    cap = int((datetime.now(timezone.utc) - timedelta(days=backfill_max_days)).timestamp())
+    if base is None:
+        return cap
+    return max(base, cap)
+
+
+def resolve_sync_since_ts(
+    platform: str,
+    *,
+    sync_since_ts: int | None = None,
+    backfill: bool = False,
+    backfill_max_days: int | None = None,
+    user_id: int | None = None,
+) -> int | None:
+    """Resolve sync_since for a poll, applying optional backfill day cap."""
+    if sync_since_ts is None:
+        return effective_sync_since_timestamp(
+            platform,
+            user_id=user_id,
+            backfill=backfill,
+            backfill_max_days=backfill_max_days,
+        )
+    if backfill and backfill_max_days:
+        capped = effective_sync_since_timestamp(
+            platform,
+            user_id=user_id,
+            backfill=True,
+            backfill_max_days=backfill_max_days,
+        )
+        if capped is not None:
+            return max(sync_since_ts, capped)
+    return sync_since_ts

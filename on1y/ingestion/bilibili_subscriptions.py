@@ -204,13 +204,18 @@ def poll_bilibili_dynamic_updates(
     backfill: bool = False,
     sync_since_ts: int | None = None,
     max_pages: int | None = None,
+    backfill_max_days: int | None = None,
 ) -> dict[str, Any]:
     """Enqueue new videos from following dynamics (polymer feed, type=video)."""
     settings = settings or get_settings()
-    if sync_since_ts is None:
-        from on1y.subscriptions.settings import sync_since_timestamp
+    from on1y.subscriptions.settings import resolve_sync_since_ts
 
-        sync_since_ts = sync_since_timestamp("bilibili")
+    sync_since_ts = resolve_sync_since_ts(
+        "bilibili",
+        sync_since_ts=sync_since_ts,
+        backfill=backfill,
+        backfill_max_days=backfill_max_days,
+    )
 
     cursor_key = dynamic_video_cursor_key()
     last_id, last_published = storage.get_rss_feed_state(cursor_key)
@@ -334,16 +339,21 @@ def poll_bilibili_up_updates(
     max_pages_per_up: int | None = None,
     sync_since_ts: int | None = None,
     subscription_source: str = "bilibili_up",
+    backfill_max_days: int | None = None,
 ) -> dict[str, Any]:
     """
     Enqueue new uploads from followed UPs via Bilibili API.
     Uses rss_feed_state keyed by bilibili-up://{mid}.
     """
     settings = settings or get_settings()
-    if sync_since_ts is None:
-        from on1y.subscriptions.settings import sync_since_timestamp
+    from on1y.subscriptions.settings import resolve_sync_since_ts
 
-        sync_since_ts = sync_since_timestamp("bilibili")
+    sync_since_ts = resolve_sync_since_ts(
+        "bilibili",
+        sync_since_ts=sync_since_ts,
+        backfill=backfill,
+        backfill_max_days=backfill_max_days,
+    )
     ups = followings or fetch_bilibili_followings(settings=settings)
     ups = _sort_ups_for_poll(storage, ups)
     per_up_limit = max_items_per_up if max_items_per_up is not None else settings.rss_backfill_max_items_per_feed
@@ -621,6 +631,7 @@ def sync_bilibili_subscriptions(
     backfill: bool = False,
     dry_run: bool = False,
     sync_since_ts: int | None = None,
+    backfill_max_days: int | None = None,
 ) -> dict[str, Any]:
     settings = settings or get_settings()
     report: dict[str, Any] = {"platform": "bilibili"}
@@ -655,6 +666,7 @@ def sync_bilibili_subscriptions(
                 settings=settings,
                 backfill=backfill,
                 sync_since_ts=sync_since_ts,
+                backfill_max_days=backfill_max_days,
             )
         else:
             if followings is None and sync_config:
@@ -665,6 +677,7 @@ def sync_bilibili_subscriptions(
                 followings=followings,
                 backfill=backfill,
                 sync_since_ts=sync_since_ts,
+                backfill_max_days=backfill_max_days,
             )
 
     return report

@@ -28,6 +28,7 @@ def sync_subscriptions(
     dry_run: bool = False,
     settings: Settings | None = None,
     sync_since_ts: int | None = None,
+    backfill_max_days: int | None = None,
     sync_hotlist: bool = False,
     refresh_feeds: bool | None = None,
 ) -> dict[str, Any]:
@@ -58,6 +59,7 @@ def sync_subscriptions(
             backfill=backfill,
             dry_run=dry_run,
             sync_since_ts=sync_since_ts,
+            backfill_max_days=backfill_max_days,
         )
 
     for rss_platform in ("youtube", "zhihu"):
@@ -82,6 +84,7 @@ def sync_subscriptions(
                 storage,
                 settings=settings,
                 backfill=backfill,
+                backfill_max_days=backfill_max_days,
             )
         else:
             stale_youtube = rss_platform == "youtube" and youtube_feeds_stale(settings=settings)
@@ -104,6 +107,7 @@ def sync_subscriptions(
                 platform=rss_platform,
                 backfill=backfill,
                 settings=settings,
+                backfill_max_days=backfill_max_days,
             )
         report[rss_platform] = rss_report
 

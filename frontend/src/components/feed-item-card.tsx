@@ -196,6 +196,12 @@ export function FeedItemCard(props: FeedItemCardProps): JSX.Element {
                 {item.author.trim() || unknownAuthorLabel}
               </div>
               <div className="mt-0.5 flex items-start gap-1.5 text-sm font-medium leading-snug text-foreground">
+                {!item.is_read && !item.read_at ? (
+                  <span
+                    className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-sky-500"
+                    aria-hidden
+                  />
+                ) : null}
                 <div className="min-w-0 flex-1">
                   <SearchHtml
                     html={item.search_title_html}
