@@ -1335,6 +1335,23 @@ def create_app() -> FastAPI:
         finally:
             storage.close()
 
+    @app.get("/api/stats/weekly")
+    def stats_weekly(week_offset: int = Query(default=0, ge=-52, le=0)) -> dict[str, Any]:
+        import logging
+
+        from on1y.stats.weekly import build_weekly_review
+
+        logger = logging.getLogger(__name__)
+        storage = get_storage()
+        try:
+            try:
+                return build_weekly_review(storage, week_offset=week_offset)
+            except Exception as exc:
+                logger.exception("stats weekly failed")
+                raise HTTPException(status_code=500, detail=str(exc)) from exc
+        finally:
+            storage.close()
+
     @app.get("/api/knowledge/collections")
     def knowledge_collections(
         hotlist_date: str | None = Query(default=None),

@@ -10,7 +10,7 @@ import {
   type ThemeRow,
   type ThemeSplitInput
 } from "@/lib/types";
-import type { StatsDailyDigest, StatsOverview } from "@/lib/stats-types";
+import type { StatsDailyDigest, StatsOverview, WeeklyReview } from "@/lib/stats-types";
 import {
   clearAuth,
   getAuthToken,
@@ -662,6 +662,11 @@ export function getCollectionCounts(params?: {
 export function getStatsOverview(days = 90): Promise<StatsOverview> {
   const query = new URLSearchParams({ days: String(days) });
   return request<StatsOverview>(`/api/stats/overview?${query.toString()}`);
+}
+
+export function getWeeklyReview(weekOffset = 0): Promise<WeeklyReview> {
+  const query = new URLSearchParams({ week_offset: String(weekOffset) });
+  return request<WeeklyReview>(`/api/stats/weekly?${query.toString()}`);
 }
 
 export function getStatsDaily(day: string): Promise<StatsDailyDigest> {

@@ -77,3 +77,53 @@ export type StatsDailyDigest = {
   by_content_kind: Record<string, number>;
   date_basis: string;
 };
+
+export type WeeklyPlatformRow = {
+  platform: string;
+  count: number;
+};
+
+export type WeeklyThemeRow = {
+  theme_id: number | null;
+  slug: string;
+  name_zh: string;
+  name_en: string;
+  count: number;
+};
+
+export type WeeklyDailyRow = {
+  date: string;
+  total: number;
+};
+
+export type WeeklyNoteItem = {
+  raw_id: number;
+  title: string;
+  platform: string;
+  note_preview: string;
+  updated_at: string | null;
+};
+
+export type WeeklyReview = {
+  week_offset: number;
+  week_start: string;
+  week_end: string;
+  generated_at: string;
+  timezone: string;
+  date_basis: string;
+  reading: {
+    published_total: number;
+    marked_read: number;
+    by_platform: WeeklyPlatformRow[];
+    by_theme: WeeklyThemeRow[];
+    daily: WeeklyDailyRow[];
+  };
+  notes: {
+    updated_count: number;
+    items: WeeklyNoteItem[];
+  };
+  comparison: {
+    published_prev_week: number;
+    published_delta: number;
+  };
+};

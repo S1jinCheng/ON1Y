@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
 import { getStatsDaily, getStatsOverview } from "@/lib/api";
+import { WeeklyReviewPanel } from "@/components/weekly-review-panel";
 import { formatCalendarDate } from "@/lib/format-published-at";
 import { platformLabel } from "@/lib/platform-label";
 import { themeDisplayName, t, type UiKey } from "@/lib/i18n";
@@ -382,6 +383,10 @@ export function StatsDashboard(props: { locale: Locale }): JSX.Element {
 
       <main className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-5xl space-y-6 px-4 py-6 pb-12">
+          <WeeklyReviewPanel locale={locale} />
+
+          <div className="border-t border-border" />
+
           {loading ? (
             <p className="text-sm text-muted">{ui("statsLoading")}</p>
           ) : error ? (
