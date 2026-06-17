@@ -644,6 +644,7 @@ export function getCollectionCounts(params?: {
   trash: number;
   hotlist: number;
   unread: number;
+  notes: number;
 }> {
   const query = new URLSearchParams();
   if (params?.hotlistDate) {
@@ -653,7 +654,7 @@ export function getCollectionCounts(params?: {
     query.set("hotlist_source", params.hotlistSource);
   }
   const suffix = query.toString() ? `?${query.toString()}` : "";
-  return request<{ favorites: number; trash: number; hotlist: number; unread: number }>(
+  return request<{ favorites: number; trash: number; hotlist: number; unread: number; notes: number }>(
     `/api/knowledge/collections${suffix}`
   );
 }
@@ -725,10 +726,11 @@ export function getKnowledgeItems(params: {
   q?: string;
   platform?: string;
   source?: string;
-  collection?: "feed" | "favorites" | "trash" | "hotlist" | "unread";
+  collection?: "feed" | "favorites" | "trash" | "hotlist" | "notes";
   hotlistDate?: string;
   hotlistSource?: HotlistSource;
   feedDate?: string;
+  unreadOnly?: boolean;
   limit?: number;
   offset?: number;
 }): Promise<KnowledgeItemsResponse> {
@@ -766,6 +768,9 @@ export function getKnowledgeItems(params: {
   }
   if (params.feedDate) {
     query.set("feed_date", params.feedDate);
+  }
+  if (params.unreadOnly) {
+    query.set("unread_only", "true");
   }
   return request<KnowledgeItemsResponse>(`/api/knowledge/items?${query.toString()}`);
 }

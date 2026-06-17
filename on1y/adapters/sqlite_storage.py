@@ -14,6 +14,7 @@ from typing import Any
 from on1y.config import PROJECT_ROOT, get_settings
 from on1y.exceptions import StorageError
 from on1y.knowledge.read_state import read_at_from_meta, utc_now_iso, unread_sql
+from on1y.knowledge.notes import has_user_note
 from on1y.models.distill import DistilledItem
 from on1y.models.enums import ExtractStatus, PendingStatus, SourceType
 from on1y.models.queue import PendingUrl, QueueEnqueue
@@ -594,6 +595,10 @@ class SqliteStorage:
             return (
                 f"r.deleted_at IS NULL AND {is_feed_row_sql('r')} AND {unread_sql('r')}"
             )
+        if key == "notes":
+            from on1y.knowledge.notes import notes_collection_clause
+
+            return notes_collection_clause("r")
         if key == "continue":
             return (
                 f"r.deleted_at IS NULL AND {is_feed_row_sql('r')} AND "
@@ -1002,6 +1007,8 @@ class SqliteStorage:
                 "UPDATE raw_items SET source_meta = ?, updated_at = datetime('now') WHERE id = ?",
                 (dumps_meta(meta), raw_id),
             )
+            if "user_note_html" in patch:
+                self._touch_search_index(conn, raw_id)
 
     def set_item_read_state(self, raw_id: int, *, read: bool) -> dict[str, Any]:
         raw = self.get_raw_by_id(raw_id)
@@ -2376,6 +2383,7 @@ class SqliteStorage:
         hotlist_date: str | None = None,
         hotlist_source: str | None = None,
         feed_date: str | None = None,
+        unread_only: bool = False,
     ) -> dict[str, Any]:
         """BM25-ranked full-text search with snippets."""
         from on1y.search.fts import search_knowledge_fts
@@ -2395,11 +2403,14 @@ class SqliteStorage:
                 hotlist_date=hotlist_date,
                 hotlist_source=hotlist_source,
                 feed_date=feed_date,
+                unread_only=unread_only,
             )
             return {"items": items, "total": len(items), "engine": "like"}
 
         coll_key = (collection or "feed").strip().lower()
         collection_sql = self._collection_clause_for_conn(conn, collection)
+        if unread_only and coll_key == "feed":
+            collection_sql = f"({collection_sql}) AND {unread_sql('r')}"
         user_clause, user_params = self._user_scope_parts(conn)
         if user_clause:
             collection_sql = f"({collection_sql}) AND {user_clause}"
@@ -2444,6 +2455,19 @@ class SqliteStorage:
                 for r in conn.execute(
                     f"SELECT r.id FROM raw_items r WHERE r.id IN ({id_ph}) AND {clause}",
                     (*raw_ids, *date_params),
+                ).fetchall()
+            }
+            raw_ids = [rid for rid in raw_ids if rid in allowed]
+            hits = [h for h in hits if int(h["raw_id"]) in allowed]
+            total = len(raw_ids)
+        if unread_only and coll_key == "feed" and raw_ids:
+            clause = unread_sql("r")
+            id_ph = ",".join("?" for _ in raw_ids)
+            allowed = {
+                int(r["id"])
+                for r in conn.execute(
+                    f"SELECT r.id FROM raw_items r WHERE r.id IN ({id_ph}) AND {clause}",
+                    raw_ids,
                 ).fetchall()
             }
             raw_ids = [rid for rid in raw_ids if rid in allowed]
@@ -2865,6 +2889,7 @@ class SqliteStorage:
         hotlist_date: str | None = None,
         hotlist_source: str | None = None,
         feed_date: str | None = None,
+        unread_only: bool = False,
     ) -> tuple[str, str, list[Any], bool]:
         """Return (WHERE sql, JOIN sql, params, needs_distilled_join for COUNT)."""
         where_parts: list[str] = [self._collection_clause_for_conn(conn, collection)]
@@ -2909,6 +2934,8 @@ class SqliteStorage:
             day_clause, day_params = feed_date_where_clause(feed_date.strip())
             where_parts.append(day_clause)
             params.extend(day_params)
+        if unread_only and coll_key == "feed":
+            where_parts.append(unread_sql("r"))
         if theme_id is not None and coll_key != "hotlist":
             where_parts.append("r.theme_id = ?")
             params.append(theme_id)
@@ -2943,6 +2970,7 @@ class SqliteStorage:
         hotlist_date: str | None = None,
         hotlist_source: str | None = None,
         feed_date: str | None = None,
+        unread_only: bool = False,
     ) -> int:
         conn = self._connect()
         where_sql, join_sql, params, needs_join = self._knowledge_items_filters(
@@ -2957,6 +2985,7 @@ class SqliteStorage:
             hotlist_date=hotlist_date,
             hotlist_source=hotlist_source,
             feed_date=feed_date,
+            unread_only=unread_only,
         )
         if needs_join:
             row = conn.execute(
@@ -2991,6 +3020,7 @@ class SqliteStorage:
         hotlist_date: str | None = None,
         hotlist_source: str | None = None,
         feed_date: str | None = None,
+        unread_only: bool = False,
     ) -> list[dict[str, Any]]:
         conn = self._connect()
         if query and query.strip() and self._current_schema_version(conn) >= 6:
@@ -3007,6 +3037,7 @@ class SqliteStorage:
                 hotlist_date=hotlist_date,
                 hotlist_source=hotlist_source,
                 feed_date=feed_date,
+                unread_only=unread_only,
             )
             return result["items"]
 
@@ -3022,6 +3053,7 @@ class SqliteStorage:
             hotlist_date=hotlist_date,
             hotlist_source=hotlist_source,
             feed_date=feed_date,
+            unread_only=unread_only,
         )
         coll = (collection or "feed").strip().lower()
         if coll == "trash":
@@ -3034,6 +3066,8 @@ class SqliteStorage:
             order_sql = "json_extract(r.source_meta, '$.last_opened_at') DESC"
         elif coll == "unread":
             order_sql = "r.ingested_at DESC"
+        elif coll == "notes":
+            order_sql = "r.updated_at DESC"
         else:
             order_sql = "COALESCE(d.distilled_at, r.ingested_at) DESC"
         snapshot_select = (
@@ -3134,6 +3168,7 @@ class SqliteStorage:
             author_info = author_fields_from_meta(meta)
             starred = bool(meta.get("starred"))
             read_at = read_at_from_meta(meta)
+            has_note = has_user_note(meta)
             topics = loads_json_list(row["topics"])
             tid = row["theme_id"]
             theme_obj = theme_map.get(int(tid)) if tid is not None else None
@@ -3171,6 +3206,7 @@ class SqliteStorage:
                     "starred": starred,
                     "read_at": read_at,
                     "is_read": read_at is not None,
+                    "has_note": has_note,
                     "deleted_at": row["deleted_at"]
                     if "deleted_at" in row.keys()
                     else None,

@@ -57,7 +57,7 @@ def test_read_api(storage) -> None:
     assert response.status_code == 200
     assert response.json()["is_read"] is True
 
-    unread = client.get("/api/knowledge/items?collection=unread").json()
+    unread = client.get("/api/knowledge/items", params={"unread_only": "true"}).json()
     assert all(item["raw_id"] != raw_id for item in unread["items"])
 
     mark_unread = client.patch(

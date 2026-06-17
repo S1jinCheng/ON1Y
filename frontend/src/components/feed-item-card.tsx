@@ -1,6 +1,6 @@
 "use client";
 
-import { CheckCircle2, Circle, Forward, RotateCcw, Star, Trash2 } from "lucide-react";
+import { CheckCircle2, Circle, Forward, NotebookPen, RotateCcw, Star, Trash2 } from "lucide-react";
 import { useState } from "react";
 
 import { ContentTypeIndicator } from "@/components/content-type-indicator";
@@ -228,6 +228,14 @@ export function FeedItemCard(props: FeedItemCardProps): JSX.Element {
                 <span className="rounded bg-soft px-1.5 py-0.5 text-[10px] text-muted">
                   {platformLabel(item.platform, locale)}
                 </span>
+                {item.has_note ? (
+                  <span
+                    className="inline-flex items-center gap-0.5 rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-700 dark:text-amber-300"
+                    title="Notes"
+                  >
+                    <NotebookPen className="h-3 w-3" />
+                  </span>
+                ) : null}
                 {item.theme ? (
                   <span className="rounded border border-foreground px-1.5 py-0.5 text-[10px] font-medium text-foreground">
                     {themeDisplayName(item.theme, locale)}

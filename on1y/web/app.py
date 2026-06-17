@@ -1358,6 +1358,7 @@ def create_app() -> FastAPI:
                     "hotlist", hotlist_date=hot_day, hotlist_source=src
                 ),
                 "unread": storage.count_collection_items("unread"),
+                "notes": storage.count_collection_items("notes"),
             }
         finally:
             storage.close()
@@ -1424,6 +1425,7 @@ def create_app() -> FastAPI:
         hotlist_date: str | None = Query(default=None),
         hotlist_source: str = Query(default="zhihu"),
         feed_date: str | None = Query(default=None),
+        unread_only: bool = Query(default=False),
     ) -> dict[str, Any]:
         from on1y.hotlist.constants import SUPPORTED_HOTLIST_SOURCES
 
@@ -1436,6 +1438,7 @@ def create_app() -> FastAPI:
                 "trash",
                 "hotlist",
                 "unread",
+                "notes",
                 "continue",
             }:
                 raise HTTPException(status_code=400, detail=f"unsupported collection: {collection}")
@@ -1481,6 +1484,7 @@ def create_app() -> FastAPI:
                     hotlist_date=hot_day,
                     hotlist_source=hot_src,
                     feed_date=feed_day,
+                    unread_only=unread_only and coll == "feed",
                 )
                 return {
                     "items": result["items"],
@@ -1491,6 +1495,7 @@ def create_app() -> FastAPI:
                     "hotlist_date": hot_day,
                     "hotlist_source": hot_src,
                     "feed_date": feed_day,
+                    "unread_only": unread_only and coll == "feed",
                 }
             rows = storage.list_knowledge_items(
                 limit=limit,
@@ -1504,6 +1509,7 @@ def create_app() -> FastAPI:
                 hotlist_date=hot_day,
                 hotlist_source=hot_src,
                 feed_date=feed_day,
+                unread_only=unread_only and coll == "feed",
             )
             total = storage.count_knowledge_items(
                 platform=platform,
@@ -1515,6 +1521,7 @@ def create_app() -> FastAPI:
                 hotlist_date=hot_day,
                 hotlist_source=hot_src,
                 feed_date=feed_day,
+                unread_only=unread_only and coll == "feed",
             )
             return {
                 "items": rows,
@@ -1524,6 +1531,7 @@ def create_app() -> FastAPI:
                 "hotlist_date": hot_day,
                 "hotlist_source": hot_src,
                 "feed_date": feed_day,
+                "unread_only": unread_only and coll == "feed",
             }
         finally:
             storage.close()

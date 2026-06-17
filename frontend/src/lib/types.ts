@@ -73,6 +73,7 @@ export type KnowledgeItem = {
   starred?: boolean;
   read_at?: string | null;
   is_read?: boolean;
+  has_note?: boolean;
   deleted_at?: string | null;
   search_rank?: number;
   search_snippet?: string;

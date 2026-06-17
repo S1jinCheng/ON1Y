@@ -9,6 +9,7 @@ import {
   Flame,
   Forward,
   Inbox,
+  NotebookPen,
   RefreshCw,
   RotateCcw,
   Search,
@@ -243,8 +244,9 @@ export default function KnowledgeWorkbench(): JSX.Element {
   const isTrash = collection === "trash";
   const isFavorites = collection === "favorites";
   const isHotlist = collection === "hotlist";
-  const isUnread = collection === "unread";
-  const isFeedBrowse = !isTrash && !isFavorites && !isHotlist && !isUnread;
+  const isNotes = collection === "notes";
+  const isFeedBrowse = !isTrash && !isFavorites && !isHotlist && !isNotes;
+  const [unreadOnly, setUnreadOnly] = useState(false);
 
   const ui = (key: UiKey): string => t(locale, key);
 
@@ -281,11 +283,13 @@ export default function KnowledgeWorkbench(): JSX.Element {
     trash: number;
     hotlist: number;
     unread: number;
+    notes: number;
   }>({
     favorites: 0,
     trash: 0,
     hotlist: 0,
-    unread: 0
+    unread: 0,
+    notes: 0
   });
   const [feedDate, setFeedDate] = useState<string | null>(null);
   const [calendarMonth, setCalendarMonth] = useState<Date>(() => {
@@ -487,6 +491,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
       hotlistDate: isHotlist ? hotlistDate : undefined,
       hotlistSource: isHotlist ? hotlistSource : undefined,
       feedDate: isFeedBrowse && feedDate ? feedDate : undefined,
+      unreadOnly: isFeedBrowse && unreadOnly,
       limit,
       offset
     };
@@ -498,14 +503,25 @@ export default function KnowledgeWorkbench(): JSX.Element {
       read_at: readAt,
       is_read: Boolean(readAt)
     });
-    setItems((prev) => prev.map((row) => (row.raw_id === rawId ? patch(row) : row)));
-    setActive((prev) => (prev?.raw_id === rawId ? patch(prev) : prev));
+    if (readAt && unreadOnly) {
+      const remaining = items.filter((row) => row.raw_id !== rawId).map((row) => patch(row));
+      setItems(remaining);
+      const next = active?.raw_id === rawId ? remaining[0] : remaining.find((r) => r.raw_id === active?.raw_id);
+      setActive(next);
+      if (next) {
+        void loadReader(next.raw_id);
+      } else {
+        setReader(undefined);
+      }
+    } else {
+      setItems((prev) => prev.map((row) => (row.raw_id === rawId ? patch(row) : row)));
+      setActive((prev) => (prev?.raw_id === rawId ? patch(prev) : prev));
+    }
     setCollectionCounts((prev) => ({
       ...prev,
       unread: readAt
         ? Math.max(0, prev.unread - 1)
-        : prev.unread +
-          (items.some((row) => row.raw_id === rawId && !row.read_at) || isUnread ? 0 : 1)
+        : prev.unread + (items.some((row) => row.raw_id === rawId && !row.read_at) ? 0 : 1)
     }));
   }
 
@@ -835,7 +851,8 @@ export default function KnowledgeWorkbench(): JSX.Element {
     selectedTagId,
     platform,
     query,
-    feedDate
+    feedDate,
+    unreadOnly
   ]);
 
   useEffect(() => {
@@ -891,13 +908,17 @@ export default function KnowledgeWorkbench(): JSX.Element {
     collection,
     hotlistDate,
     hotlistSource,
-    feedDate
+    feedDate,
+    unreadOnly
   ]);
 
   async function selectItem(item: KnowledgeItem): Promise<void> {
     setReaderExpanded(false);
     setActive(item);
     setTagList(item.tags.map((tg) => tg.name));
+    if (!item.read_at && !item.is_read) {
+      void handleMarkItemRead(item.raw_id);
+    }
     await loadReader(item.raw_id);
   }
 
@@ -1014,6 +1035,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
     setReader(undefined);
     if (next !== "feed") {
       setFeedDate(null);
+      setUnreadOnly(false);
     }
     setCollection(next);
     if (next === "hotlist") {
@@ -1177,7 +1199,13 @@ export default function KnowledgeWorkbench(): JSX.Element {
       return;
     }
     await saveItemNote(active.raw_id, html);
+    const hasNote = Boolean(html.replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").trim());
     setReader((prev) => (prev ? { ...prev, user_note_html: html } : prev));
+    setActive((prev) => (prev && prev.raw_id === active.raw_id ? { ...prev, has_note: hasNote } : prev));
+    setItems((prev) =>
+      prev.map((row) => (row.raw_id === active.raw_id ? { ...row, has_note: hasNote } : row))
+    );
+    void getCollectionCounts().then(setCollectionCounts);
     setMessage(ui("saveNote"));
   }
 
@@ -1478,17 +1506,17 @@ export default function KnowledgeWorkbench(): JSX.Element {
                 <div className="space-y-0.5">
                   <button
                     type="button"
-                    onClick={() => switchCollection("unread")}
+                    onClick={() => switchCollection("notes")}
                     className={`flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-sm transition-colors ${glassNavClass(
-                      isUnread
+                      isNotes
                     )}`}
                   >
                     <span className="inline-flex items-center gap-1.5">
-                      <Inbox className="h-3.5 w-3.5" />
-                      {ui("collectionUnread")}
+                      <NotebookPen className="h-3.5 w-3.5" />
+                      {ui("collectionNotes")}
                     </span>
-                    <span className={`text-xs ${isUnread ? GLASS_MUTED : "text-muted"}`}>
-                      {collectionCounts.unread}
+                    <span className={`text-xs ${isNotes ? GLASS_MUTED : "text-muted"}`}>
+                      {collectionCounts.notes}
                     </span>
                   </button>
                   <button
@@ -1555,12 +1583,14 @@ export default function KnowledgeWorkbench(): JSX.Element {
                     ? ui("creatorFeed").replace("{name}", selectedCreator.name)
                     : isFavorites
                       ? ui("collectionFavorites")
-                      : isUnread
-                        ? ui("collectionUnread")
+                      : isNotes
+                        ? ui("collectionNotes")
                       : isTrash
                         ? ui("collectionTrash")
                         : isHotlist
                           ? ui("collectionHotlist")
+                          : unreadOnly
+                            ? ui("collectionUnread")
                           : feedDate
                             ? feedDate
                           : ui("feed")}{" "}
@@ -1678,7 +1708,25 @@ export default function KnowledgeWorkbench(): JSX.Element {
                 ) : (
                   <>
                     {isFeedBrowse ? (
-                      <FeedDatePicker
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => setUnreadOnly((value) => !value)}
+                          title={ui("feedUnreadFilter")}
+                          aria-label={ui("feedUnreadFilter")}
+                          aria-pressed={unreadOnly}
+                          className={`flex h-8 items-center gap-1 rounded-md border px-2 text-xs transition-colors ${
+                            unreadOnly
+                              ? "border-accent/50 bg-accent/10 text-accent"
+                              : "border-transparent text-muted hover:border-border hover:bg-soft hover:text-foreground"
+                          }`}
+                        >
+                          <Inbox className="h-4 w-4" />
+                          {collectionCounts.unread > 0 ? (
+                            <span className="tabular-nums">{collectionCounts.unread}</span>
+                          ) : null}
+                        </button>
+                        <FeedDatePicker
                         locale={locale}
                         month={calendarMonth}
                         selectedDate={feedDate}
@@ -1691,6 +1739,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
                           today: ui("feedDateToday")
                         }}
                       />
+                      </>
                     ) : null}
                     <FilterSelect
                       placeholder={ui("sortBy")}
@@ -1841,8 +1890,10 @@ export default function KnowledgeWorkbench(): JSX.Element {
                         ? ui("trashEmpty")
                         : isFavorites
                           ? ui("favoritesEmpty")
-                          : isUnread
+                          : unreadOnly
                             ? ui("unreadEmpty")
+                          : isNotes
+                            ? ui("notesEmpty")
                           : isHotlist
                             ? hotlistSource === "economist"
                               ? ui("hotlistEmptyEconomist")
@@ -1998,6 +2049,25 @@ export default function KnowledgeWorkbench(): JSX.Element {
                   }
                 />
               </div>
+
+              {(!isHotlist || isEconomistHotlist) && active ? (
+                <div className="border-b border-border px-4 py-3">
+                  <div className="h-52 min-h-[13rem]">
+                    <NotesPanel
+                      rawId={active.raw_id}
+                      title={active.title || active.url}
+                      summary={active.summary || ""}
+                      bodyText={reader?.body_text ?? ""}
+                      translatedBodyText={reader?.translated_body_text}
+                      noteHtml={reader?.user_note_html ?? ""}
+                      locale={locale}
+                      labels={notesPanelLabels}
+                      onSaveNote={handleSaveNote}
+                      onUpload={handleUploadFile}
+                    />
+                  </div>
+                </div>
+              ) : null}
 
               <div className="p-4">
                 <p className="mb-2 text-xs font-medium uppercase tracking-wider text-muted">

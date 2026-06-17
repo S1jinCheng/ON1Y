@@ -75,6 +75,7 @@ def _fetch_index_payload(conn: sqlite3.Connection, raw_id: int) -> dict[str, str
         return None
 
     from on1y.utils.author_meta import author_fields_from_meta
+    from on1y.utils.html_text import html_to_plain_text
     from on1y.utils.json_util import loads_meta
 
     meta = loads_meta(row["source_meta"])
@@ -93,10 +94,17 @@ def _fetch_index_payload(conn: sqlite3.Connection, raw_id: int) -> dict[str, str
     theme_text = " ".join(p for p in theme_parts if p.strip())
 
     summary = row["summary"] or meta.get("entry_excerpt") or ""
+    note_text = html_to_plain_text(meta.get("user_note_html"))
+    body_base = _normalize_index_text(row["body_text"], max_len=_BODY_INDEX_CHARS)
+    if note_text:
+        note_chunk = _normalize_index_text(note_text, max_len=8_000)
+        body = f"{body_base}\n{note_chunk}".strip() if body_base else note_chunk
+    else:
+        body = body_base
     return {
         "title": _normalize_index_text(row["raw_title"], max_len=500),
         "summary": _normalize_index_text(str(summary), max_len=4_000),
-        "body": _normalize_index_text(row["body_text"], max_len=_BODY_INDEX_CHARS),
+        "body": body,
         "tags": _normalize_index_text(tags_text, max_len=1_000),
         "author": _normalize_index_text(author_info.get("author"), max_len=200),
         "theme": _normalize_index_text(theme_text, max_len=200),
@@ -331,6 +339,7 @@ def _search_hybrid(
             "COALESCE(r.raw_title, '') LIKE ? "
             "OR COALESCE(d.summary, '') LIKE ? "
             "OR COALESCE(r.body_text, '') LIKE ? "
+            "OR COALESCE(json_extract(r.source_meta, '$.user_note_html'), '') LIKE ? "
             "OR EXISTS ("
             "SELECT 1 FROM item_tags it "
             "JOIN tags t ON t.id = it.tag_id "
@@ -338,7 +347,7 @@ def _search_hybrid(
             ")"
             ")"
         )
-        params.extend([like, like, like, like])
+        params.extend([like, like, like, like, like])
 
     if platform:
         from on1y.utils.platform import knowledge_platform_filter_sql
@@ -368,9 +377,10 @@ def _search_hybrid(
         rank_parts.append(
             "(CASE WHEN COALESCE(r.raw_title, '') LIKE ? THEN 15.0 ELSE 0 END + "
             "CASE WHEN COALESCE(d.summary, '') LIKE ? THEN 8.0 ELSE 0 END + "
-            "CASE WHEN COALESCE(r.body_text, '') LIKE ? THEN 1.0 ELSE 0 END)"
+            "CASE WHEN COALESCE(r.body_text, '') LIKE ? THEN 1.0 ELSE 0 END + "
+            "CASE WHEN COALESCE(json_extract(r.source_meta, '$.user_note_html'), '') LIKE ? THEN 6.0 ELSE 0 END)"
         )
-        rank_params.extend([like, like, like])
+        rank_params.extend([like, like, like, like])
 
     rank_sql = " + ".join(rank_parts) if rank_parts else "0"
 
