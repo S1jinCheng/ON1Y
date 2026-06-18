@@ -231,11 +231,23 @@ def _cmd_subscriptions(args: argparse.Namespace) -> int:
                     subtitle_limit=args.subtitle_limit,
                     distill_limit=args.distill_limit,
                 )
-            if args.platform in {"youtube", "zhihu", "all"}:
-                from on1y.pipeline.worker import run_worker_batch
+            if args.platform in {"youtube", "all"}:
+                from on1y.pipeline.video_enrich import run_video_enrich_pipeline
 
-                report["worker"] = run_worker_batch(
-                    storage, args.ingest_limit, close_storage=False
+                report["youtube_ingest"] = run_video_enrich_pipeline(
+                    storage,
+                    platform="youtube",
+                    ingest_limit=args.ingest_limit,
+                    subtitle_limit=args.subtitle_limit,
+                    distill_limit=args.distill_limit,
+                )
+            if args.platform in {"zhihu", "all"}:
+                from on1y.pipeline.zhihu_catchup import run_zhihu_catchup
+
+                report["zhihu_catchup"] = run_zhihu_catchup(
+                    storage,
+                    ingest_per_round=max(1, args.ingest_limit),
+                    max_rounds=1,
                 )
     finally:
         storage.close()

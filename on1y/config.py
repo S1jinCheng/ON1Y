@@ -193,6 +193,9 @@ class Settings(BaseSettings):
     auto_sync_startup_delay_seconds: int = Field(default=120, ge=0, le=3600)
     # First tick after delay: poll subscriptions only (no ingest/subtitles/distill).
     auto_sync_startup_poll_only: bool = Field(default=True)
+    # Evening digest (stats + LLM summary) generated daily while serve runs
+    evening_digest_enabled: bool = Field(default=True)
+    evening_digest_hour: int = Field(default=22, ge=0, le=23)
     # Favorites / playlists polling while serve is running (B站/知乎收藏夹, YouTube WL/Liked)
     collections_sync_enabled: bool = Field(default=True)
     collections_sync_interval_seconds: int = Field(default=120, ge=30, le=3600)

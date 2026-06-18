@@ -84,19 +84,24 @@ def fetch_page_content(
 
     from on1y.browser.playwright_session import PlaywrightSession
 
-    with PlaywrightSession(cookie_path=cookie_path, seed_domain=seed_domain) as sess:
-        return sess.fetch_page(
-            url,
-            wait_selectors=wait_selectors,
-            title_selectors=title_selectors,
-            content_selectors=content_selectors,
-            min_body_chars=min_body_chars,
-            settle_ms=settle_ms,
-            require_selector=require_selector,
-            author_selectors=author_selectors,
-            avatar_selectors=avatar_selectors,
-            author_url_selectors=author_url_selectors,
-        )
+    def _fetch() -> PageContent:
+        with PlaywrightSession(cookie_path=cookie_path, seed_domain=seed_domain) as sess:
+            return sess.fetch_page(
+                url,
+                wait_selectors=wait_selectors,
+                title_selectors=title_selectors,
+                content_selectors=content_selectors,
+                min_body_chars=min_body_chars,
+                settle_ms=settle_ms,
+                require_selector=require_selector,
+                author_selectors=author_selectors,
+                avatar_selectors=avatar_selectors,
+                author_url_selectors=author_url_selectors,
+            )
+
+    from on1y.browser.playwright_isolated import run_playwright_isolated
+
+    return run_playwright_isolated(_fetch)
 
 
 def _extract_page_content(

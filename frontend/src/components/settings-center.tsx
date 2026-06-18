@@ -1373,6 +1373,7 @@ function SubscriptionsTab(props: {
   const [useAiSummary, setUseAiSummary] = useState(true);
   const [statuses, setStatuses] = useState<CookieStatus[]>([]);
   const [loading, setLoading] = useState(true);
+  const [cookiesLoading, setCookiesLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [cookieBusy, setCookieBusy] = useState<CookiePlatform | null>(null);
@@ -1400,38 +1401,53 @@ function SubscriptionsTab(props: {
   const fileInputs = useRef<Record<string, HTMLInputElement | null>>({});
 
   async function reloadCookies(fullVerify = false): Promise<void> {
-    const result = await getCookieStatuses(true, { quick: !fullVerify });
-    setStatuses(result.platforms);
+    setCookiesLoading(true);
+    try {
+      const result = await getCookieStatuses(true, { quick: !fullVerify });
+      setStatuses(result.platforms);
+    } finally {
+      setCookiesLoading(false);
+    }
   }
 
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       try {
-        const [settings, cookies, syncSettings] = await Promise.all([
+        const [settings, syncSettings, cookieMeta] = await Promise.all([
           getSubscriptionSettings(),
-          getCookieStatuses(),
-          getSyncSettings()
+          getSyncSettings(),
+          getCookieStatuses(false)
         ]);
         if (cancelled) {
           return;
         }
-        setEnabled(settings.enabled_platforms ?? ["bilibili", "youtube", "zhihu"]);
-        setSyncSince(settings.bilibili_sync_since ?? settings.youtube_sync_since ?? settings.zhihu_sync_since ?? "");
-        setStatuses(cookies.platforms);
+        const platforms = settings.enabled_platforms ?? ["bilibili", "youtube", "zhihu"];
+        setEnabled(platforms);
+        setSyncSince(pickSyncSinceDisplay(settings, platforms));
+        setStatuses(cookieMeta.platforms);
         applySyncSettings(syncSettings);
+        setLoading(false);
+
+        const verified = await getCookieStatuses(true, { quick: true });
+        if (!cancelled) {
+          setStatuses(verified.platforms);
+        }
       } catch (err) {
         props.onMessage?.(err instanceof Error ? err.message : String(err));
       } finally {
         if (!cancelled) {
           setLoading(false);
+          setCookiesLoading(false);
         }
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [props]);
+    // Load once on mount; do not depend on props — re-running resets edited syncSince.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function applySyncSettings(syncSettings: SyncSettingsView): void {
     setZhihuFollowMode(syncSettings.zhihu_follow_sync_mode === "rss" ? "rss" : "api");
@@ -1561,12 +1577,41 @@ function SubscriptionsTab(props: {
     setEnabled((prev) => (prev.includes(key) ? prev.filter((p) => p !== key) : [...prev, key]));
   }
 
-  function sincePayload(since: string): Record<string, string | undefined> {
+  function sincePayload(since: string): {
+    bilibili_sync_since: string;
+    youtube_sync_since: string;
+    zhihu_sync_since: string;
+  } {
+    const value = since.trim();
+    if (!value) {
+      return {
+        bilibili_sync_since: "",
+        youtube_sync_since: "",
+        zhihu_sync_since: ""
+      };
+    }
     return {
-      bilibili_sync_since: enabled.includes("bilibili") ? since : undefined,
-      youtube_sync_since: enabled.includes("youtube") ? since : undefined,
-      zhihu_sync_since: enabled.includes("zhihu") ? since : undefined
+      bilibili_sync_since: enabled.includes("bilibili") ? value : "",
+      youtube_sync_since: enabled.includes("youtube") ? value : "",
+      zhihu_sync_since: enabled.includes("zhihu") ? value : ""
     };
+  }
+
+  function pickSyncSinceDisplay(
+    settings: Awaited<ReturnType<typeof getSubscriptionSettings>>,
+    platforms: string[]
+  ): string {
+    const dates: string[] = [];
+    if (platforms.includes("bilibili") && settings.bilibili_sync_since) {
+      dates.push(settings.bilibili_sync_since);
+    }
+    if (platforms.includes("youtube") && settings.youtube_sync_since) {
+      dates.push(settings.youtube_sync_since);
+    }
+    if (platforms.includes("zhihu") && settings.zhihu_sync_since) {
+      dates.push(settings.zhihu_sync_since);
+    }
+    return dates[0] ?? "";
   }
 
   async function save(): Promise<void> {
@@ -1662,7 +1707,15 @@ function SubscriptionsTab(props: {
       <InitialSyncSection locale={locale} statuses={statuses} busy={cookieBusy != null} onClose={props.onClose} />
 
       <section className="space-y-2">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">{L(locale, "Cookie", "Cookies")}</h3>
+        <div className="flex items-center gap-2">
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">{L(locale, "Cookie", "Cookies")}</h3>
+          {cookiesLoading ? (
+            <span className="inline-flex items-center gap-1 text-[10px] text-muted">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              {L(locale, "验证登录态…", "Verifying login…")}
+            </span>
+          ) : null}
+        </div>
         <p className="text-[11px] leading-relaxed text-muted">
           {L(
             locale,

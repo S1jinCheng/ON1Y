@@ -35,6 +35,7 @@ import { ContentTypeIndicator } from "@/components/content-type-indicator";
 import { RelatedItemsSection } from "@/components/related-items-section";
 import { AccountMenu } from "@/components/account-menu";
 import { TagChipEditor } from "@/components/tag-chip-editor";
+import { EveningDigestButton } from "@/components/evening-digest-button";
 import { FeedDatePicker } from "@/components/feed-date-calendar";
 import { ThemeSidebar } from "@/components/theme-sidebar";
 import { CreatorSidebar } from "@/components/creator-sidebar";
@@ -1318,6 +1319,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
               <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
               {ui("refresh")}
             </button>
+            <EveningDigestButton locale={locale} />
             <AccountMenu locale={locale} onLocaleChange={applyLocale} onMessage={setMessage} />
           </div>
         </div>

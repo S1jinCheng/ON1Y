@@ -10,6 +10,8 @@ import {
   type ThemeRow,
   type ThemeSplitInput
 } from "@/lib/types";
+import type { EveningDigestArchive, EveningDigestResponse, EveningDigestStatus } from "@/lib/digest-types";
+import { isEveningDigestPending } from "@/lib/digest-types";
 import type { StatsDailyDigest, StatsOverview, WeeklyReview } from "@/lib/stats-types";
 import {
   clearAuth,
@@ -672,6 +674,28 @@ export function getWeeklyReview(weekOffset = 0): Promise<WeeklyReview> {
 export function getStatsDaily(day: string): Promise<StatsDailyDigest> {
   const query = new URLSearchParams({ day });
   return request<StatsDailyDigest>(`/api/stats/daily?${query.toString()}`);
+}
+
+export function getEveningDigestStatus(): Promise<EveningDigestStatus> {
+  return request<EveningDigestStatus>("/api/digest/evening/status");
+}
+
+export function getEveningDigestArchive(): Promise<EveningDigestArchive> {
+  return request<EveningDigestArchive>("/api/digest/evening/archive");
+}
+
+export function getEveningDigest(day?: string): Promise<EveningDigestResponse> {
+  const query = day ? new URLSearchParams({ day }) : new URLSearchParams();
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request<EveningDigestResponse>(`/api/digest/evening${suffix}`);
+}
+
+export function markEveningDigestRead(day: string): Promise<EveningDigest> {
+  return request<EveningDigest>("/api/digest/evening/read", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ day })
+  });
 }
 
 export function getHotlistDates(source: HotlistSource = "zhihu"): Promise<{

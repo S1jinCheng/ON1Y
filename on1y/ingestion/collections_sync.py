@@ -41,6 +41,27 @@ def _maybe_alert_cookie(platform: str, exc: ConfigurationError) -> None:
     maybe_alert_cookie_expired(str(exc), platform=platform, worker="collections")
 
 
+def _pending_count(storage: StoragePort, platform: str) -> int:
+    counter = getattr(storage, "count_pending_for_platform", None)
+    if counter is None:
+        return 0
+    return int(counter(platform))
+
+
+def _should_ingest_platform(
+    report: dict[str, Any],
+    platform: str,
+    *,
+    storage: StoragePort,
+) -> bool:
+    platform_report = report.get(platform)
+    if not isinstance(platform_report, dict) or platform_report.get("cookie_error"):
+        return False
+    if int(platform_report.get("enqueued") or 0) > 0:
+        return True
+    return _pending_count(storage, platform) > 0
+
+
 def sync_collections(
     storage: StoragePort,
     *,
@@ -101,50 +122,44 @@ def sync_collections(
             _maybe_alert_cookie(name, exc)
             report[name] = {"error": str(exc), "cookie_error": True}
 
-    if dry_run or not ingest or report["enqueued_total"] <= 0:
+    if dry_run or not ingest:
         return report
 
     limit = max(0, min(ingest_limit, 20))
     if limit <= 0:
         return report
 
-    if "bilibili" in targets and isinstance(report.get("bilibili"), dict):
-        enq = int(report["bilibili"].get("enqueued") or 0)
-        if enq > 0:
-            from on1y.pipeline.video_enrich import run_video_enrich_pipeline
+    if "bilibili" in targets and _should_ingest_platform(report, "bilibili", storage=storage):
+        from on1y.pipeline.video_enrich import run_video_enrich_pipeline
 
-            report["ingest"]["bilibili"] = run_video_enrich_pipeline(
-                storage,
-                platform="bilibili",
-                ingest_limit=limit,
-                subtitle_limit=min(limit, settings.auto_sync_subtitle_limit),
-                distill_limit=0,
-                use_ai_summary=False,
-            )
+        report["ingest"]["bilibili"] = run_video_enrich_pipeline(
+            storage,
+            platform="bilibili",
+            ingest_limit=limit,
+            subtitle_limit=min(limit, settings.auto_sync_subtitle_limit),
+            distill_limit=0,
+            use_ai_summary=False,
+        )
 
-    if "youtube" in targets and isinstance(report.get("youtube"), dict):
-        enq = int(report["youtube"].get("enqueued") or 0)
-        if enq > 0:
-            from on1y.pipeline.video_enrich import run_video_enrich_pipeline
+    if "youtube" in targets and _should_ingest_platform(report, "youtube", storage=storage):
+        from on1y.pipeline.video_enrich import run_video_enrich_pipeline
 
-            report["ingest"]["youtube"] = run_video_enrich_pipeline(
-                storage,
-                platform="youtube",
-                ingest_limit=limit,
-                subtitle_limit=min(limit, settings.auto_sync_subtitle_limit),
-                distill_limit=0,
-                use_ai_summary=False,
-            )
+        report["ingest"]["youtube"] = run_video_enrich_pipeline(
+            storage,
+            platform="youtube",
+            ingest_limit=limit,
+            subtitle_limit=min(limit, settings.auto_sync_subtitle_limit),
+            distill_limit=0,
+            use_ai_summary=False,
+        )
 
-    if "zhihu" in targets and isinstance(report.get("zhihu"), dict):
-        enq = int(report["zhihu"].get("enqueued") or 0)
-        if enq > 0:
-            from on1y.pipeline.zhihu_catchup import run_zhihu_catchup
+    if "zhihu" in targets and _should_ingest_platform(report, "zhihu", storage=storage):
+        from on1y.pipeline.zhihu_catchup import run_zhihu_catchup
 
-            report["ingest"]["zhihu"] = run_zhihu_catchup(
-                storage,
-                ingest_per_round=limit,
-                max_rounds=1,
-            )
+        report["ingest"]["zhihu"] = run_zhihu_catchup(
+            storage,
+            ingest_per_round=limit,
+            max_rounds=1,
+        )
 
     return report

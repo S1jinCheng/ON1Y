@@ -35,6 +35,16 @@ def test_save_and_load_subscription_settings(tmp_path, monkeypatch) -> None:
 
         assert sync_since_date("bilibili") == date(2025, 3, 15)
         assert sync_since_timestamp("bilibili") == 1_741_996_800
+
+        save_subscription_settings(
+            bilibili_sync_since="",
+            youtube_sync_since="",
+            zhihu_sync_since="",
+        )
+        cleared = load_subscription_settings()
+        assert cleared["bilibili_sync_since"] is None
+        assert cleared["youtube_sync_since"] is None
+        assert cleared["zhihu_sync_since"] is None
     finally:
         storage.close()
         get_settings.cache_clear()

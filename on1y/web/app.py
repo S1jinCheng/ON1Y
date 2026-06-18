@@ -795,13 +795,15 @@ def create_app() -> FastAPI:
         force_verify: bool = False,
         quick_verify: bool = True,
     ) -> list[dict[str, Any]]:
+        from concurrent.futures import ThreadPoolExecutor
+
         from on1y.auth.context import get_effective_user_id
         from on1y.cookies.loader import PLATFORM_COOKIE_ATTR, resolve_cookie_path
         from on1y.cookies.verify import verify_cookie_account
 
         uid = get_effective_user_id()
-        rows: list[dict[str, Any]] = []
-        for platform in PLATFORM_COOKIE_ATTR:
+
+        def _one_row(platform: str) -> dict[str, Any]:
             path = resolve_cookie_path(platform, user_id=uid)
             count = 0
             updated_at: str | None = None
@@ -830,16 +832,22 @@ def create_app() -> FastAPI:
                     force=force_verify,
                     quick=quick_verify and not force_verify,
                 )
-            rows.append(
-                {
-                    "platform": platform,
-                    "exists": exists,
-                    "count": count,
-                    "updated_at": updated_at,
-                    "path": str(path) if exists else None,
-                    "account": account,
-                }
-            )
+            return {
+                "platform": platform,
+                "exists": exists,
+                "count": count,
+                "updated_at": updated_at,
+                "path": str(path) if exists else None,
+                "account": account,
+            }
+
+        platforms = list(PLATFORM_COOKIE_ATTR)
+        if not verify or len(platforms) <= 1:
+            return [_one_row(p) for p in platforms]
+
+        rows: list[dict[str, Any]] = []
+        with ThreadPoolExecutor(max_workers=min(3, len(platforms))) as pool:
+            rows = list(pool.map(_one_row, platforms))
         return rows
 
     @app.get("/api/user/cookies")
@@ -1377,6 +1385,95 @@ def create_app() -> FastAPI:
                 "unread": storage.count_collection_items("unread"),
                 "notes": storage.count_collection_items("notes"),
             }
+        finally:
+            storage.close()
+
+    @app.get("/api/digest/evening/status")
+    def evening_digest_status_api() -> dict[str, Any]:
+        from on1y.auth.context import get_effective_user_id
+        from on1y.digest.evening import evening_digest_status
+
+        return evening_digest_status(get_effective_user_id())
+
+    @app.get("/api/digest/evening/archive")
+    def evening_digest_archive() -> dict[str, Any]:
+        from on1y.auth.context import get_effective_user_id
+        from on1y.digest.evening import list_evening_digest_dates, today_digest_date
+
+        uid = get_effective_user_id()
+        dates = list_evening_digest_dates(uid, limit=60)
+        return {"today": today_digest_date(), "dates": dates}
+
+    @app.get("/api/digest/evening")
+    def evening_digest_get(
+        day: str | None = Query(default=None, min_length=10, max_length=10),
+    ) -> dict[str, Any]:
+        from on1y.auth.context import get_effective_user_id
+        from on1y.digest.evening import (
+            digest_hour_reached,
+            load_evening_digest,
+            public_evening_digest_view,
+            today_digest_date,
+        )
+
+        uid = get_effective_user_id()
+        digest_day = day or today_digest_date()
+        today = today_digest_date()
+
+        if digest_day == today and not digest_hour_reached():
+            return {
+                "pending": True,
+                "digest_date": today,
+                "reason": "before_digest_hour",
+                "timezone": "Asia/Shanghai",
+            }
+
+        doc = load_evening_digest(uid, digest_day)
+        if doc is None:
+            if digest_day == today:
+                return {
+                    "pending": True,
+                    "digest_date": today,
+                    "reason": "not_generated_yet",
+                    "timezone": "Asia/Shanghai",
+                }
+            raise HTTPException(status_code=404, detail=f"evening digest not found: {digest_day}")
+        return public_evening_digest_view(doc)
+
+    @app.post("/api/digest/evening/read")
+    def evening_digest_mark_read(body: dict[str, Any]) -> dict[str, Any]:
+        from on1y.auth.context import get_effective_user_id
+        from on1y.digest.evening import mark_evening_digest_read, public_evening_digest_view
+
+        day = str(body.get("day") or "").strip()
+        if len(day) != 10:
+            raise HTTPException(status_code=400, detail="day required (YYYY-MM-DD)")
+        doc = mark_evening_digest_read(get_effective_user_id(), day)
+        if doc is None:
+            raise HTTPException(status_code=404, detail=f"evening digest not found: {day}")
+        return public_evening_digest_view(doc)
+
+    @app.post("/api/digest/evening/generate")
+    def evening_digest_generate(
+        day: str | None = Query(default=None, min_length=10, max_length=10),
+        force: bool = Query(default=False),
+    ) -> dict[str, Any]:
+        import logging
+
+        from on1y.adapters.sqlite_storage import get_storage
+        from on1y.digest.evening import build_evening_digest, public_evening_digest_view
+
+        logger = logging.getLogger(__name__)
+        storage = get_storage()
+        try:
+            try:
+                doc = build_evening_digest(storage, day=day, force=force)
+                return public_evening_digest_view(doc)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            except Exception as exc:
+                logger.exception("evening digest generate failed")
+                raise HTTPException(status_code=500, detail=str(exc)) from exc
         finally:
             storage.close()
 
@@ -2006,6 +2103,7 @@ def create_app() -> FastAPI:
 def run_server(*, host: str | None = None, port: int | None = None) -> None:
     import uvicorn
 
+    from on1y.digest.evening_auto import start_evening_digest_loop
     from on1y.hotlist.economist_auto import start_economist_auto_loop
     from on1y.subscriptions.auto_sync import start_auto_sync_loop
     from on1y.subscriptions.collections_auto_sync import start_collections_sync_loop
@@ -2016,6 +2114,7 @@ def run_server(*, host: str | None = None, port: int | None = None) -> None:
     start_auto_sync_loop()
     start_collections_sync_loop()
     start_economist_auto_loop()
+    start_evening_digest_loop()
     uvicorn.run(
         create_app(),
         host=host or settings.web_host,

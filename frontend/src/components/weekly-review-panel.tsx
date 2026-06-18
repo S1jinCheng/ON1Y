@@ -112,7 +112,9 @@ export function WeeklyReviewPanel(props: { locale: Locale }): JSX.Element {
       {loading ? (
         <p className="text-sm text-muted">{ui("statsLoading")}</p>
       ) : error ? (
-        <p className="rounded-lg border border-border bg-soft px-3 py-2 text-sm">{error}</p>
+        <p className="rounded-lg border border-border bg-soft px-3 py-2 text-sm text-muted">
+          {ui("statsLoadFailed")}
+        </p>
       ) : review ? (
         <>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">

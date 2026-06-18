@@ -31,6 +31,23 @@ def run_zhihu_worker_batch(
     Process up to `limit` Zhihu URLs from pending_urls.
     Reuses one browser session; sleeps between items for anti-bot spacing.
     """
+    from on1y.browser.playwright_isolated import run_playwright_isolated
+
+    return run_playwright_isolated(
+        lambda: _run_zhihu_worker_batch_impl(
+            storage,
+            limit,
+            close_storage=close_storage,
+        )
+    )
+
+
+def _run_zhihu_worker_batch_impl(
+    storage: SqliteStorage,
+    limit: int,
+    *,
+    close_storage: bool = False,
+) -> dict[str, object]:
     settings = get_settings()
     extractor = ZhihuExtractor()
     processed = 0
