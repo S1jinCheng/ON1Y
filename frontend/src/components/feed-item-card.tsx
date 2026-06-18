@@ -4,6 +4,8 @@ import { CheckCircle2, Circle, Forward, NotebookPen, RotateCcw, Star, Trash2 } f
 import { useState } from "react";
 
 import { ContentTypeIndicator } from "@/components/content-type-indicator";
+import { ImportanceStars } from "@/components/importance-stars";
+import { NoteHoverPreview } from "@/components/note-hover-preview";
 import { ThemeMovePopover } from "@/components/theme-move-popover";
 import { formatHotlistMetaLine, formatSourceLine } from "@/lib/format-published-at";
 import { feedItemListTagClass } from "@/components/tag-chip-editor";
@@ -37,6 +39,9 @@ type FeedItemCardProps = {
   onRestore?: () => void;
   /** Hot list: title (and rank) only — no avatar, author, or summary. */
   compact?: boolean;
+  /** Preloaded note HTML for hover preview (active row). */
+  notePreviewHtml?: string | null;
+  notePreviewEmptyLabel?: string;
 };
 
 function SearchHtml(props: {
@@ -105,7 +110,9 @@ export function FeedItemCard(props: FeedItemCardProps): JSX.Element {
     trashMode = false,
     restoreLabel = "Restore",
     onRestore,
-    compact = false
+    compact = false,
+    notePreviewHtml,
+    notePreviewEmptyLabel = "No note"
   } = props;
 
   const visibleTags = tagsWithoutAuthor(item);
@@ -135,6 +142,27 @@ export function FeedItemCard(props: FeedItemCardProps): JSX.Element {
       });
 
   const [confirmDelete, setConfirmDelete] = useState(false);
+
+  function noteBadge(className: string): JSX.Element {
+    const badge = (
+      <span
+        className={`inline-flex items-center gap-0.5 rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-700 dark:text-amber-300 ${className}`}
+        title="Notes"
+      >
+        <NotebookPen className="h-3 w-3" />
+      </span>
+    );
+    return (
+      <NoteHoverPreview
+        rawId={item.raw_id}
+        noteHtml={notePreviewHtml}
+        locale={locale}
+        emptyLabel={notePreviewEmptyLabel}
+      >
+        {badge}
+      </NoteHoverPreview>
+    );
+  }
 
   function handleContentClick(): void {
     if (selectionMode) {
@@ -178,13 +206,19 @@ export function FeedItemCard(props: FeedItemCardProps): JSX.Element {
             {hotlistMetaLine ? (
               <p className="mt-1 text-[11px] text-muted">{hotlistMetaLine}</p>
             ) : null}
-            {visibleTags.length > 0 ? (
-              <div className="mt-1.5 flex flex-wrap gap-1">
+            {visibleTags.length > 0 || item.has_note || item.importance ? (
+              <div className="mt-1.5 flex flex-wrap items-center gap-1">
                 {visibleTags.slice(0, 6).map((tg) => (
                   <span key={tg.id} className={feedItemListTagClass}>
                     #{tg.name}
                   </span>
                 ))}
+                {item.has_note ? noteBadge("") : null}
+                {item.importance ? (
+                  <span className="inline-flex items-center rounded bg-amber-500/10 px-1 py-0.5">
+                    <ImportanceStars value={item.importance} readonly size="sm" />
+                  </span>
+                ) : null}
               </div>
             ) : null}
           </div>
@@ -228,14 +262,6 @@ export function FeedItemCard(props: FeedItemCardProps): JSX.Element {
                 <span className="rounded bg-soft px-1.5 py-0.5 text-[10px] text-muted">
                   {platformLabel(item.platform, locale)}
                 </span>
-                {item.has_note ? (
-                  <span
-                    className="inline-flex items-center gap-0.5 rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-700 dark:text-amber-300"
-                    title="Notes"
-                  >
-                    <NotebookPen className="h-3 w-3" />
-                  </span>
-                ) : null}
                 {item.theme ? (
                   <span className="rounded border border-foreground px-1.5 py-0.5 text-[10px] font-medium text-foreground">
                     {themeDisplayName(item.theme, locale)}
@@ -246,6 +272,12 @@ export function FeedItemCard(props: FeedItemCardProps): JSX.Element {
                     #{tg.name}
                   </span>
                 ))}
+                {item.has_note ? noteBadge("") : null}
+                {item.importance ? (
+                  <span className="inline-flex items-center rounded bg-amber-500/10 px-1 py-0.5">
+                    <ImportanceStars value={item.importance} readonly size="sm" />
+                  </span>
+                ) : null}
               </div>
             </div>
           </div>

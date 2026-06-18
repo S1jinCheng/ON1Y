@@ -13,6 +13,7 @@ from typing import Any
 
 from on1y.config import PROJECT_ROOT, get_settings
 from on1y.exceptions import StorageError
+from on1y.knowledge.importance import importance_from_meta
 from on1y.knowledge.read_state import read_at_from_meta, utc_now_iso, unread_sql
 from on1y.knowledge.notes import has_user_note
 from on1y.models.distill import DistilledItem
@@ -994,6 +995,15 @@ class SqliteStorage:
         allow_empty = {"user_note_html", "annotated_body_html"}
         bool_keys = {"starred", "distill_pending"}
         for key, value in patch.items():
+            if key == "importance":
+                from on1y.knowledge.importance import normalize_importance
+
+                stars = normalize_importance(value)
+                if stars is None:
+                    meta.pop("importance", None)
+                else:
+                    meta["importance"] = stars
+                continue
             if key in bool_keys:
                 meta[key] = bool(value)
                 continue
@@ -2384,6 +2394,7 @@ class SqliteStorage:
         hotlist_source: str | None = None,
         feed_date: str | None = None,
         unread_only: bool = False,
+        min_importance: int | None = None,
     ) -> dict[str, Any]:
         """BM25-ranked full-text search with snippets."""
         from on1y.search.fts import search_knowledge_fts
@@ -2404,6 +2415,7 @@ class SqliteStorage:
                 hotlist_source=hotlist_source,
                 feed_date=feed_date,
                 unread_only=unread_only,
+                min_importance=min_importance,
             )
             return {"items": items, "total": len(items), "engine": "like"}
 
@@ -2411,9 +2423,18 @@ class SqliteStorage:
         collection_sql = self._collection_clause_for_conn(conn, collection)
         if unread_only and coll_key == "feed":
             collection_sql = f"({collection_sql}) AND {unread_sql('r')}"
+        if min_importance is not None and coll_key == "feed":
+            from on1y.knowledge.importance import importance_min_sql
+
+            collection_sql = (
+                f"({collection_sql}) AND {importance_min_sql('r', minimum=min_importance)}"
+            )
         user_clause, user_params = self._user_scope_parts(conn)
         if user_clause:
             collection_sql = f"({collection_sql}) AND {user_clause}"
+        collection_params: list[Any] = list(user_params) if user_params else []
+        if min_importance is not None and coll_key == "feed":
+            collection_params.append(int(min_importance))
         hits, total = search_knowledge_fts(
             conn,
             user_query=query,
@@ -2424,7 +2445,7 @@ class SqliteStorage:
             theme_id=None if coll_key == "hotlist" else theme_id,
             tag_ids=tag_ids,
             collection_sql=collection_sql,
-            collection_params=user_params or None,
+            collection_params=collection_params or None,
         )
         if not hits:
             return {"items": [], "total": 0, "engine": "fts5"}
@@ -2468,6 +2489,21 @@ class SqliteStorage:
                 for r in conn.execute(
                     f"SELECT r.id FROM raw_items r WHERE r.id IN ({id_ph}) AND {clause}",
                     raw_ids,
+                ).fetchall()
+            }
+            raw_ids = [rid for rid in raw_ids if rid in allowed]
+            hits = [h for h in hits if int(h["raw_id"]) in allowed]
+            total = len(raw_ids)
+        if min_importance is not None and coll_key == "feed" and raw_ids:
+            from on1y.knowledge.importance import importance_min_sql
+
+            clause = importance_min_sql("r", minimum=min_importance)
+            id_ph = ",".join("?" for _ in raw_ids)
+            allowed = {
+                int(r["id"])
+                for r in conn.execute(
+                    f"SELECT r.id FROM raw_items r WHERE r.id IN ({id_ph}) AND {clause}",
+                    (*raw_ids, int(min_importance)),
                 ).fetchall()
             }
             raw_ids = [rid for rid in raw_ids if rid in allowed]
@@ -2890,6 +2926,7 @@ class SqliteStorage:
         hotlist_source: str | None = None,
         feed_date: str | None = None,
         unread_only: bool = False,
+        min_importance: int | None = None,
     ) -> tuple[str, str, list[Any], bool]:
         """Return (WHERE sql, JOIN sql, params, needs_distilled_join for COUNT)."""
         where_parts: list[str] = [self._collection_clause_for_conn(conn, collection)]
@@ -2936,6 +2973,11 @@ class SqliteStorage:
             params.extend(day_params)
         if unread_only and coll_key == "feed":
             where_parts.append(unread_sql("r"))
+        if min_importance is not None and coll_key == "feed":
+            from on1y.knowledge.importance import importance_min_sql
+
+            where_parts.append(importance_min_sql("r", minimum=min_importance))
+            params.append(int(min_importance))
         if theme_id is not None and coll_key != "hotlist":
             where_parts.append("r.theme_id = ?")
             params.append(theme_id)
@@ -2971,6 +3013,7 @@ class SqliteStorage:
         hotlist_source: str | None = None,
         feed_date: str | None = None,
         unread_only: bool = False,
+        min_importance: int | None = None,
     ) -> int:
         conn = self._connect()
         where_sql, join_sql, params, needs_join = self._knowledge_items_filters(
@@ -2986,6 +3029,7 @@ class SqliteStorage:
             hotlist_source=hotlist_source,
             feed_date=feed_date,
             unread_only=unread_only,
+            min_importance=min_importance,
         )
         if needs_join:
             row = conn.execute(
@@ -3021,6 +3065,7 @@ class SqliteStorage:
         hotlist_source: str | None = None,
         feed_date: str | None = None,
         unread_only: bool = False,
+        min_importance: int | None = None,
     ) -> list[dict[str, Any]]:
         conn = self._connect()
         if query and query.strip() and self._current_schema_version(conn) >= 6:
@@ -3038,6 +3083,7 @@ class SqliteStorage:
                 hotlist_source=hotlist_source,
                 feed_date=feed_date,
                 unread_only=unread_only,
+                min_importance=min_importance,
             )
             return result["items"]
 
@@ -3054,6 +3100,7 @@ class SqliteStorage:
             hotlist_source=hotlist_source,
             feed_date=feed_date,
             unread_only=unread_only,
+            min_importance=min_importance,
         )
         coll = (collection or "feed").strip().lower()
         if coll == "trash":
@@ -3169,6 +3216,7 @@ class SqliteStorage:
             starred = bool(meta.get("starred"))
             read_at = read_at_from_meta(meta)
             has_note = has_user_note(meta)
+            importance = importance_from_meta(meta)
             topics = loads_json_list(row["topics"])
             tid = row["theme_id"]
             theme_obj = theme_map.get(int(tid)) if tid is not None else None
@@ -3207,6 +3255,7 @@ class SqliteStorage:
                     "read_at": read_at,
                     "is_read": read_at is not None,
                     "has_note": has_note,
+                    "importance": importance,
                     "deleted_at": row["deleted_at"]
                     if "deleted_at" in row.keys()
                     else None,

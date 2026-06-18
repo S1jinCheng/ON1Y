@@ -64,6 +64,14 @@ def test_patch_note_api(storage) -> None:
     assert response.status_code == 200
     assert "notetermunique" in response.json()["user_note_html"]
 
+    rating = client.patch(
+        f"/api/knowledge/items/{raw.id}/note",
+        json={"importance": 4},
+    )
+    assert rating.status_code == 200
+    assert rating.json()["importance"] == 4
+    assert storage.get_raw_by_id(raw.id).source_meta.get("user_note_html")
+
     search = client.get(
         "/api/knowledge/items",
         params={"query": "notetermunique", "limit": 10},

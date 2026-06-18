@@ -30,6 +30,7 @@ import { FirstRunGuide } from "@/components/first-run-guide";
 import { FeedItemCard } from "@/components/feed-item-card";
 import { ThemeMovePopover } from "@/components/theme-move-popover";
 import { NotesPanel } from "@/components/notes-panel";
+import { invalidateNotePreviewCache } from "@/components/note-hover-preview";
 import { OriginalTextPanel } from "@/components/original-text-panel";
 import { ContentTypeIndicator } from "@/components/content-type-indicator";
 import { RelatedItemsSection } from "@/components/related-items-section";
@@ -67,6 +68,7 @@ import {
   getTaxonomy,
   moveItemTheme,
   patchItemClassification,
+  patchItemImportance,
   saveItemNote,
   restoreKnowledgeItem,
   toggleItemFavorite,
@@ -248,6 +250,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
   const isNotes = collection === "notes";
   const isFeedBrowse = !isTrash && !isFavorites && !isHotlist && !isNotes;
   const [unreadOnly, setUnreadOnly] = useState(false);
+  const [minImportance, setMinImportance] = useState<number | null>(null);
 
   const ui = (key: UiKey): string => t(locale, key);
 
@@ -323,6 +326,17 @@ export default function KnowledgeWorkbench(): JSX.Element {
   const sortOptions = useMemo(
     () => sortOptionsForUi(locale, hasSearch, collection),
     [locale, hasSearch, collection]
+  );
+  const importanceFilterOptions = useMemo(
+    () => [
+      { value: ALL_FILTER, label: ui("importanceFilterAll") },
+      { value: "5", label: ui("importanceFilterExact").replace("{n}", "5") },
+      { value: "4", label: ui("importanceFilterStars").replace("{n}", "4") },
+      { value: "3", label: ui("importanceFilterStars").replace("{n}", "3") },
+      { value: "2", label: ui("importanceFilterStars").replace("{n}", "2") },
+      { value: "1", label: ui("importanceFilterStars").replace("{n}", "1") }
+    ],
+    [locale]
   );
 
   const displayItems = useMemo(
@@ -493,6 +507,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
       hotlistSource: isHotlist ? hotlistSource : undefined,
       feedDate: isFeedBrowse && feedDate ? feedDate : undefined,
       unreadOnly: isFeedBrowse && unreadOnly,
+      minImportance: isFeedBrowse && minImportance ? minImportance : undefined,
       limit,
       offset
     };
@@ -853,7 +868,8 @@ export default function KnowledgeWorkbench(): JSX.Element {
     platform,
     query,
     feedDate,
-    unreadOnly
+    unreadOnly,
+    minImportance
   ]);
 
   useEffect(() => {
@@ -910,7 +926,8 @@ export default function KnowledgeWorkbench(): JSX.Element {
     hotlistDate,
     hotlistSource,
     feedDate,
-    unreadOnly
+    unreadOnly,
+    minImportance
   ]);
 
   async function selectItem(item: KnowledgeItem): Promise<void> {
@@ -1200,6 +1217,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
       return;
     }
     await saveItemNote(active.raw_id, html);
+    invalidateNotePreviewCache(active.raw_id);
     const hasNote = Boolean(html.replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").trim());
     setReader((prev) => (prev ? { ...prev, user_note_html: html } : prev));
     setActive((prev) => (prev && prev.raw_id === active.raw_id ? { ...prev, has_note: hasNote } : prev));
@@ -1208,6 +1226,36 @@ export default function KnowledgeWorkbench(): JSX.Element {
     );
     void getCollectionCounts().then(setCollectionCounts);
     setMessage(ui("saveNote"));
+  }
+
+  async function handleSaveImportance(importance: number | null): Promise<void> {
+    if (!active) {
+      return;
+    }
+    try {
+      const result = await patchItemImportance(active.raw_id, importance);
+      const nextImportance = result.importance ?? null;
+      const patch = (row: KnowledgeItem): KnowledgeItem => ({ ...row, importance: nextImportance });
+      if (minImportance && (!nextImportance || nextImportance < minImportance)) {
+        const remaining = items.filter((row) => row.raw_id !== active.raw_id);
+        setItems(remaining);
+        const next =
+          active?.raw_id === active.raw_id
+            ? remaining[0]
+            : remaining.find((row) => row.raw_id === active?.raw_id);
+        setActive(next);
+        if (next) {
+          void loadReader(next.raw_id);
+        } else {
+          setReader(undefined);
+        }
+      } else {
+        setItems((prev) => prev.map((row) => (row.raw_id === active.raw_id ? patch(row) : row)));
+        setActive((prev) => (prev?.raw_id === active.raw_id ? patch(prev) : prev));
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    }
   }
 
   async function handleUploadFile(file: File): Promise<void> {
@@ -1279,6 +1327,8 @@ export default function KnowledgeWorkbench(): JSX.Element {
     notes: ui("notes"),
     notesPlaceholder: ui("notesPlaceholder"),
     saveNote: ui("saveNote"),
+    ratePrompt: ui("ratePrompt"),
+    notePreviewEmpty: ui("notePreviewEmpty"),
     upload: ui("upload"),
     chooseFile: ui("chooseFile"),
     uploadClassify: ui("uploadClassify"),
@@ -1396,9 +1446,11 @@ export default function KnowledgeWorkbench(): JSX.Element {
                 bodyText={reader?.body_text ?? ""}
                 translatedBodyText={reader?.translated_body_text}
                 noteHtml={reader?.user_note_html ?? ""}
+                importance={active.importance ?? null}
                 locale={locale}
                 labels={notesPanelLabels}
                 onSaveNote={handleSaveNote}
+                onImportanceChange={handleSaveImportance}
                 onUpload={handleUploadFile}
               />
             </div>
@@ -1741,6 +1793,14 @@ export default function KnowledgeWorkbench(): JSX.Element {
                           today: ui("feedDateToday")
                         }}
                       />
+                        <FilterSelect
+                          placeholder={ui("importanceFilter")}
+                          value={minImportance ? String(minImportance) : ALL_FILTER}
+                          onChange={(value) =>
+                            setMinImportance(value === ALL_FILTER ? null : Number(value))
+                          }
+                          options={importanceFilterOptions}
+                        />
                       </>
                     ) : null}
                     <FilterSelect
@@ -1882,6 +1942,8 @@ export default function KnowledgeWorkbench(): JSX.Element {
                     onMoveTheme={(themeId) => void handleThemeMoveForItem(item.raw_id, themeId)}
                     onToggleFavorite={() => void handleToggleFavorite(item)}
                     onDelete={() => void handleDeleteItem(item.raw_id)}
+                    notePreviewHtml={active?.raw_id === item.raw_id ? reader?.user_note_html : undefined}
+                    notePreviewEmptyLabel={ui("notePreviewEmpty")}
                   />
                 ))}
                 {displayItems.length === 0 ? (
@@ -2062,9 +2124,11 @@ export default function KnowledgeWorkbench(): JSX.Element {
                       bodyText={reader?.body_text ?? ""}
                       translatedBodyText={reader?.translated_body_text}
                       noteHtml={reader?.user_note_html ?? ""}
+                      importance={active.importance ?? null}
                       locale={locale}
                       labels={notesPanelLabels}
                       onSaveNote={handleSaveNote}
+                      onImportanceChange={handleSaveImportance}
                       onUpload={handleUploadFile}
                     />
                   </div>

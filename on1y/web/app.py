@@ -204,7 +204,8 @@ class ThemeMoveRequest(BaseModel):
 
 
 class ItemNoteUpdate(BaseModel):
-    html: str = ""
+    html: str | None = None
+    importance: int | None = Field(default=None, ge=1, le=5)
 
 
 class ItemAnnotationUpdate(BaseModel):
@@ -217,6 +218,10 @@ class FavoriteUpdate(BaseModel):
 
 class ReadStateUpdate(BaseModel):
     read: bool = True
+
+
+class ImportanceUpdate(BaseModel):
+    importance: int | None = Field(default=None, ge=1, le=5)
 
 
 class BatchDeleteRequest(BaseModel):
@@ -1540,6 +1545,7 @@ def create_app() -> FastAPI:
         hotlist_source: str = Query(default="zhihu"),
         feed_date: str | None = Query(default=None),
         unread_only: bool = Query(default=False),
+        min_importance: int | None = Query(default=None, ge=1, le=5),
     ) -> dict[str, Any]:
         from on1y.hotlist.constants import SUPPORTED_HOTLIST_SOURCES
 
@@ -1599,6 +1605,7 @@ def create_app() -> FastAPI:
                     hotlist_source=hot_src,
                     feed_date=feed_day,
                     unread_only=unread_only and coll == "feed",
+                    min_importance=min_importance if coll == "feed" else None,
                 )
                 return {
                     "items": result["items"],
@@ -1610,6 +1617,7 @@ def create_app() -> FastAPI:
                     "hotlist_source": hot_src,
                     "feed_date": feed_day,
                     "unread_only": unread_only and coll == "feed",
+                    "min_importance": min_importance if coll == "feed" else None,
                 }
             rows = storage.list_knowledge_items(
                 limit=limit,
@@ -1624,6 +1632,7 @@ def create_app() -> FastAPI:
                 hotlist_source=hot_src,
                 feed_date=feed_day,
                 unread_only=unread_only and coll == "feed",
+                min_importance=min_importance if coll == "feed" else None,
             )
             total = storage.count_knowledge_items(
                 platform=platform,
@@ -1636,6 +1645,7 @@ def create_app() -> FastAPI:
                 hotlist_source=hot_src,
                 feed_date=feed_day,
                 unread_only=unread_only and coll == "feed",
+                min_importance=min_importance if coll == "feed" else None,
             )
             return {
                 "items": rows,
@@ -1646,6 +1656,7 @@ def create_app() -> FastAPI:
                 "hotlist_source": hot_src,
                 "feed_date": feed_day,
                 "unread_only": unread_only and coll == "feed",
+                "min_importance": min_importance if coll == "feed" else None,
             }
         finally:
             storage.close()
@@ -1910,13 +1921,28 @@ def create_app() -> FastAPI:
 
     @app.patch("/api/knowledge/items/{raw_id}/note")
     def patch_item_note(raw_id: int, body: ItemNoteUpdate) -> dict[str, Any]:
+        from on1y.knowledge.importance import importance_from_meta, normalize_importance
+
         storage = get_storage()
         try:
             raw = storage.get_raw_by_id_for_user(raw_id)
             if raw is None:
                 raise HTTPException(status_code=404, detail="raw item not found")
-            storage.merge_source_meta(raw_id, {"user_note_html": body.html})
-            return {"raw_id": raw_id, "user_note_html": body.html}
+            patch: dict[str, Any] = {}
+            if "html" in body.model_fields_set:
+                patch["user_note_html"] = body.html or ""
+            if "importance" in body.model_fields_set:
+                patch["importance"] = normalize_importance(body.importance)
+            if not patch:
+                raise HTTPException(status_code=400, detail="no fields to update")
+            storage.merge_source_meta(raw_id, patch)
+            meta = storage.get_raw_by_id(raw_id).source_meta or {}
+            result: dict[str, Any] = {"raw_id": raw_id}
+            if "html" in body.model_fields_set:
+                result["user_note_html"] = patch.get("user_note_html", "")
+            if "importance" in body.model_fields_set:
+                result["importance"] = importance_from_meta(meta)
+            return result
         finally:
             storage.close()
 
@@ -1943,6 +1969,25 @@ def create_app() -> FastAPI:
             return {"raw_id": raw_id, "starred": body.starred}
         finally:
             storage.close()
+
+    @app.patch("/api/knowledge/items/{raw_id}/importance")
+    def patch_item_importance(raw_id: int, body: ImportanceUpdate) -> dict[str, Any]:
+        from on1y.knowledge.importance import normalize_importance
+
+        storage = get_storage()
+        try:
+            raw = storage.get_raw_by_id_for_user(raw_id)
+            if raw is None:
+                raise HTTPException(status_code=404, detail="raw item not found")
+            stars = normalize_importance(body.importance)
+            storage.merge_source_meta(raw_id, {"importance": stars})
+            return {"raw_id": raw_id, "importance": stars}
+        finally:
+            storage.close()
+
+    @app.post("/api/knowledge/items/{raw_id}/importance")
+    def post_item_importance(raw_id: int, body: ImportanceUpdate) -> dict[str, Any]:
+        return patch_item_importance(raw_id, body)
 
     @app.patch("/api/knowledge/items/{raw_id}/read")
     def patch_item_read(raw_id: int, body: ReadStateUpdate) -> dict[str, Any]:

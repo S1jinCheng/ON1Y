@@ -760,6 +760,7 @@ export function getKnowledgeItems(params: {
   hotlistSource?: HotlistSource;
   feedDate?: string;
   unreadOnly?: boolean;
+  minImportance?: number;
   limit?: number;
   offset?: number;
 }): Promise<KnowledgeItemsResponse> {
@@ -801,6 +802,9 @@ export function getKnowledgeItems(params: {
   if (params.unreadOnly) {
     query.set("unread_only", "true");
   }
+  if (params.minImportance !== undefined && params.minImportance >= 1) {
+    query.set("min_importance", String(params.minImportance));
+  }
   return request<KnowledgeItemsResponse>(`/api/knowledge/items?${query.toString()}`);
 }
 
@@ -837,6 +841,16 @@ export function saveItemNote(rawId: number, html: string): Promise<{ raw_id: num
   return request(`/api/knowledge/items/${rawId}/note`, {
     method: "PATCH",
     body: JSON.stringify({ html })
+  });
+}
+
+export function patchItemImportance(
+  rawId: number,
+  importance: number | null
+): Promise<{ raw_id: number; importance: number | null }> {
+  return request(`/api/knowledge/items/${rawId}/note`, {
+    method: "PATCH",
+    body: JSON.stringify({ importance })
   });
 }
 

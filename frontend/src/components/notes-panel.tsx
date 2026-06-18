@@ -4,6 +4,8 @@ import { FileDown, FileText, Upload } from "lucide-react";
 import { useRef, useState } from "react";
 
 import { RichNoteEditor } from "@/components/rich-note-editor";
+import { ImportanceStars } from "@/components/importance-stars";
+import { NoteHoverPreview } from "@/components/note-hover-preview";
 import { exportItemDocument } from "@/lib/export-document";
 import { formatOriginalText, originalTextToHtml } from "@/lib/format-original-text";
 import type { Locale } from "@/lib/types";
@@ -15,11 +17,14 @@ type NotesPanelProps = {
   bodyText: string;
   translatedBodyText?: string | null;
   noteHtml: string;
+  importance?: number | null;
   locale: Locale;
   labels: {
     notes: string;
     notesPlaceholder: string;
     saveNote: string;
+    ratePrompt: string;
+    notePreviewEmpty: string;
     upload: string;
     chooseFile: string;
     uploadClassify: string;
@@ -29,6 +34,7 @@ type NotesPanelProps = {
     originalText: string;
   };
   onSaveNote: (html: string) => Promise<void>;
+  onImportanceChange?: (importance: number | null) => Promise<void>;
   onUpload: (file: File) => Promise<void>;
 };
 
@@ -40,9 +46,11 @@ export function NotesPanel(props: NotesPanelProps): JSX.Element {
     bodyText,
     translatedBodyText,
     noteHtml,
+    importance,
     locale,
     labels,
     onSaveNote,
+    onImportanceChange,
     onUpload
   } = props;
   const fileRef = useRef<HTMLInputElement>(null);
@@ -90,9 +98,17 @@ export function NotesPanel(props: NotesPanelProps): JSX.Element {
   return (
     <div className="flex h-full min-h-0 flex-col gap-2">
       <div className="flex shrink-0 flex-wrap items-center gap-1.5">
-        <h2 className="mr-auto text-xs font-medium uppercase tracking-wider text-muted">
-          {labels.notes}
-        </h2>
+        <NoteHoverPreview
+          rawId={rawId}
+          noteHtml={noteHtml}
+          locale={locale}
+          emptyLabel={labels.notePreviewEmpty}
+          className="mr-auto"
+        >
+          <h2 className="cursor-default text-xs font-medium uppercase tracking-wider text-muted">
+            {labels.notes}
+          </h2>
+        </NoteHoverPreview>
         <label className="inline-flex cursor-pointer items-center gap-1 rounded border border-border px-2 py-1 text-xs hover:bg-soft">
           <Upload className="h-3.5 w-3.5" />
           {uploading ? "…" : labels.upload}
@@ -125,6 +141,12 @@ export function NotesPanel(props: NotesPanelProps): JSX.Element {
           {labels.exportPdf}
         </button>
       </div>
+      {onImportanceChange ? (
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <ImportanceStars value={importance} onChange={(value) => void onImportanceChange(value)} />
+          <span className="text-[11px] text-muted">{labels.ratePrompt}</span>
+        </div>
+      ) : null}
       <div className="min-h-0 flex-1">
         <RichNoteEditor
           key={rawId}

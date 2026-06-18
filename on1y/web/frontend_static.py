@@ -33,6 +33,14 @@ def register_frontend_routes(app: FastAPI) -> None:
 
     out_root = FRONTEND_OUT_DIR.resolve()
 
+    @app.api_route(
+        "/api/{rest:path}",
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+        include_in_schema=False,
+    )
+    async def api_not_found(rest: str) -> None:
+        raise HTTPException(status_code=404, detail="not found")
+
     def _safe_path(rel: str) -> Path | None:
         rel = (rel or "").strip().lstrip("/")
         if not rel:
