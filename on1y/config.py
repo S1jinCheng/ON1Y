@@ -227,6 +227,8 @@ class Settings(BaseSettings):
     zhihu_api_poll_max_followees: int = Field(default=25, ge=1, le=200)
     zhihu_api_poll_max_pages: int = Field(default=2, ge=1, le=20)
     zhihu_api_poll_backfill_pages: int = Field(default=5, ge=1, le=50)
+    # Zhihu API poll: moments = following feed (/api/v3/moments); activities = per-followee (legacy)
+    zhihu_api_poll_mode: str = Field(default="moments", pattern="^(moments|activities)$")
 
     log_level: str = Field(default="INFO")
 

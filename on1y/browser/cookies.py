@@ -60,6 +60,39 @@ def _normalize_same_site(value: Any) -> str | None:
     return str(value)
 
 
+def normalize_storage_state(data: dict[str, Any]) -> dict[str, Any]:
+    """Normalize Playwright storage_state (fixes Cookie-Editor sameSite: null, etc.)."""
+    cookies_in = data.get("cookies")
+    if not isinstance(cookies_in, list):
+        return data
+
+    cookies_out: list[dict[str, Any]] = []
+    for raw in cookies_in:
+        if not isinstance(raw, dict) or "name" not in raw or "value" not in raw:
+            continue
+        cookie: dict[str, Any] = {
+            "name": str(raw["name"]),
+            "value": str(raw["value"]),
+            "domain": str(raw.get("domain") or ""),
+            "path": str(raw.get("path") or "/"),
+        }
+        expires = raw.get("expires")
+        if expires is None and raw.get("expirationDate") is not None:
+            expires = raw["expirationDate"]
+        if expires is not None and not raw.get("session"):
+            cookie["expires"] = expires
+        if raw.get("httpOnly") is not None:
+            cookie["httpOnly"] = bool(raw["httpOnly"])
+        if raw.get("secure") is not None:
+            cookie["secure"] = bool(raw["secure"])
+        same_site = _normalize_same_site(raw.get("sameSite"))
+        if same_site is not None:
+            cookie["sameSite"] = same_site
+        cookies_out.append(cookie)
+
+    return {**data, "cookies": cookies_out}
+
+
 def normalize_cookie_list(
     cookies: list[dict[str, Any]],
     default_domain: str,

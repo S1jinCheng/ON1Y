@@ -16,6 +16,18 @@ def test_target_url_answer() -> None:
     assert url == "https://www.zhihu.com/question/456/answer/123"
 
 
+def test_target_url_ignores_api_zhihu_url() -> None:
+    url = _target_url(
+        {
+            "type": "answer",
+            "id": 123,
+            "url": "https://api.zhihu.com/answers/123",
+            "question": {"id": 456, "title": "Hello?"},
+        }
+    )
+    assert url == "https://www.zhihu.com/question/456/answer/123"
+
+
 def test_target_url_article() -> None:
     url = _target_url({"type": "article", "id": 99})
     assert url == "https://zhuanlan.zhihu.com/p/99"

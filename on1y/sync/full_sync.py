@@ -398,9 +398,9 @@ def _sync_subscriptions_phase(
                     )
             elif settings.zhihu_follow_sync_mode == "api":
                 with phase_timer.span(f"subscriptions.{rss_platform}.poll"):
-                    from on1y.ingestion.zhihu_subscriptions import poll_zhihu_follow_activities
+                    from on1y.ingestion.zhihu_subscriptions import poll_zhihu_api_subscriptions
 
-                    rss_report["poll"] = poll_zhihu_follow_activities(
+                    rss_report["poll"] = poll_zhihu_api_subscriptions(
                         storage,
                         settings=settings,
                         backfill=True,

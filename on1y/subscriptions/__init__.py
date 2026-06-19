@@ -78,9 +78,9 @@ def sync_subscriptions(
             else settings.zhihu_auto_refresh_follows
         )
         if rss_platform == "zhihu" and settings.zhihu_follow_sync_mode == "api":
-            from on1y.ingestion.zhihu_subscriptions import poll_zhihu_follow_activities
+            from on1y.ingestion.zhihu_subscriptions import poll_zhihu_api_subscriptions
 
-            rss_report["poll"] = poll_zhihu_follow_activities(
+            rss_report["poll"] = poll_zhihu_api_subscriptions(
                 storage,
                 settings=settings,
                 backfill=backfill,

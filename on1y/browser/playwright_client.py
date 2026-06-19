@@ -174,6 +174,7 @@ def _create_context(
         is_cookie_list,
         is_storage_state,
         normalize_cookie_list,
+        normalize_storage_state,
         seed_url_for_domain,
     )
 
@@ -183,7 +184,7 @@ def _create_context(
         "viewport": {"width": 1280, "height": 900},
     }
     if is_storage_state(cookie_data):
-        context_opts["storage_state"] = cookie_data
+        context_opts["storage_state"] = normalize_storage_state(cookie_data)
         return browser.new_context(**context_opts)
 
     if is_cookie_list(cookie_data):
