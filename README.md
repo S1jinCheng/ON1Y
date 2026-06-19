@@ -1,30 +1,33 @@
-<div align="center">
+
 
 # On1y
 
-**Turn subscriptions and saves scattered across platforms into a local knowledge base that belongs only to you.**
+**In an age of information overload, we constantly shuttle between social media and streaming platforms to gather what we need. That leaves us at the mercy of recommendation algorithms—wasting hours in noise and, under the barrage of high-density feeds, losing the ability to seek what actually matters.**
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/S1jinCheng/ON1Y?label=release&color=brightgreen)](https://github.com/S1jinCheng/ON1Y/releases/latest)
-[![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![Platform](https://img.shields.io/badge/Platform-Windows-0078D4?logo=windows&logoColor=white)](https://github.com/S1jinCheng/ON1Y/releases/latest)
-[![Tauri](https://img.shields.io/badge/Tauri-2-FFC131?logo=tauri&logoColor=black)](https://tauri.app/)
+**This project aims to return to basics: collect and organize the information we truly need, and build a library that represents our input. Our vision is not only a private, independent, passive aggregation platform—but one where each of us can create and share content grounded in what we've collected.**
+
+[License: MIT](LICENSE)
+[Release](https://github.com/S1jinCheng/ON1Y/releases/latest)
+[Python](https://www.python.org/)
+[Platform](https://github.com/S1jinCheng/ON1Y/releases/latest)
+[Tauri](https://tauri.app/)
 
 **English** | [简体中文](README.zh-CN.md)
 
-[Download](https://github.com/S1jinCheng/ON1Y/releases/latest) · [Quick start](#install--run) · [Demo](#demo) · [Docs](docs/)
+[Download](https://github.com/S1jinCheng/ON1Y/releases/latest) · [Quick start](#install--run) · [Demo](#demo)
 
-</div>
+
 
 ---
 
-## Overview
+## Description
 
 - Data stays on your machine — nothing is uploaded to the cloud
 - Multi-user support with backup and migration
 - Windows desktop installer — ready to use out of the box
 
 ### What it does
+
 
 | | |
 | --- | --- |
@@ -36,21 +39,21 @@
 | **Extras** | Zhihu hot list · *The Economist* weekly · Kindle delivery |
 | **Migrate** | Export `.on1y.zip` and restore on another PC |
 
+
 ---
 
 ## Demo
 
 On1y is **local-first**. There is no public online demo — your data and cookies stay on your computer.
 
-<div align="center">
-  <img src="assets/demo.gif" alt="On1y demo: sync, browse, search, and AI summaries" width="90%" />
-</div>
+<img src="assets/demo.gif" alt="On1y demo: sync, browse, search, and AI summaries" width="90%" />
 
-<p align="center"><em>Install → import cookies → sync subscriptions → browse, search, and AI summaries</em></p>
+*Install → import cookies → sync subscriptions → browse, search, and AI summaries*
 
 ---
 
 ## Tech stack
+
 
 | Layer | Technologies |
 | --- | --- |
@@ -63,13 +66,6 @@ On1y is **local-first**. There is no public online demo — your data and cookie
 | **AI** | Configurable OpenAI-compatible API (summaries / tags) |
 | **Packaging** | PyInstaller · NSIS installer |
 
-```
-Feeds / favorites / hot list
-    → queue → workers
-    → subtitle worker → body extraction
-    → SQLite + FTS5
-    → FastAPI ←→ Next.js workbench
-```
 
 ---
 
@@ -79,8 +75,8 @@ Feeds / favorites / hot list
 
 1. Download `On1y_*-setup.exe` from [GitHub Releases](https://github.com/S1jinCheng/ON1Y/releases/latest)
 2. Run the installer and launch **On1y** from the Start menu
-3. Register / sign in → import cookies per [docs/COOKIES.md](docs/COOKIES.md)
-4. For YouTube, configure a proxy per [docs/PROXY.md](docs/PROXY.md)
+3. Register / sign in → import cookies in Settings (Bilibili QR scan or paste from Cookie-Editor)
+4. For YouTube, configure a proxy in Settings → Network if needed
 5. In Settings, pick platforms and sync start dates, then run the first sync
 
 Requirements: Windows 10/11 x64 · [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/)
@@ -98,7 +94,7 @@ on1y init
 on1y serve
 ```
 
-Frontend (separate terminal):
+Frontend updates:
 
 ```powershell
 cd frontend
@@ -108,6 +104,7 @@ npm run dev
 
 ### Common commands
 
+
 | Command | Description |
 | --- | --- |
 | `on1y serve` | Start backend and workbench |
@@ -116,6 +113,7 @@ npm run dev
 | `on1y search -q "keyword"` | Full-text search |
 | `pytest -q` | Run tests |
 
+
 ---
 
 ## Contributing
@@ -123,7 +121,7 @@ npm run dev
 Issues and pull requests are welcome.
 
 1. **Fork** this repo and create a branch `feat/your-feature`
-2. See **Run from source** above and [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md); run `ruff check on1y tests` and `pytest -q` before submitting
+2. See **Run from source** above; run `ruff check on1y tests` and `pytest -q` before submitting
 3. In your PR, briefly explain the motivation and how you tested
 4. Do not commit `.env`, `data/`, cookies, or other secrets
 

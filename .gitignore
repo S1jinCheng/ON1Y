@@ -63,6 +63,9 @@ logs/
 config/feeds.yaml
 config/local.yaml
 
+# Local documentation (README on GitHub is the public intro)
+docs/
+
 # Temporary files
 tmp/
 *.tmp
