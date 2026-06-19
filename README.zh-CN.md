@@ -1,4 +1,5 @@
 
+<div align="center">
 
 # On1y
 
@@ -6,18 +7,17 @@
 
 **本项目，想以返璞归真的方式，收集并整理我们真正需要的信息，并建立起一所代表我们的输入的信息库，同时我们的愿景是他不仅成为一个私人的，独立的，被动的信息聚合平台，而是在我们每个人都可以在这个平台上，基于自己所收集到的信息而输出我们的内容并分享给他人。**
 
-[License: MIT](LICENSE)
-[Release](https://github.com/S1jinCheng/ON1Y/releases/latest)
-[Python](https://www.python.org/)
-[Platform](https://github.com/S1jinCheng/ON1Y/releases/latest)
-[Tauri](https://tauri.app/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/S1jinCheng/ON1Y?label=release&color=brightgreen)](https://github.com/S1jinCheng/ON1Y/releases/latest)
+[![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Platform](https://img.shields.io/badge/Platform-Windows-0078D4?logo=windows&logoColor=white)](https://github.com/S1jinCheng/ON1Y/releases/latest)
+[![Tauri](https://img.shields.io/badge/Tauri-2-FFC131?logo=tauri&logoColor=black)](https://tauri.app/)
 
 [English](README.md) | **简体中文**
 
 [下载安装包](https://github.com/S1jinCheng/ON1Y/releases/latest) · [快速开始](#安装与启动) · [演示](#演示)
 
-
-
+</div>
 ---
 
 ## 描述
@@ -46,9 +46,11 @@
 
 On1y 是**本地优先**应用，没有公网在线 Demo，数据与 Cookie 都在你的电脑上。
 
-<img src="assets/demo.gif" alt="On1y 演示：同步、浏览、搜索与 AI 摘要" width="90%" />
+<div align="center">
+  <img src="assets/demo.gif" alt="On1y 演示：同步、浏览、搜索与 AI 摘要" width="90%" />
+</div>
 
-*安装 → 导入 Cookie → 同步订阅 → 浏览、搜索与 AI 摘要*
+<p align="center"><em>安装 → 导入 Cookie → 同步订阅 → 浏览、搜索与 AI 摘要</em></p>
 
 ---
 

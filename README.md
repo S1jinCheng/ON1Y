@@ -1,4 +1,5 @@
 
+<div align="center">
 
 # On1y
 
@@ -6,18 +7,17 @@
 
 **This project aims to return to basics: collect and organize the information we truly need, and build a library that represents our input. Our vision is not only a private, independent, passive aggregation platform—but one where each of us can create and share content grounded in what we've collected.**
 
-[License: MIT](LICENSE)
-[Release](https://github.com/S1jinCheng/ON1Y/releases/latest)
-[Python](https://www.python.org/)
-[Platform](https://github.com/S1jinCheng/ON1Y/releases/latest)
-[Tauri](https://tauri.app/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/S1jinCheng/ON1Y?label=release&color=brightgreen)](https://github.com/S1jinCheng/ON1Y/releases/latest)
+[![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Platform](https://img.shields.io/badge/Platform-Windows-0078D4?logo=windows&logoColor=white)](https://github.com/S1jinCheng/ON1Y/releases/latest)
+[![Tauri](https://img.shields.io/badge/Tauri-2-FFC131?logo=tauri&logoColor=black)](https://tauri.app/)
 
 **English** | [简体中文](README.zh-CN.md)
 
 [Download](https://github.com/S1jinCheng/ON1Y/releases/latest) · [Quick start](#install--run) · [Demo](#demo)
 
-
-
+</div>
 ---
 
 ## Description
@@ -46,9 +46,11 @@
 
 On1y is **local-first**. There is no public online demo — your data and cookies stay on your computer.
 
-<img src="assets/demo.gif" alt="On1y demo: sync, browse, search, and AI summaries" width="90%" />
+<div align="center">
+  <img src="assets/demo.gif" alt="On1y demo: sync, browse, search, and AI summaries" width="90%" />
+</div>
 
-*Install → import cookies → sync subscriptions → browse, search, and AI summaries*
+<p align="center"><em>Install → import cookies → sync subscriptions → browse, search, and AI summaries</em></p>
 
 ---
 
