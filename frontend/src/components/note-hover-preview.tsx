@@ -19,7 +19,7 @@ type NoteHoverPreviewProps = {
   className?: string;
 };
 
-function hasNoteContent(html: string | null | undefined): boolean {
+function hasNoteContent(html: string | null | undefined): html is string {
   if (!html) {
     return false;
   }

@@ -36,11 +36,24 @@ def channel_id_from_meta(meta: dict[str, Any]) -> str:
 
 
 def _avatar_from_channel_html(html: str) -> str:
+    from on1y.utils.youtube_account import (
+        _decode_json_string,
+        _find_channel_metadata,
+        _parse_yt_initial_data,
+        _thumbnail_url,
+    )
+
+    initial = _parse_yt_initial_data(html)
+    if initial:
+        meta = _find_channel_metadata(initial)
+        if meta:
+            url = _thumbnail_url(meta.get("avatar"))
+            if url:
+                return url
     match = _AVATAR_URL_RE.search(html)
     if not match:
         return ""
-    url = match.group(1).encode("utf-8").decode("unicode_escape")
-    return url.strip()
+    return _decode_json_string(match.group(1))
 
 
 def fetch_youtube_channel_avatar(

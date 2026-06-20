@@ -6,7 +6,7 @@ from pathlib import Path
 
 from on1y.config import get_settings
 
-COOKIE_PLATFORMS = ("youtube", "bilibili", "zhihu", "xiaohongshu", "twitter")
+COOKIE_PLATFORMS = ("youtube", "bilibili", "zhihu", "xiaohongshu", "twitter", "zlibrary")
 
 
 def user_dir(user_id: int) -> Path:
@@ -37,6 +37,25 @@ def user_economist_cache_dir(user_id: int) -> Path:
     path = user_dir(user_id) / "economist"
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def user_books_cache_dir(user_id: int) -> Path:
+    path = user_dir(user_id) / "books" / "cache"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def resolve_books_cache_dir(user_id: int, override: str | None) -> Path:
+    if override and str(override).strip():
+        path = Path(str(override).strip()).expanduser()
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except PermissionError as exc:
+            raise PermissionError(f"无权写入目录 {path}") from exc
+        except OSError as exc:
+            raise OSError(f"无法创建目录 {path}: {exc}") from exc
+        return path
+    return user_books_cache_dir(user_id)
 
 
 def user_feeds_path(user_id: int) -> Path:

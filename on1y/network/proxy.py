@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import logging
 import socket
+import time
 from typing import Any
+
 import httpx
 
 from on1y.config import Settings, get_settings
@@ -13,6 +15,19 @@ from on1y.network.settings import load_file_settings
 logger = logging.getLogger(__name__)
 
 _COMMON_PROXY_PORTS = (7890, 7897, 10809, 1080, 8080)
+_PROXY_CHECK_CACHE: dict[str, tuple[bool, float]] = {}
+_PROXY_CHECK_TTL_SECONDS = 90.0
+_YOUTUBE_PROBE_URL = "https://www.youtube.com/generate_204"
+_YOUTUBE_PROBE_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+    ),
+}
+
+
+def clear_proxy_check_cache() -> None:
+    _PROXY_CHECK_CACHE.clear()
 
 
 def _normalize_proxy_url(raw: str) -> str | None:
@@ -67,6 +82,36 @@ def probe_common_proxies() -> str | None:
     return None
 
 
+def proxy_can_reach_youtube(proxy: str, *, timeout: float = 4.0) -> bool:
+    """True when HTTPS to YouTube succeeds through *proxy* (cached briefly)."""
+    proxy = _normalize_proxy_url(proxy) or ""
+    if not proxy:
+        return False
+    now = time.monotonic()
+    cached = _PROXY_CHECK_CACHE.get(proxy)
+    if cached is not None and now - cached[1] < _PROXY_CHECK_TTL_SECONDS:
+        return cached[0]
+    result = test_proxy_reachability(proxy, timeout=timeout)
+    ok = bool(result.get("ok"))
+    _PROXY_CHECK_CACHE[proxy] = (ok, now)
+    if not ok:
+        logger.info(
+            "Proxy %s cannot reach YouTube (%s); falling back to direct connection",
+            proxy,
+            result.get("error") or result.get("status_code"),
+        )
+    return ok
+
+
+def _first_working_proxy(candidates: list[str | None]) -> str | None:
+    for candidate in candidates:
+        if not candidate:
+            continue
+        if proxy_can_reach_youtube(candidate):
+            return candidate
+    return None
+
+
 def effective_ytdlp_proxy(*, settings: Settings | None = None, user_id: int | None = None) -> str | None:
     settings = settings or get_settings()
     prefs = load_file_settings(user_id=user_id)
@@ -78,15 +123,13 @@ def effective_ytdlp_proxy(*, settings: Settings | None = None, user_id: int | No
     if mode == "manual":
         return manual or _normalize_proxy_url(settings.ytdlp_proxy or "")
 
-    # auto
-    for candidate in (
-        _normalize_proxy_url(settings.ytdlp_proxy or ""),
-        detect_system_proxy(),
-        probe_common_proxies(),
-    ):
-        if candidate:
-            return candidate
-    return None
+    return _first_working_proxy(
+        [
+            _normalize_proxy_url(settings.ytdlp_proxy or ""),
+            detect_system_proxy(),
+            probe_common_proxies(),
+        ]
+    )
 
 
 def httpx_client_kwargs(*, settings: Settings | None = None, user_id: int | None = None) -> dict[str, Any]:
@@ -110,7 +153,7 @@ def proxy_hint_message(*, settings: Settings | None = None, user_id: int | None 
 def test_proxy_reachability(
     proxy_url: str | None,
     *,
-    test_url: str = "https://www.youtube.com/generate_204",
+    test_url: str = _YOUTUBE_PROBE_URL,
     timeout: float = 8.0,
 ) -> dict[str, Any]:
     proxy = _normalize_proxy_url(proxy_url or "")
@@ -121,7 +164,7 @@ def test_proxy_reachability(
             proxy=proxy,
             timeout=timeout,
             follow_redirects=True,
-            headers={"User-Agent": "On1y/0.1"},
+            headers=_YOUTUBE_PROBE_HEADERS,
         ) as client:
             response = client.get(test_url)
         return {"ok": response.status_code < 500, "status_code": response.status_code, "proxy": proxy}

@@ -734,6 +734,56 @@ def create_app() -> FastAPI:
 
         return public_profile_view()
 
+    @app.post("/api/system/pick-folder")
+    def system_pick_folder() -> dict[str, Any]:
+        from on1y.system.folder_picker import pick_folder_dialog
+
+        path = pick_folder_dialog()
+        if path is None:
+            return {"path": None}
+        return {"path": path}
+
+    @app.post("/api/system/open-path")
+    def system_open_path(body: dict[str, Any]) -> dict[str, Any]:
+        import os
+        import sys
+        from pathlib import Path
+
+        from on1y.auth.context import get_effective_user_id
+        from on1y.books.settings_store import load_book_settings
+        from on1y.user.paths import resolve_books_cache_dir
+
+        raw = str(body.get("path") or "").strip()
+        if not raw:
+            raise HTTPException(status_code=400, detail="path is required")
+        target = Path(raw).expanduser()
+        try:
+            resolved = target.resolve(strict=False)
+        except OSError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not resolved.is_file():
+            raise HTTPException(status_code=400, detail="not a file")
+        uid = get_effective_user_id()
+        cache_root = resolve_books_cache_dir(uid, load_book_settings(uid).cache_dir).resolve()
+        try:
+            resolved.relative_to(cache_root)
+        except ValueError as exc:
+            raise HTTPException(status_code=403, detail="path not allowed") from exc
+        try:
+            if sys.platform == "win32":
+                os.startfile(resolved)  # noqa: S606
+            elif sys.platform == "darwin":
+                import subprocess
+
+                subprocess.run(["open", str(resolved)], check=False)
+            else:
+                import subprocess
+
+                subprocess.run(["xdg-open", str(resolved)], check=False)
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        return {"ok": True}
+
     @app.get("/api/app/desktop")
     def app_desktop_status() -> dict[str, Any]:
         from on1y import __version__
@@ -803,8 +853,9 @@ def create_app() -> FastAPI:
         from concurrent.futures import ThreadPoolExecutor
 
         from on1y.auth.context import get_effective_user_id
-        from on1y.cookies.loader import PLATFORM_COOKIE_ATTR, resolve_cookie_path
+        from on1y.cookies.loader import resolve_cookie_path
         from on1y.cookies.verify import verify_cookie_account
+        from on1y.user.paths import COOKIE_PLATFORMS
 
         uid = get_effective_user_id()
 
@@ -830,7 +881,7 @@ def create_app() -> FastAPI:
                 except Exception:
                     count = 0
             account: dict[str, Any] | None = None
-            if exists and verify and platform in {"bilibili", "youtube", "zhihu"}:
+            if exists and verify and platform in {"bilibili", "youtube", "zhihu", "zlibrary"}:
                 account = verify_cookie_account(
                     platform,
                     user_id=uid,
@@ -846,7 +897,7 @@ def create_app() -> FastAPI:
                 "account": account,
             }
 
-        platforms = list(PLATFORM_COOKIE_ATTR)
+        platforms = list(COOKIE_PLATFORMS)
         if not verify or len(platforms) <= 1:
             return [_one_row(p) for p in platforms]
 
@@ -872,10 +923,10 @@ def create_app() -> FastAPI:
     @app.post("/api/user/cookies/{platform}/verify")
     def verify_user_cookies(platform: str) -> dict[str, Any]:
         from on1y.auth.context import get_effective_user_id
-        from on1y.cookies.loader import PLATFORM_COOKIE_ATTR
+        from on1y.user.paths import COOKIE_PLATFORMS
         from on1y.cookies.verify import verify_cookie_account
 
-        if platform not in PLATFORM_COOKIE_ATTR:
+        if platform not in COOKIE_PLATFORMS:
             raise HTTPException(status_code=400, detail=f"unknown platform: {platform}")
         uid = get_effective_user_id()
         account = verify_cookie_account(platform, user_id=uid, force=True)
@@ -884,10 +935,10 @@ def create_app() -> FastAPI:
     @app.delete("/api/user/cookies/{platform}")
     def delete_user_cookies(platform: str) -> dict[str, Any]:
         from on1y.auth.context import get_effective_user_id
-        from on1y.cookies.loader import PLATFORM_COOKIE_ATTR
+        from on1y.user.paths import COOKIE_PLATFORMS
         from on1y.user.paths import user_cookie_path
 
-        if platform not in PLATFORM_COOKIE_ATTR:
+        if platform not in COOKIE_PLATFORMS:
             raise HTTPException(status_code=400, detail=f"unknown platform: {platform}")
         uid = get_effective_user_id()
         path = user_cookie_path(uid, platform)
@@ -905,9 +956,9 @@ def create_app() -> FastAPI:
         import json
 
         from on1y.cookies.import_user import persist_user_cookie_payload
-        from on1y.cookies.loader import PLATFORM_COOKIE_ATTR
+        from on1y.user.paths import COOKIE_PLATFORMS
 
-        if platform not in PLATFORM_COOKIE_ATTR:
+        if platform not in COOKIE_PLATFORMS:
             raise HTTPException(status_code=400, detail=f"unknown platform: {platform}")
         raw = await file.read()
         try:
@@ -924,14 +975,55 @@ def create_app() -> FastAPI:
     @app.post("/api/user/cookies/{platform}/import")
     def import_user_cookies_json(platform: str, body: CookieJsonImportRequest) -> dict[str, Any]:
         from on1y.cookies.import_user import persist_user_cookie_payload
-        from on1y.cookies.loader import PLATFORM_COOKIE_ATTR
+        from on1y.user.paths import COOKIE_PLATFORMS
 
-        if platform not in PLATFORM_COOKIE_ATTR:
+        if platform not in COOKIE_PLATFORMS:
             raise HTTPException(status_code=400, detail=f"unknown platform: {platform}")
         try:
             return persist_user_cookie_payload(platform, body.payload)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/user/cookies/{platform}/qr/start")
+    def start_cookie_qr_login(platform: str) -> dict[str, Any]:
+        from on1y.auth.context import get_effective_user_id
+        from on1y.user.paths import COOKIE_PLATFORMS
+        from on1y.cookies.qr_login import QR_LOGIN_PLATFORMS, start_qr_login
+
+        if platform not in COOKIE_PLATFORMS:
+            raise HTTPException(status_code=400, detail=f"unknown platform: {platform}")
+        if platform not in QR_LOGIN_PLATFORMS:
+            raise HTTPException(status_code=400, detail=f"QR login not available for {platform}")
+        uid = get_effective_user_id()
+        try:
+            return start_qr_login(platform, user_id=uid)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @app.get("/api/user/cookies/{platform}/qr/{session_id}")
+    def poll_cookie_qr_login(platform: str, session_id: str) -> dict[str, Any]:
+        from on1y.auth.context import get_effective_user_id
+        from on1y.user.paths import COOKIE_PLATFORMS
+        from on1y.cookies.qr_login import poll_qr_login
+
+        if platform not in COOKIE_PLATFORMS:
+            raise HTTPException(status_code=400, detail=f"unknown platform: {platform}")
+        uid = get_effective_user_id()
+        result = poll_qr_login(session_id, user_id=uid)
+        if result.get("platform") and result["platform"] != platform:
+            raise HTTPException(status_code=400, detail="platform mismatch")
+        return result
+
+    @app.delete("/api/user/cookies/{platform}/qr/{session_id}")
+    def cancel_cookie_qr_login(platform: str, session_id: str) -> dict[str, Any]:
+        from on1y.auth.context import get_effective_user_id
+        from on1y.user.paths import COOKIE_PLATFORMS
+        from on1y.cookies.qr_login import cancel_qr_login
+
+        if platform not in COOKIE_PLATFORMS:
+            raise HTTPException(status_code=400, detail=f"unknown platform: {platform}")
+        uid = get_effective_user_id()
+        return cancel_qr_login(session_id, user_id=uid)
 
     @app.patch("/api/user/profile")
     def patch_user_profile_api(body: UserProfilePatchRequest) -> dict[str, Any]:
@@ -1378,9 +1470,13 @@ def create_app() -> FastAPI:
         if src not in SUPPORTED_HOTLIST_SOURCES:
             raise HTTPException(status_code=400, detail=f"unsupported hotlist_source: {src}")
 
+        from on1y.auth.context import get_effective_user_id
+        from on1y.books.shelf import count_shelf_items
+
         storage = get_storage()
         try:
             hot_day = (hotlist_date or "").strip() or date_cls.today().isoformat()
+            uid = get_effective_user_id()
             return {
                 "favorites": storage.count_collection_items("favorites"),
                 "trash": storage.count_collection_items("trash"),
@@ -1389,7 +1485,362 @@ def create_app() -> FastAPI:
                 ),
                 "unread": storage.count_collection_items("unread"),
                 "notes": storage.count_collection_items("notes"),
+                "books": count_shelf_items(storage, uid),
             }
+        finally:
+            storage.close()
+
+    @app.get("/api/books/sources")
+    def books_sources_get() -> dict[str, Any]:
+        from on1y.auth.context import get_effective_user_id
+        from on1y.books.sources_store import load_book_sources
+
+        payload = load_book_sources(get_effective_user_id())
+        return payload.model_dump()
+
+    @app.put("/api/books/sources")
+    def books_sources_put(body: dict[str, Any]) -> dict[str, Any]:
+        from on1y.auth.context import get_effective_user_id
+        from on1y.books.models import BookSourcesFile
+        from on1y.books.sources_store import save_book_sources
+
+        try:
+            payload = BookSourcesFile.model_validate(body)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        uid = get_effective_user_id()
+        save_book_sources(uid, payload)
+        return payload.model_dump()
+
+    @app.post("/api/books/search")
+    def books_search(body: dict[str, Any]) -> dict[str, Any]:
+        from on1y.auth.context import get_effective_user_id
+        from on1y.books.search import search_books
+
+        query = str(body.get("query") or "").strip()
+        if not query:
+            raise HTTPException(status_code=400, detail="query is required")
+        source_ids = body.get("source_ids")
+        ids = [str(x) for x in source_ids] if isinstance(source_ids, list) else None
+        editions, links = search_books(get_effective_user_id(), query, source_ids=ids)
+        return {
+            "query": query,
+            "editions": [e.model_dump() for e in editions],
+            "links": [h.model_dump() for h in links],
+        }
+
+    @app.post("/api/books/detail")
+    def books_detail(body: dict[str, Any]) -> dict[str, Any]:
+        from on1y.auth.context import get_effective_user_id
+        from on1y.books.detail import load_book_detail
+
+        url = str(body.get("url") or "").strip()
+        if not url:
+            raise HTTPException(status_code=400, detail="url is required")
+        detail = load_book_detail(get_effective_user_id(), url)
+        if detail is None:
+            raise HTTPException(status_code=404, detail="book detail not found")
+        return detail.model_dump()
+
+    @app.get("/api/books/cover")
+    def books_cover_proxy(url: str = Query(..., min_length=8)) -> Any:
+        import httpx
+        from fastapi.responses import Response
+
+        from on1y.books.cover import cover_fetch_headers, cover_proxy_allowed, normalize_cover_url
+
+        target = normalize_cover_url(url)
+        if not target or not cover_proxy_allowed(target):
+            raise HTTPException(status_code=400, detail="cover url not allowed")
+        try:
+            with httpx.Client(timeout=20.0, follow_redirects=True) as client:
+                resp = client.get(target, headers=cover_fetch_headers(target))
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"cover fetch failed: {exc}") from exc
+        if resp.status_code >= 400:
+            raise HTTPException(status_code=502, detail=f"cover fetch failed: HTTP {resp.status_code}")
+        media = resp.headers.get("content-type") or "image/jpeg"
+        if not str(media).startswith("image/"):
+            media = "image/jpeg"
+        return Response(
+            content=resp.content,
+            media_type=str(media).split(";", 1)[0],
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
+
+    @app.get("/api/books/shelf")
+    def books_shelf_list(
+        status: str | None = Query(default=None),
+        limit: int = Query(default=200, ge=1, le=500),
+        offset: int = Query(default=0, ge=0),
+    ) -> dict[str, Any]:
+        from on1y.auth.context import get_effective_user_id
+        from on1y.books.shelf import list_shelf_items
+
+        uid = get_effective_user_id()
+        storage = get_storage()
+        try:
+            items = list_shelf_items(storage, uid, status=status, limit=limit, offset=offset)
+            return {
+                "items": [item.model_dump() for item in items],
+                "total": len(items),
+            }
+        finally:
+            storage.close()
+
+    @app.get("/api/books/shelf/{item_id}")
+    def books_shelf_get(item_id: int) -> dict[str, Any]:
+        from on1y.auth.context import get_effective_user_id
+        from on1y.books.knowledge_sync import prepare_shelf_item
+        from on1y.books.shelf import get_shelf_item
+
+        uid = get_effective_user_id()
+        storage = get_storage()
+        try:
+            item = get_shelf_item(storage, uid, item_id)
+            if item is None:
+                raise HTTPException(status_code=404, detail="book not found")
+            item = prepare_shelf_item(storage, uid, item)
+            return item.model_dump()
+        finally:
+            storage.close()
+
+    @app.get("/api/books/shelf/{item_id}/related")
+    def books_shelf_related(
+        item_id: int,
+        limit: int = Query(default=6, ge=1, le=12),
+    ) -> dict[str, Any]:
+        from on1y.auth.context import get_effective_user_id
+        from on1y.books.knowledge_sync import prepare_shelf_item
+        from on1y.books.shelf import get_shelf_item
+        from on1y.recommend.similar import find_related_items
+
+        uid = get_effective_user_id()
+        storage = get_storage()
+        try:
+            item = get_shelf_item(storage, uid, item_id)
+            if item is None:
+                raise HTTPException(status_code=404, detail="book not found")
+            item = prepare_shelf_item(storage, uid, item, auto_tag=False)
+            if item.raw_id is None:
+                return {"items": [], "scope": "library", "from_raw_id": None}
+            items = find_related_items(
+                storage,
+                from_raw_id=item.raw_id,
+                limit=limit,
+                scope="library",
+            )
+            return {"items": items, "scope": "library", "from_raw_id": item.raw_id}
+        finally:
+            storage.close()
+
+    @app.post("/api/books/shelf")
+    def books_shelf_create(body: dict[str, Any]) -> dict[str, Any]:
+        from on1y.auth.context import get_effective_user_id
+        from on1y.books.models import BookShelfCreate
+        from on1y.books.shelf import create_shelf_item
+
+        try:
+            payload = BookShelfCreate.model_validate(body)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        uid = get_effective_user_id()
+        storage = get_storage()
+        try:
+            item = create_shelf_item(storage, uid, payload)
+            from on1y.books.knowledge_sync import prepare_shelf_item
+
+            item = prepare_shelf_item(storage, uid, item)
+            return item.model_dump()
+        finally:
+            storage.close()
+
+    @app.patch("/api/books/shelf/{item_id}")
+    def books_shelf_update(item_id: int, body: dict[str, Any]) -> dict[str, Any]:
+        from on1y.auth.context import get_effective_user_id
+        from on1y.books.knowledge_sync import prepare_shelf_item, sync_shelf_tags_manual
+        from on1y.books.models import BookShelfUpdate
+        from on1y.books.shelf import get_shelf_item, update_shelf_item
+
+        try:
+            payload = BookShelfUpdate.model_validate(body)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        uid = get_effective_user_id()
+        storage = get_storage()
+        try:
+            item = update_shelf_item(storage, uid, item_id, payload)
+            if item is None:
+                raise HTTPException(status_code=404, detail="book not found")
+            if payload.tags is not None:
+                sync_shelf_tags_manual(storage, uid, item_id, payload.tags)
+                item = get_shelf_item(storage, uid, item_id) or item
+            elif any(
+                getattr(payload, field) is not None
+                for field in ("title", "author", "translator", "summary", "cover_url")
+            ):
+                item = prepare_shelf_item(storage, uid, item, auto_tag=False)
+            else:
+                item = get_shelf_item(storage, uid, item_id) or item
+            return item.model_dump()
+        finally:
+            storage.close()
+
+    @app.delete("/api/books/shelf/{item_id}")
+    def books_shelf_delete(item_id: int) -> dict[str, Any]:
+        from on1y.auth.context import get_effective_user_id
+        from on1y.books.shelf import delete_shelf_item
+
+        uid = get_effective_user_id()
+        storage = get_storage()
+        try:
+            ok = delete_shelf_item(storage, uid, item_id)
+            if not ok:
+                raise HTTPException(status_code=404, detail="book not found")
+            return {"ok": True}
+        finally:
+            storage.close()
+
+    @app.get("/api/books/shelf/{item_id}/cached")
+    def books_shelf_cached(item_id: int) -> dict[str, Any]:
+        from on1y.auth.context import get_effective_user_id
+        from on1y.books.cache_files import list_cached_ebooks
+        from on1y.books.shelf import get_shelf_item
+
+        uid = get_effective_user_id()
+        storage = get_storage()
+        try:
+            item = get_shelf_item(storage, uid, item_id)
+            if item is None:
+                raise HTTPException(status_code=404, detail="book not found")
+            files = list_cached_ebooks(uid, item.title, notes=item.notes)
+            return {"files": files}
+        finally:
+            storage.close()
+
+    @app.get("/api/books/settings")
+    def books_settings_get() -> dict[str, Any]:
+        from on1y.auth.context import get_effective_user_id
+        from on1y.books.settings_store import load_book_settings
+        from on1y.user.paths import resolve_books_cache_dir
+
+        uid = get_effective_user_id()
+        settings = load_book_settings(uid)
+        try:
+            resolved = resolve_books_cache_dir(uid, settings.cache_dir)
+        except (PermissionError, OSError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        payload = settings.model_dump()
+        payload["resolved_cache_dir"] = str(resolved)
+        return payload
+
+    @app.put("/api/books/settings")
+    def books_settings_put(body: dict[str, Any]) -> dict[str, Any]:
+        from on1y.auth.context import get_effective_user_id
+        from on1y.books.settings_store import BookSettings, load_book_settings, save_book_settings
+        from on1y.user.paths import resolve_books_cache_dir
+
+        uid = get_effective_user_id()
+        current = load_book_settings(uid)
+        try:
+            merged = current.model_copy(
+                update={
+                    k: body[k]
+                    for k in (
+                        "cache_dir",
+                        "zlib_base_url",
+                        "acquire_strategy",
+                        "preferred_format",
+                        "allowed_formats",
+                        "default_format",
+                        "annas_secret_key",
+                    )
+                    if k in body
+                }
+            )
+            payload = BookSettings.model_validate(merged.model_dump())
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        save_book_settings(uid, payload)
+        out = payload.model_dump()
+        try:
+            out["resolved_cache_dir"] = str(resolve_books_cache_dir(uid, payload.cache_dir))
+        except (PermissionError, OSError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return out
+
+    @app.post("/api/books/acquire/preview")
+    def books_acquire_preview(body: dict[str, Any]) -> dict[str, Any]:
+        from on1y.auth.context import get_effective_user_id
+        from on1y.books.acquire import preview_acquire_book
+        from on1y.exceptions import ConfigurationError
+
+        title = str(body.get("title") or "").strip()
+        if not title:
+            raise HTTPException(status_code=400, detail="title is required")
+        author = str(body.get("author") or "").strip() or None
+        translator = str(body.get("translator") or "").strip() or None
+        publisher = str(body.get("publisher") or "").strip() or None
+        isbn = str(body.get("isbn") or "").strip() or None
+        douban_cover_url = str(body.get("cover_url") or "").strip() or None
+        fmt = str(body.get("format") or "").strip().lower() or None
+        uid = get_effective_user_id()
+        try:
+            return preview_acquire_book(
+                uid,
+                title=title,
+                author=author,
+                translator=translator,
+                publisher=publisher,
+                isbn=isbn,
+                douban_cover_url=douban_cover_url,
+                fmt=fmt,
+            )
+        except ConfigurationError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @app.post("/api/books/acquire")
+    def books_acquire(body: dict[str, Any]) -> dict[str, Any]:
+        from on1y.auth.context import get_effective_user_id
+        from on1y.books.acquire import acquire_book
+        from on1y.exceptions import ConfigurationError
+
+        title = str(body.get("title") or "").strip()
+        if not title:
+            raise HTTPException(status_code=400, detail="title is required")
+        author = str(body.get("author") or "").strip() or None
+        translator = str(body.get("translator") or "").strip() or None
+        publisher = str(body.get("publisher") or "").strip() or None
+        isbn = str(body.get("isbn") or "").strip() or None
+        douban_url = str(body.get("douban_url") or "").strip() or None
+        fmt = str(body.get("format") or "").strip().lower() or None
+        add_to_shelf = bool(body.get("add_to_shelf", True))
+        candidate = body.get("candidate")
+        if candidate is not None and not isinstance(candidate, dict):
+            raise HTTPException(status_code=400, detail="candidate must be an object")
+        uid = get_effective_user_id()
+        storage = get_storage()
+        try:
+            return acquire_book(
+                uid,
+                storage,
+                title=title,
+                author=author,
+                translator=translator,
+                publisher=publisher,
+                isbn=isbn,
+                douban_url=douban_url,
+                fmt=fmt,
+                add_to_shelf=add_to_shelf,
+                candidate=candidate,
+            )
+        except ConfigurationError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            logger.exception("books_acquire failed for %r", title)
+            raise HTTPException(status_code=502, detail=f"下载失败：{exc}") from exc
         finally:
             storage.close()
 

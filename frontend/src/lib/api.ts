@@ -10,9 +10,28 @@ import {
   type ThemeRow,
   type ThemeSplitInput
 } from "@/lib/types";
-import type { EveningDigestArchive, EveningDigestResponse, EveningDigestStatus } from "@/lib/digest-types";
+import type {
+  EveningDigest,
+  EveningDigestArchive,
+  EveningDigestResponse,
+  EveningDigestStatus
+} from "@/lib/digest-types";
 import { isEveningDigestPending } from "@/lib/digest-types";
 import type { StatsDailyDigest, StatsOverview, WeeklyReview } from "@/lib/stats-types";
+import type {
+  BookAcquireCandidate,
+  BookAcquirePreview,
+  BookAcquireResult,
+  BookEditionHit,
+  BookFormat,
+  BookSearchHit,
+  BookShelfItem,
+  BookShelfRelated,
+  BookSettings,
+  BookSourcesFile,
+  BookStatus,
+  BookWorkDetail
+} from "@/lib/book-types";
 import {
   clearAuth,
   getAuthToken,
@@ -163,7 +182,7 @@ export function changePassword(input: {
   });
 }
 
-export type CookiePlatform = "youtube" | "bilibili" | "zhihu" | "xiaohongshu" | "twitter";
+export type CookiePlatform = "youtube" | "bilibili" | "zhihu" | "xiaohongshu" | "twitter" | "zlibrary";
 
 export type CookieAccountInfo = {
   valid: boolean | null;
@@ -392,6 +411,40 @@ export type CookieImportResult = {
   count: number;
   account?: CookieAccountInfo | null;
 };
+
+export type CookieQrLoginView = {
+  session_id: string;
+  platform: string;
+  method: "app_scan" | "browser";
+  status: string;
+  qr_content: string | null;
+  hint: string;
+  message?: string | null;
+  account?: CookieAccountInfo | null;
+  import_result?: CookieImportResult | null;
+};
+
+export function startCookieQrLogin(platform: CookiePlatform): Promise<CookieQrLoginView> {
+  return request<CookieQrLoginView>(`/api/user/cookies/${platform}/qr/start`, {
+    method: "POST"
+  });
+}
+
+export function pollCookieQrLogin(
+  platform: CookiePlatform,
+  sessionId: string
+): Promise<CookieQrLoginView> {
+  return request<CookieQrLoginView>(`/api/user/cookies/${platform}/qr/${sessionId}`);
+}
+
+export function cancelCookieQrLogin(
+  platform: CookiePlatform,
+  sessionId: string
+): Promise<{ cancelled: boolean }> {
+  return request<{ cancelled: boolean }>(`/api/user/cookies/${platform}/qr/${sessionId}`, {
+    method: "DELETE"
+  });
+}
 
 export function importCookieJson(
   platform: CookiePlatform,
@@ -647,6 +700,7 @@ export function getCollectionCounts(params?: {
   hotlist: number;
   unread: number;
   notes: number;
+  books: number;
 }> {
   const query = new URLSearchParams();
   if (params?.hotlistDate) {
@@ -656,9 +710,14 @@ export function getCollectionCounts(params?: {
     query.set("hotlist_source", params.hotlistSource);
   }
   const suffix = query.toString() ? `?${query.toString()}` : "";
-  return request<{ favorites: number; trash: number; hotlist: number; unread: number; notes: number }>(
-    `/api/knowledge/collections${suffix}`
-  );
+  return request<{
+    favorites: number;
+    trash: number;
+    hotlist: number;
+    unread: number;
+    notes: number;
+    books: number;
+  }>(`/api/knowledge/collections${suffix}`);
 }
 
 export function getStatsOverview(days = 90): Promise<StatsOverview> {
@@ -1329,4 +1388,155 @@ type PlatformSyncReport = {
 
 export function getSubscriptionSyncStatus(): Promise<SubscriptionSyncStatus> {
   return request<SubscriptionSyncStatus>("/api/subscriptions/sync/status");
+}
+
+export function fetchBookSources(): Promise<BookSourcesFile> {
+  return request<BookSourcesFile>("/api/books/sources");
+}
+
+export function saveBookSources(payload: BookSourcesFile): Promise<BookSourcesFile> {
+  return request<BookSourcesFile>("/api/books/sources", {
+    method: "PUT",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function fetchBookSettings(): Promise<BookSettings> {
+  return request<BookSettings>("/api/books/settings");
+}
+
+export function pickFolderPath(): Promise<{ path: string | null }> {
+  return request<{ path: string | null }>("/api/system/pick-folder", { method: "POST" });
+}
+
+export function openLocalPath(path: string): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>("/api/system/open-path", {
+    method: "POST",
+    body: JSON.stringify({ path })
+  });
+}
+
+export function fetchShelfCachedFiles(
+  itemId: number
+): Promise<{ files: { format: string; path: string }[] }> {
+  return request<{ files: { format: string; path: string }[] }>(`/api/books/shelf/${itemId}/cached`);
+}
+
+export function saveBookSettings(payload: Partial<BookSettings>): Promise<BookSettings> {
+  return request<BookSettings>("/api/books/settings", {
+    method: "PUT",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function previewAcquireBook(input: {
+  title: string;
+  author?: string | null;
+  translator?: string | null;
+  publisher?: string | null;
+  isbn?: string | null;
+  cover_url?: string | null;
+  format?: BookFormat;
+}): Promise<BookAcquirePreview> {
+  return request<BookAcquirePreview>("/api/books/acquire/preview", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
+export function acquireBook(input: {
+  title: string;
+  author?: string | null;
+  translator?: string | null;
+  publisher?: string | null;
+  isbn?: string | null;
+  douban_url?: string | null;
+  format?: BookFormat;
+  add_to_shelf?: boolean;
+  candidate?: BookAcquireCandidate;
+}): Promise<BookAcquireResult> {
+  return request<BookAcquireResult>("/api/books/acquire", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
+export function searchBooks(input: {
+  query: string;
+  source_ids?: string[];
+}): Promise<{ query: string; editions: BookEditionHit[]; links: BookSearchHit[] }> {
+  return request<{ query: string; editions: BookEditionHit[]; links: BookSearchHit[] }>(
+    "/api/books/search",
+    {
+      method: "POST",
+      body: JSON.stringify(input)
+    }
+  );
+}
+
+export function fetchBookDetail(url: string): Promise<BookWorkDetail> {
+  return request<BookWorkDetail>("/api/books/detail", {
+    method: "POST",
+    body: JSON.stringify({ url })
+  });
+}
+
+export function fetchBookShelfItem(id: number): Promise<BookShelfItem> {
+  return request<BookShelfItem>(`/api/books/shelf/${id}`);
+}
+
+export function fetchRelatedShelfBooks(
+  id: number,
+  limit = 6
+): Promise<{ items: KnowledgeItem[]; scope: string; from_raw_id: number | null }> {
+  return request<{ items: KnowledgeItem[]; scope: string; from_raw_id: number | null }>(
+    `/api/books/shelf/${id}/related?limit=${limit}`
+  );
+}
+
+export function listBookShelf(status?: BookStatus): Promise<{ items: BookShelfItem[]; total: number }> {
+  const query = status ? `?status=${encodeURIComponent(status)}` : "";
+  return request<{ items: BookShelfItem[]; total: number }>(`/api/books/shelf${query}`);
+}
+
+export function createBookShelfItem(input: {
+  title: string;
+  author?: string | null;
+  status?: BookStatus;
+  links: { label: string; url: string }[];
+  notes?: string | null;
+}): Promise<BookShelfItem> {
+  return request<BookShelfItem>("/api/books/shelf", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
+export function updateBookShelfItem(
+  id: number,
+  input: {
+    title?: string;
+    author?: string | null;
+    translator?: string | null;
+    publisher?: string | null;
+    cover_url?: string | null;
+    summary?: string | null;
+    status?: BookStatus;
+    links?: { label: string; url: string }[];
+    notes?: string | null;
+    user_note_html?: string | null;
+    importance?: number | null;
+    theme_slug?: string | null;
+    tags?: string[];
+    cached_format?: string | null;
+  }
+): Promise<BookShelfItem> {
+  return request<BookShelfItem>(`/api/books/shelf/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(input)
+  });
+}
+
+export function deleteBookShelfItem(id: number): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>(`/api/books/shelf/${id}`, { method: "DELETE" });
 }

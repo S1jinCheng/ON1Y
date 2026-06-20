@@ -55,28 +55,8 @@ def channels_from_file(path: Path) -> list[tuple[str, str | None]]:
     return rows
 
 
-def channels_from_ytdlp(
-    *,
-    max_channels: int,
-    settings: Settings | None = None,
-    cookie_path: Path | None = None,
-    user_id: int | None = None,
-) -> list[tuple[str, str | None]]:
+def _extract_channels(opts: dict[str, Any], *, max_channels: int) -> list[tuple[str, str | None]]:
     import yt_dlp
-
-    settings = settings or get_settings()
-    from on1y.cookies.loader import resolve_cookie_path
-
-    path = cookie_path or resolve_cookie_path("youtube", settings, user_id=user_id)
-    opts = build_ytdlp_opts(cookie_path=path)
-    opts.update(
-        {
-            "quiet": True,
-            "no_warnings": True,
-            "extract_flat": True,
-            "playlistend": max_channels,
-        }
-    )
 
     seen: set[str] = set()
     rows: list[tuple[str, str | None]] = []
@@ -111,6 +91,30 @@ def channels_from_ytdlp(
                 if len(rows) >= max_channels:
                     return rows
     return rows
+
+
+def channels_from_ytdlp(
+    *,
+    max_channels: int,
+    settings: Settings | None = None,
+    cookie_path: Path | None = None,
+    user_id: int | None = None,
+) -> list[tuple[str, str | None]]:
+    settings = settings or get_settings()
+    from on1y.cookies.loader import resolve_cookie_path
+    from on1y.extract.ytdlp_util import youtube_tab_extractor_args
+
+    path = cookie_path or resolve_cookie_path("youtube", settings, user_id=user_id)
+    opts = build_ytdlp_opts(cookie_path=path)
+    opts.update(
+        {
+            "extract_flat": True,
+            "playlistend": max_channels,
+            "extractor_args": youtube_tab_extractor_args(),
+        }
+    )
+
+    return _extract_channels(opts, max_channels=max_channels)
 
 
 def resolve_channel_ids(rows: list[tuple[str, str | None]]) -> list[tuple[str, str]]:

@@ -23,6 +23,7 @@ _PUBLIC_API_PREFIXES = (
     "/api/auth/login",
     "/api/auth/register",
     "/api/auth/status",
+    "/api/books/cover",
 )
 
 

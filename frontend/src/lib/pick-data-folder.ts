@@ -1,3 +1,5 @@
+import { pickFolderPath } from "@/lib/api";
+
 type TauriGlobals = {
   core?: { invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> };
 };
@@ -13,8 +15,7 @@ export function isDesktopShell(): boolean {
   return Boolean(tauriGlobals()?.core?.invoke);
 }
 
-/** Native folder picker (desktop). Returns absolute path or null if cancelled. */
-export async function pickDataFolder(): Promise<string | null> {
+async function pickFolderTauri(): Promise<string | null> {
   const tauri = tauriGlobals();
   if (!tauri?.core?.invoke) {
     return null;
@@ -29,3 +30,19 @@ export async function pickDataFolder(): Promise<string | null> {
     return null;
   }
 }
+
+/** Native folder picker (Tauri desktop, or server dialog for web UI). */
+export async function pickFolder(): Promise<string | null> {
+  if (isDesktopShell()) {
+    return pickFolderTauri();
+  }
+  try {
+    const { path } = await pickFolderPath();
+    return path?.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/** @deprecated use pickFolder */
+export const pickDataFolder = pickFolder;

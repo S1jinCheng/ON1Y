@@ -35,8 +35,16 @@ def build_ytdlp_opts(
         netscape = load_cookies_for_ytdlp(cookie_path, required=required)
         if netscape is not None:
             opts["cookiefile"] = str(netscape)
+            opts.setdefault(
+                "extractor_args",
+                {"youtubetab": {"skip": ["authcheck"]}},
+            )
     opts.update(overrides)
     return opts
+
+
+def youtube_tab_extractor_args() -> dict[str, Any]:
+    return {"youtubetab": {"skip": ["authcheck"]}}
 
 
 def parse_subtitle_langs_from_settings() -> list[str]:

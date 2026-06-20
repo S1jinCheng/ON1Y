@@ -11,10 +11,27 @@ def is_hotlist_row_sql(table_alias: str = "r") -> str:
     return f"{hotlist_source_expr(table_alias)} != ''"
 
 
+def is_book_shelf_row_sql(table_alias: str = "r") -> str:
+    """True when row is a bookshelf shadow entry (not subscription feed)."""
+    return (
+        f"COALESCE({table_alias}.platform, '') = 'book' "
+        f"OR COALESCE(json_extract({table_alias}.source_meta, '$.book_shelf'), '') IN ('1', 'true', 'True')"
+    )
+
+
 def is_feed_row_sql(table_alias: str = "r") -> str:
-    return f"{hotlist_source_expr(table_alias)} = ''"
+    return (
+        f"{hotlist_source_expr(table_alias)} = '' "
+        f"AND NOT ({is_book_shelf_row_sql(table_alias)})"
+    )
 
 
-def is_feed_row_meta(meta: dict[str, object] | None) -> bool:
-    """True when *meta* belongs to subscription/feed, not hot-list."""
-    return not str((meta or {}).get("hotlist_source") or "").strip()
+def is_feed_row_meta(meta: dict[str, object] | None, *, platform: str | None = None) -> bool:
+    """True when *meta* belongs to subscription/feed, not hot-list or bookshelf."""
+    if str((meta or {}).get("hotlist_source") or "").strip():
+        return False
+    if (meta or {}).get("book_shelf"):
+        return False
+    if (platform or "").strip().lower() == "book":
+        return False
+    return True

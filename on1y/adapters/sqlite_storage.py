@@ -28,7 +28,7 @@ from on1y.utils.json_util import dumps_json, dumps_meta, loads_json_list, loads_
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 18
 SCHEMA_PATH = PROJECT_ROOT / "sql" / "schema.sql"
 SCHEMA_V2_PATH = PROJECT_ROOT / "sql" / "schema_v2.sql"
 SCHEMA_V3_PATH = PROJECT_ROOT / "sql" / "schema_v3.sql"
@@ -40,6 +40,11 @@ SCHEMA_V8_PATH = PROJECT_ROOT / "sql" / "schema_v8.sql"
 SCHEMA_V9_PATH = PROJECT_ROOT / "sql" / "schema_v9.sql"
 SCHEMA_V10_PATH = PROJECT_ROOT / "sql" / "schema_v10.sql"
 SCHEMA_V11_PATH = PROJECT_ROOT / "sql" / "schema_v11.sql"
+SCHEMA_V14_PATH = PROJECT_ROOT / "sql" / "schema_v14.sql"
+SCHEMA_V15_PATH = PROJECT_ROOT / "sql" / "schema_v15.sql"
+SCHEMA_V16_PATH = PROJECT_ROOT / "sql" / "schema_v16.sql"
+SCHEMA_V17_PATH = PROJECT_ROOT / "sql" / "schema_v17.sql"
+SCHEMA_V18_PATH = PROJECT_ROOT / "sql" / "schema_v18.sql"
 
 
 class SqliteStorage:
@@ -260,6 +265,56 @@ class SqliteStorage:
                 (13,),
             )
             logger.info("Applied schema version 13 to %s", self._db_path)
+            current = 13
+        if current < 14:
+            if not SCHEMA_V14_PATH.is_file():
+                raise StorageError(f"Schema file not found: {SCHEMA_V14_PATH}")
+            conn.executescript(SCHEMA_V14_PATH.read_text(encoding="utf-8"))
+            conn.execute(
+                "INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)",
+                (14,),
+            )
+            logger.info("Applied schema version 14 to %s", self._db_path)
+            current = 14
+        if current < 15:
+            if not SCHEMA_V15_PATH.is_file():
+                raise StorageError(f"Schema file not found: {SCHEMA_V15_PATH}")
+            conn.executescript(SCHEMA_V15_PATH.read_text(encoding="utf-8"))
+            conn.execute(
+                "INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)",
+                (15,),
+            )
+            logger.info("Applied schema version 15 to %s", self._db_path)
+            current = 15
+        if current < 16:
+            if not SCHEMA_V16_PATH.is_file():
+                raise StorageError(f"Schema file not found: {SCHEMA_V16_PATH}")
+            conn.executescript(SCHEMA_V16_PATH.read_text(encoding="utf-8"))
+            conn.execute(
+                "INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)",
+                (16,),
+            )
+            logger.info("Applied schema version 16 to %s", self._db_path)
+            current = 16
+        if current < 17:
+            if not SCHEMA_V17_PATH.is_file():
+                raise StorageError(f"Schema file not found: {SCHEMA_V17_PATH}")
+            conn.executescript(SCHEMA_V17_PATH.read_text(encoding="utf-8"))
+            conn.execute(
+                "INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)",
+                (17,),
+            )
+            logger.info("Applied schema version 17 to %s", self._db_path)
+            current = 17
+        if current < 18:
+            if not SCHEMA_V18_PATH.is_file():
+                raise StorageError(f"Schema file not found: {SCHEMA_V18_PATH}")
+            conn.executescript(SCHEMA_V18_PATH.read_text(encoding="utf-8"))
+            conn.execute(
+                "INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)",
+                (18,),
+            )
+            logger.info("Applied schema version 18 to %s", self._db_path)
 
     def _table_exists(self, conn: sqlite3.Connection, name: str) -> bool:
         row = conn.execute(

@@ -3,6 +3,7 @@
 import * as Select from "@radix-ui/react-select";
 import {
   BarChart3,
+  BookOpen,
   CheckSquare,
   ChevronDown,
   ExternalLink,
@@ -25,11 +26,13 @@ import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 
 import { ColdStartFloatingPanel } from "@/components/cold-start-floating-panel";
 import { AppUpdateBanner } from "@/components/app-update-banner";
+import { BookAcquireNoticeBar, type BookAcquireNotice } from "@/components/book-acquire-notice";
 import { PipelineAlertsBanner } from "@/components/pipeline-alerts-banner";
 import { FirstRunGuide } from "@/components/first-run-guide";
 import { FeedItemCard } from "@/components/feed-item-card";
 import { ThemeMovePopover } from "@/components/theme-move-popover";
 import { NotesPanel } from "@/components/notes-panel";
+import { BooksDetailColumn, BooksListColumn } from "@/components/books-panel";
 import { invalidateNotePreviewCache } from "@/components/note-hover-preview";
 import { OriginalTextPanel } from "@/components/original-text-panel";
 import { ContentTypeIndicator } from "@/components/content-type-indicator";
@@ -55,6 +58,7 @@ import {
   runFullSync,
   type FullSyncStatus,
   economistEpubDownloadUrl,
+  fetchBookShelfItem,
   getEconomistWeeks,
   getKnowledgeItems,
   getStatsOverview,
@@ -85,6 +89,7 @@ import {
   type ReaderContent,
   type ThemeRow
 } from "@/lib/types";
+import type { BookEditionHit, BookShelfItem } from "@/lib/book-types";
 import { sortKnowledgeItems, sortOptionsForUi } from "@/lib/sort-knowledge-items";
 import { getUserProfile, patchUserProfile } from "@/lib/api";
 import { loadStoredLocale, persistStoredLocale } from "@/lib/locale-preference";
@@ -248,7 +253,8 @@ export default function KnowledgeWorkbench(): JSX.Element {
   const isFavorites = collection === "favorites";
   const isHotlist = collection === "hotlist";
   const isNotes = collection === "notes";
-  const isFeedBrowse = !isTrash && !isFavorites && !isHotlist && !isNotes;
+  const isBooks = collection === "books";
+  const isFeedBrowse = !isTrash && !isFavorites && !isHotlist && !isNotes && !isBooks;
   const [unreadOnly, setUnreadOnly] = useState(false);
   const [minImportance, setMinImportance] = useState<number | null>(null);
 
@@ -288,13 +294,20 @@ export default function KnowledgeWorkbench(): JSX.Element {
     hotlist: number;
     unread: number;
     notes: number;
+    books: number;
   }>({
     favorites: 0,
     trash: 0,
     hotlist: 0,
     unread: 0,
-    notes: 0
+    notes: 0,
+    books: 0
   });
+  const [activeBook, setActiveBook] = useState<BookShelfItem | null>(null);
+  const [activeEdition, setActiveEdition] = useState<BookEditionHit | null>(null);
+  const [manualAddBook, setManualAddBook] = useState(false);
+  const [bookAcquireNotice, setBookAcquireNotice] = useState<BookAcquireNotice | null>(null);
+  const [booksRefreshKey, setBooksRefreshKey] = useState(0);
   const [feedDate, setFeedDate] = useState<string | null>(null);
   const [calendarMonth, setCalendarMonth] = useState<Date>(() => {
     const now = new Date();
@@ -324,8 +337,8 @@ export default function KnowledgeWorkbench(): JSX.Element {
   );
 
   const sortOptions = useMemo(
-    () => sortOptionsForUi(locale, hasSearch, collection),
-    [locale, hasSearch, collection]
+    () => sortOptionsForUi(locale, hasSearch, isBooks ? "feed" : collection),
+    [locale, hasSearch, collection, isBooks]
   );
   const importanceFilterOptions = useMemo(
     () => [
@@ -502,7 +515,12 @@ export default function KnowledgeWorkbench(): JSX.Element {
       tagId: isHotlist ? undefined : selectedTagId,
       q: isHotlist ? undefined : query,
       platform: isHotlist ? undefined : filterValue(platform),
-      collection: (isFeedBrowse ? "feed" : collection) as KnowledgeCollection,
+      collection: (isFeedBrowse ? "feed" : isBooks ? "feed" : collection) as
+        | "feed"
+        | "favorites"
+        | "trash"
+        | "hotlist"
+        | "notes",
       hotlistDate: isHotlist ? hotlistDate : undefined,
       hotlistSource: isHotlist ? hotlistSource : undefined,
       feedDate: isFeedBrowse && feedDate ? feedDate : undefined,
@@ -786,6 +804,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
       void startColdStartJob();
     };
     const onSettingsClosed = (): void => {
+      setBooksRefreshKey((k) => k + 1);
       void (async () => {
         try {
           const profile = await getUserProfile();
@@ -902,6 +921,9 @@ export default function KnowledgeWorkbench(): JSX.Element {
   useEffect(() => {
     if (!feedFiltersReadyRef.current) {
       feedFiltersReadyRef.current = true;
+      return;
+    }
+    if (isBooks) {
       return;
     }
     let cancelled = false;
@@ -1051,6 +1073,9 @@ export default function KnowledgeWorkbench(): JSX.Element {
     setItemTotal(undefined);
     setActive(undefined);
     setReader(undefined);
+    setActiveBook(null);
+    setActiveEdition(null);
+    setManualAddBook(false);
     if (next !== "feed") {
       setFeedDate(null);
       setUnreadOnly(false);
@@ -1374,6 +1399,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {!isBooks ? (
           <div className="on1y-glass-trigger inline-flex items-center gap-2 rounded-md px-2 py-1.5">
             <Search className="h-4 w-4 text-muted" />
             <input
@@ -1383,7 +1409,8 @@ export default function KnowledgeWorkbench(): JSX.Element {
               className="w-56 bg-transparent text-sm text-foreground outline-none"
             />
           </div>
-          {query.trim() && searchTotal !== undefined ? (
+          ) : null}
+          {!isBooks && query.trim() && searchTotal !== undefined ? (
             <span className="text-xs text-muted">
               {ui("searchResults").replace("{n}", String(searchTotal))}
               {searchEngine ? ` · ${searchEngine}` : ""}
@@ -1408,6 +1435,13 @@ export default function KnowledgeWorkbench(): JSX.Element {
 
       <AppUpdateBanner locale={locale} />
       <PipelineAlertsBanner locale={locale} />
+      {isBooks ? (
+        <BookAcquireNoticeBar
+          locale={locale}
+          notice={bookAcquireNotice}
+          onDismiss={() => setBookAcquireNotice(null)}
+        />
+      ) : null}
 
       {readerExpanded && active ? (
         <PanelGroup key="reader-expanded" direction="horizontal" className="min-h-0 flex-1">
@@ -1575,6 +1609,21 @@ export default function KnowledgeWorkbench(): JSX.Element {
                   </button>
                   <button
                     type="button"
+                    onClick={() => switchCollection("books")}
+                    className={`flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-sm transition-colors ${glassNavClass(
+                      isBooks
+                    )}`}
+                  >
+                    <span className="inline-flex items-center gap-1.5">
+                      <BookOpen className="h-3.5 w-3.5" />
+                      {ui("collectionBooks")}
+                    </span>
+                    <span className={`text-xs ${isBooks ? GLASS_MUTED : "text-muted"}`}>
+                      {collectionCounts.books}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => switchCollection("hotlist")}
                     className={`flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-sm transition-colors ${glassNavClass(
                       isHotlist
@@ -1626,6 +1675,50 @@ export default function KnowledgeWorkbench(): JSX.Element {
         <PanelResizeHandle className="w-px bg-border" />
 
         <Panel minSize={20} defaultSize={24} className="min-h-0 overflow-hidden">
+          {isBooks ? (
+            <div className="flex h-full min-h-0 flex-col border-r border-border p-3">
+              <h2 className="mb-3 shrink-0 text-xs font-medium uppercase tracking-wider text-muted">
+                {ui("collectionBooks")} ({collectionCounts.books})
+              </h2>
+              <div className="min-h-0 flex-1">
+                <BooksListColumn
+                  key={booksRefreshKey}
+                  locale={locale}
+                  activeId={manualAddBook ? null : activeBook?.id ?? null}
+                  activeEditionId={manualAddBook ? null : activeEdition?.edition_id ?? null}
+                  manualAdd={manualAddBook}
+                  onAcquireNotice={setBookAcquireNotice}
+                  onSelect={(item) => {
+                    setManualAddBook(false);
+                    setActiveEdition(null);
+                    setActiveBook(item);
+                  }}
+                  onSelectEdition={(edition) => {
+                    setManualAddBook(false);
+                    setActiveBook(null);
+                    setActiveEdition(edition);
+                  }}
+                  onStartManualAdd={() => {
+                    setActiveBook(null);
+                    setActiveEdition(null);
+                    setManualAddBook(true);
+                  }}
+                  onShelfChanged={() => {
+                    setBooksRefreshKey((k) => k + 1);
+                    void getCollectionCounts().then(setCollectionCounts);
+                  }}
+                  onEditionShelfAdded={(item) => {
+                    setManualAddBook(false);
+                    setActiveEdition(null);
+                    setActiveBook(item);
+                    setBooksRefreshKey((k) => k + 1);
+                    void getCollectionCounts().then(setCollectionCounts);
+                  }}
+                  onMessage={setMessage}
+                />
+              </div>
+            </div>
+          ) : (
           <ColumnScroll
             className="border-r border-border p-3"
             scrollRef={feedScrollRef}
@@ -1970,12 +2063,49 @@ export default function KnowledgeWorkbench(): JSX.Element {
                 ) : null}
               </div>
           </ColumnScroll>
+          )}
         </Panel>
 
         <PanelResizeHandle className="w-px bg-border" />
 
         <Panel minSize={22} defaultSize={58} className="min-h-0 overflow-hidden">
-          {active ? (
+          {isBooks ? (
+            <BooksDetailColumn
+              locale={locale}
+              item={activeBook}
+              edition={activeEdition}
+              manualAdd={manualAddBook}
+              onAcquireNotice={setBookAcquireNotice}
+              onSaved={(item) => {
+                setManualAddBook(false);
+                setActiveEdition(null);
+                setActiveBook(item);
+                setBooksRefreshKey((k) => k + 1);
+                void getCollectionCounts().then(setCollectionCounts);
+              }}
+              onDeleted={() => {
+                setActiveBook(null);
+                setBooksRefreshKey((k) => k + 1);
+                void getCollectionCounts().then(setCollectionCounts);
+              }}
+              onCancelManual={() => setManualAddBook(false)}
+              onMessage={setMessage}
+              onSelectShelfItem={(id) => {
+                void fetchBookShelfItem(id).then((row) => {
+                  setManualAddBook(false);
+                  setActiveEdition(null);
+                  setActiveBook(row);
+                });
+              }}
+              onSelectKnowledgeItem={(item) => {
+                setManualAddBook(false);
+                setActiveEdition(null);
+                setActiveBook(null);
+                switchCollection("feed");
+                void selectItem(item);
+              }}
+            />
+          ) : active ? (
             <ColumnScroll className="border-r border-border bg-surface">
               <div className="space-y-0">
               <div className="space-y-3 border-b border-border p-4">

@@ -24,10 +24,32 @@ def send_epub_to_kindle(
     settings: object | None = None,
 ) -> None:
     """Email an EPUB to a @kindle.com address (must send from approved Amazon email)."""
-    _ = settings  # legacy callers may still pass Settings; SMTP is per-user now
-    path = Path(epub_path)
+    send_book_to_kindle(epub_path, to_address=to_address, subject=subject, settings=settings)
+
+
+def _mime_subtype(path: Path) -> str:
+    ext = path.suffix.lower()
+    if ext == ".epub":
+        return "epub"
+    if ext == ".mobi":
+        return "mobi"
+    if ext == ".pdf":
+        return "pdf"
+    return "octet-stream"
+
+
+def send_book_to_kindle(
+    book_path: Path,
+    *,
+    to_address: str,
+    subject: str,
+    settings: object | None = None,
+) -> None:
+    """Email EPUB/MOBI/PDF to a @kindle.com address."""
+    _ = settings
+    path = Path(book_path)
     if not path.is_file():
-        raise FileNotFoundError(f"EPUB not found: {path}")
+        raise FileNotFoundError(f"Book file not found: {path}")
     to_addr = to_address.strip()
     if not to_addr.endswith("@kindle.com"):
         logger.warning("Kindle address %s does not end with @kindle.com", to_addr)
@@ -47,8 +69,8 @@ def send_epub_to_kindle(
         smtp_cfg.use_tls,
     )
     body = (
-        "Sent from On1y — The Economist weekly EPUB.\n"
-        "If conversion fails, convert to MOBI or use Amazon's Send to Kindle app."
+        f"Sent from On1y — {subject}.\n"
+        "If conversion fails, use Amazon's Send to Kindle app."
     )
     msg = MIMEMultipart()
     msg["From"] = from_addr
@@ -56,21 +78,22 @@ def send_epub_to_kindle(
     msg["Subject"] = subject[:200]
     msg.attach(MIMEText(body, "plain", "utf-8"))
 
+    subtype = _mime_subtype(path)
     with path.open("rb") as fh:
-        part = MIMEApplication(fh.read(), _subtype="epub")
+        part = MIMEApplication(fh.read(), _subtype=subtype)
     part.add_header("Content-Disposition", "attachment", filename=path.name)
     msg.attach(part)
 
     logger.info("Sending %s to Kindle %s via %s", path.name, to_addr, host)
     if use_tls:
-        with smtplib.SMTP(host, port, timeout=60) as smtp:
+        with smtplib.SMTP(host, port, timeout=120) as smtp:
             smtp.ehlo()
             smtp.starttls()
             smtp.ehlo()
             smtp.login(user, password)
             smtp.sendmail(from_addr, [to_addr], msg.as_string())
     else:
-        with smtplib.SMTP_SSL(host, port, timeout=60) as smtp:
+        with smtplib.SMTP_SSL(host, port, timeout=120) as smtp:
             smtp.login(user, password)
             smtp.sendmail(from_addr, [to_addr], msg.as_string())
     logger.info("Kindle email sent: %s", subject)

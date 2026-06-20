@@ -2,6 +2,7 @@
 
 import {
   Bot,
+  BookOpen,
   ClipboardPaste,
   Cookie,
   Download,
@@ -9,6 +10,7 @@ import {
   Info,
   KeyRound,
   Loader2,
+  QrCode,
   RefreshCw,
   SlidersHorizontal,
   Trash2,
@@ -54,7 +56,10 @@ import {
   testLlmSettings,
   testSmtpSettings,
   updateAuthProfile,
-  uploadCookieFile,
+  fetchBookSettings,
+  saveBookSettings,
+  fetchBookSources,
+  saveBookSources,
   type AuthUser,
   type CookieAccountInfo,
   type CookiePlatform,
@@ -70,6 +75,7 @@ import {
 import { getRecentAuthUsernames } from "@/lib/auth";
 import { notifyAppearanceChange } from "@/components/appearance-provider";
 import { InitialSyncSection } from "@/components/initial-sync-section";
+import { CookieQrLoginDialog } from "@/components/cookie-qr-login-dialog";
 import { type AppearanceMode, persistStoredAppearance } from "@/lib/appearance";
 import type { Locale } from "@/lib/i18n";
 import {
@@ -78,8 +84,12 @@ import {
   type SettingsTabKey
 } from "@/lib/open-settings";
 import { persistStoredLocale } from "@/lib/locale-preference";
-import { isDesktopShell, pickDataFolder } from "@/lib/pick-data-folder";
+import { isDesktopShell, pickFolder } from "@/lib/pick-data-folder";
+import type { BookFormat } from "@/lib/book-types";
+import { buildBuiltinSourcesSave, readBuiltinToggles } from "@/lib/book-builtin";
 import { saveArchiveFile, triggerBrowserFileDownload } from "@/lib/save-archive-file";
+
+const BOOK_FORMATS: BookFormat[] = ["epub", "pdf", "mobi"];
 
 type TabKey = SettingsTabKey;
 
@@ -93,10 +103,13 @@ type Props = {
   onMessage?: (message: string) => void;
 };
 
+const COOKIE_QR_PLATFORMS = new Set<CookiePlatform>(["bilibili"]);
+
 const COOKIE_PLATFORMS: { key: CookiePlatform; label: string }[] = [
   { key: "youtube", label: "YouTube" },
   { key: "bilibili", label: "哔哩哔哩" },
   { key: "zhihu", label: "知乎" },
+  { key: "zlibrary", label: "Z-Library" },
   { key: "xiaohongshu", label: "小红书" },
   { key: "twitter", label: "X / Twitter" }
 ];
@@ -137,11 +150,14 @@ function cookieAccountSubtitle(status: CookieStatus | undefined, locale: Locale)
       `${status.count} cookies`
     );
   }
-  if (acc.valid === true) {
+    if (acc.valid === true) {
     const detail = acc.detail?.trim();
     const name = acc.account_name?.trim();
     const id = acc.account_id?.trim();
-    if (detail && name === "YouTube") {
+    if (detail && (!name || name === "YouTube")) {
+      return detail;
+    }
+    if (detail && detail.includes("订阅频道")) {
       return detail;
     }
     if (name && id && name !== id) {
@@ -212,6 +228,7 @@ export function SettingsCenter(props: Props): JSX.Element | null {
       icon: <Cookie className="h-4 w-4" />
     },
     { key: "ai", label: L(locale, "AI", "AI"), icon: <Bot className="h-4 w-4" /> },
+    { key: "books", label: L(locale, "图书", "Books"), icon: <BookOpen className="h-4 w-4" /> },
     { key: "push", label: L(locale, "推送", "Delivery"), icon: <KeyRound className="h-4 w-4" /> },
     { key: "about", label: L(locale, "关于", "About"), icon: <Info className="h-4 w-4" /> }
   ];
@@ -276,6 +293,7 @@ export function SettingsCenter(props: Props): JSX.Element | null {
               <SubscriptionsTab locale={locale} onClose={onClose} onMessage={props.onMessage} />
             ) : null}
             {tab === "ai" ? <AiTab locale={locale} onMessage={props.onMessage} /> : null}
+            {tab === "books" ? <BooksTab locale={locale} onMessage={props.onMessage} /> : null}
             {tab === "push" ? <PushTab locale={locale} onMessage={props.onMessage} /> : null}
             {tab === "about" ? <AboutTab locale={locale} /> : null}
           </div>
@@ -509,7 +527,7 @@ function GeneralTab(props: {
   async function onBrowseDataDir(): Promise<void> {
     setBrowsingDataDir(true);
     try {
-      const picked = await pickDataFolder();
+      const picked = await pickFolder();
       if (!picked) {
         return;
       }
@@ -767,27 +785,25 @@ function GeneralTab(props: {
             onChange={(e) => setDataDirInput(e.target.value)}
             placeholder={desktop?.data_dir ?? "D:\\On1y\\data"}
           />
-          {desktop?.is_desktop_shell || isDesktopShell() ? (
-            <button
-              type="button"
-              className={`inline-flex shrink-0 items-center gap-1.5 ${ghostBtn} px-3`}
-              disabled={browsingDataDir || saving}
-              onClick={() => void onBrowseDataDir()}
-            >
-              {browsingDataDir ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <FolderOpen className="h-4 w-4" />
-              )}
-              {L(locale, "浏览…", "Browse…")}
-            </button>
-          ) : null}
+          <button
+            type="button"
+            className={`inline-flex shrink-0 items-center gap-1.5 ${ghostBtn} px-3`}
+            disabled={browsingDataDir || saving}
+            onClick={() => void onBrowseDataDir()}
+          >
+            {browsingDataDir ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <FolderOpen className="h-4 w-4" />
+            )}
+            {L(locale, "浏览…", "Browse…")}
+          </button>
         </div>
         <p className="text-[11px] leading-relaxed text-neutral-500">
           {L(
             locale,
-            "知识库、Cookie、订阅与 LLM 配置均保存在此目录（按用户分子目录）。桌面版可点「浏览」选择文件夹；修改后需重启。",
-            "Knowledge base, cookies, subscriptions, and LLM settings live here (per-user subfolders). Use Browse on desktop; restart after changing."
+            "知识库、Cookie、订阅与 LLM 配置均保存在此目录（按用户分子目录）。网页版浏览会打开本机文件夹选择（需 on1y serve 与浏览器在同一台电脑）；修改后需重启。",
+            "Knowledge base, cookies, subscriptions, and LLM settings live here (per-user subfolders). Browse opens a folder dialog on the machine running on1y serve; restart after changing."
           )}
         </p>
         <div className="rounded-lg border border-border bg-soft/40 px-3 py-3">
@@ -1377,6 +1393,7 @@ function SubscriptionsTab(props: {
   const [saving, setSaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [cookieBusy, setCookieBusy] = useState<CookiePlatform | null>(null);
+  const [qrLogin, setQrLogin] = useState<{ platform: CookiePlatform; label: string } | null>(null);
   const [zhihuFollowMode, setZhihuFollowMode] = useState<"api" | "rss">("api");
   const [zhihuMaxFollowees, setZhihuMaxFollowees] = useState(25);
   const [zhihuMaxPages, setZhihuMaxPages] = useState(2);
@@ -1398,7 +1415,6 @@ function SubscriptionsTab(props: {
   const [autoSyncBatchSize, setAutoSyncBatchSize] = useState(25);
   const [collectionsSyncEnabled, setCollectionsSyncEnabled] = useState(true);
   const [collectionsSyncSeconds, setCollectionsSyncSeconds] = useState(120);
-  const fileInputs = useRef<Record<string, HTMLInputElement | null>>({});
 
   async function reloadCookies(fullVerify = false): Promise<void> {
     setCookiesLoading(true);
@@ -1501,22 +1517,6 @@ function SubscriptionsTab(props: {
 
   function cookieStatusFor(key: CookiePlatform): CookieStatus | undefined {
     return statuses.find((s) => s.platform === key);
-  }
-
-  async function onPickCookie(platform: CookiePlatform, file: File | null): Promise<void> {
-    if (!file) {
-      return;
-    }
-    setCookieBusy(platform);
-    try {
-      const result = await uploadCookieFile(platform, file);
-      props.onMessage?.(cookieImportMessage(locale, result.count, result.account));
-      await reloadCookies(true);
-    } catch (err) {
-      props.onMessage?.(err instanceof Error ? err.message : String(err));
-    } finally {
-      setCookieBusy(null);
-    }
   }
 
   async function onPasteCookie(platform: CookiePlatform): Promise<void> {
@@ -1719,8 +1719,8 @@ function SubscriptionsTab(props: {
         <p className="text-[11px] leading-relaxed text-muted">
           {L(
             locale,
-            "用 Cookie-Editor 等扩展导出 JSON，复制到剪贴板后点「粘贴」，或选择 JSON 文件上传。仅保存在本地。",
-            "Export JSON with Cookie-Editor, paste from clipboard, or upload a file. Cookies stay on your machine only."
+            "B 站可点「扫码」App 登录；其他平台请用浏览器扩展 Cookie-Editor 导出 JSON 后点「粘贴」。详见 docs/COOKIES.md。",
+            "Bilibili: use Scan QR. Other platforms: export JSON with the Cookie-Editor extension, then Paste. See docs/COOKIES.md."
           )}
         </p>
         <div className="space-y-2">
@@ -1763,15 +1763,21 @@ function SubscriptionsTab(props: {
                     </div>
                   ) : null}
                 </div>
-                <input
-                  ref={(el) => {
-                    fileInputs.current[platform.key] = el;
-                  }}
-                  type="file"
-                  accept="application/json,.json"
-                  className="hidden"
-                  onChange={(e) => void onPickCookie(platform.key, e.target.files?.[0] ?? null)}
-                />
+                {COOKIE_QR_PLATFORMS.has(platform.key) ? (
+                  <button
+                    type="button"
+                    className={`inline-flex items-center gap-1.5 ${ghostBtn} px-3 py-1.5`}
+                    disabled={cookieBusy === platform.key}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setQrLogin({ platform: platform.key, label: platform.label });
+                    }}
+                    title={L(locale, "B 站 App 扫码登录", "Bilibili app QR sign-in")}
+                  >
+                    <QrCode className="h-3.5 w-3.5" />
+                    {L(locale, "扫码", "Scan")}
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   className={`inline-flex items-center gap-1.5 ${ghostBtn} px-3 py-1.5`}
@@ -1785,15 +1791,6 @@ function SubscriptionsTab(props: {
                     <ClipboardPaste className="h-3.5 w-3.5" />
                   )}
                   {L(locale, "粘贴", "Paste")}
-                </button>
-                <button
-                  type="button"
-                  className={`inline-flex items-center gap-1.5 ${ghostBtn} px-3 py-1.5`}
-                  disabled={cookieBusy === platform.key}
-                  onClick={() => fileInputs.current[platform.key]?.click()}
-                >
-                  <Upload className="h-3.5 w-3.5" />
-                  {L(locale, "文件", "File")}
                 </button>
                 {exists ? (
                   <>
@@ -1827,6 +1824,16 @@ function SubscriptionsTab(props: {
           })}
         </div>
       </section>
+
+      <CookieQrLoginDialog
+        locale={locale}
+        platform={qrLogin?.platform ?? "bilibili"}
+        platformLabel={qrLogin?.label ?? ""}
+        open={qrLogin != null}
+        onClose={() => setQrLogin(null)}
+        onSuccess={() => void reloadCookies(true)}
+        onMessage={props.onMessage}
+      />
 
       <div className="border-t border-border pt-6" />
 
@@ -2323,6 +2330,219 @@ function AiTab(props: { locale: Locale; onMessage?: (message: string) => void })
   );
 }
 
+function BooksTab(props: { locale: Locale; onMessage?: (message: string) => void }): JSX.Element {
+  const { locale, onMessage } = props;
+  const [bookCacheDir, setBookCacheDir] = useState("");
+  const [bookFormatFilterEnabled, setBookFormatFilterEnabled] = useState(false);
+  const [bookFormatFilter, setBookFormatFilter] = useState<BookFormat>("epub");
+  const [bookResolvedCacheDir, setBookResolvedCacheDir] = useState("");
+  const [zlibEnabled, setZlibEnabled] = useState(true);
+  const [annasEnabled, setAnnasEnabled] = useState(true);
+  const [annasSecretKey, setAnnasSecretKey] = useState("");
+  const [browsingBookCacheDir, setBrowsingBookCacheDir] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const onMessageRef = useRef(onMessage);
+  onMessageRef.current = onMessage;
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const [bookSettings, sourcesFile] = await Promise.all([fetchBookSettings(), fetchBookSources()]);
+        if (cancelled) {
+          return;
+        }
+        setBookCacheDir(bookSettings.cache_dir ?? "");
+        setBookFormatFilterEnabled(Boolean(bookSettings.format_filter));
+        setBookFormatFilter(bookSettings.format_filter ?? bookSettings.preferred_format ?? "epub");
+        setBookResolvedCacheDir(bookSettings.resolved_cache_dir ?? "");
+        const toggles = readBuiltinToggles(sourcesFile);
+        setZlibEnabled(toggles.zlibEnabled);
+        setAnnasEnabled(toggles.annasEnabled);
+        setAnnasSecretKey(bookSettings.annas_secret_key ?? "");
+      } catch (err) {
+        onMessageRef.current?.(err instanceof Error ? err.message : String(err));
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function onBrowseBookCacheDir(): Promise<void> {
+    setBrowsingBookCacheDir(true);
+    try {
+      const picked = await pickFolder();
+      if (!picked) {
+        return;
+      }
+      setBookCacheDir(picked);
+      const saved = await saveBookSettings({ cache_dir: picked });
+      setBookCacheDir(saved.cache_dir ?? picked);
+      setBookResolvedCacheDir(saved.resolved_cache_dir ?? "");
+      onMessage?.(L(locale, "缓存目录已保存", "Cache folder saved"));
+    } catch (err) {
+      onMessage?.(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBrowsingBookCacheDir(false);
+    }
+  }
+
+  async function save(): Promise<void> {
+    setSaving(true);
+    try {
+      const [bookSettings] = await Promise.all([
+        saveBookSettings({
+          cache_dir: bookCacheDir.trim() || null,
+          format_filter: bookFormatFilterEnabled ? bookFormatFilter : null,
+          preferred_format: bookFormatFilter,
+          annas_secret_key: annasSecretKey.trim() || null
+        }),
+        saveBookSources(buildBuiltinSourcesSave(zlibEnabled, annasEnabled))
+      ]);
+      setBookCacheDir(bookSettings.cache_dir ?? "");
+      setBookFormatFilterEnabled(Boolean(bookSettings.format_filter));
+      setBookFormatFilter(bookSettings.format_filter ?? bookSettings.preferred_format ?? "epub");
+      setBookResolvedCacheDir(bookSettings.resolved_cache_dir ?? "");
+      onMessage?.(L(locale, "图书设置已保存", "Book settings saved"));
+    } catch (err) {
+      onMessage?.(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (loading) {
+    return <LoadingRow locale={locale} />;
+  }
+
+  return (
+    <div className="space-y-6">
+      <p className="text-xs leading-relaxed text-neutral-500">
+        {L(
+          locale,
+          "下载走 API：先在「订阅」页导入 Z-Library Cookie（remix_userid / remix_userkey）；失败时自动尝试安娜档案。会员可填下方 Secret Key 启用 fast_download。",
+          "Downloads use APIs: import Z-Library cookies under Subscriptions first; Anna's Archive is the fallback. Members can add a Secret Key below for fast_download."
+        )}
+      </p>
+      <div>
+        <FieldLabel>{L(locale, "电子书缓存目录", "Ebook cache folder")}</FieldLabel>
+        <div className="flex gap-2">
+          <input
+            className={`${inputClass} min-w-0 flex-1`}
+            value={bookCacheDir}
+            onChange={(e) => setBookCacheDir(e.target.value)}
+            placeholder={
+              bookResolvedCacheDir || L(locale, "留空使用默认目录", "Leave empty for default folder")
+            }
+          />
+          <button
+            type="button"
+            className={`inline-flex shrink-0 items-center gap-1.5 ${ghostBtn} px-3`}
+            disabled={browsingBookCacheDir || saving}
+            onClick={() => void onBrowseBookCacheDir()}
+          >
+            {browsingBookCacheDir ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <FolderOpen className="h-4 w-4" />
+            )}
+            {L(locale, "浏览…", "Browse…")}
+          </button>
+        </div>
+        {bookResolvedCacheDir ? (
+          <p className="mt-1 text-[11px] text-neutral-400">
+            {L(locale, "当前生效：", "Active path: ")}
+            {bookResolvedCacheDir}
+          </p>
+        ) : null}
+        <p className="mt-1 text-[11px] text-muted">
+          {L(locale, "点「浏览」选目录后会立即保存。", "Picking a folder with Browse saves immediately.")}
+        </p>
+      </div>
+      <div>
+        <ToggleRow
+          label={L(locale, "限制文件格式", "Restrict file format")}
+          description={L(
+            locale,
+            "关闭时不限格式，展示 Z-Library 最受欢迎的前 3 条；开启后只搜索指定格式",
+            "Off: any format, top 3 by popularity. On: search only the chosen format."
+          )}
+          checked={bookFormatFilterEnabled}
+          onChange={setBookFormatFilterEnabled}
+        />
+        {bookFormatFilterEnabled ? (
+          <select
+            className={`${inputClass} mt-2`}
+            value={bookFormatFilter}
+            onChange={(e) => setBookFormatFilter(e.target.value as BookFormat)}
+          >
+            {BOOK_FORMATS.map((fmt) => (
+              <option key={fmt} value={fmt}>
+                {fmt.toUpperCase()}
+              </option>
+            ))}
+          </select>
+        ) : null}
+      </div>
+      <div className="space-y-2 border-t border-border pt-4">
+        <FieldLabel>{L(locale, "书库来源", "Sources")}</FieldLabel>
+        <ToggleRow
+          label="Z-Library"
+          description={L(
+            locale,
+            "zh.z-lib.help · 与安娜档案 API 下载",
+            "zh.z-lib.help · API download with Anna's Archive fallback"
+          )}
+          checked={zlibEnabled}
+          onChange={setZlibEnabled}
+        />
+        <ToggleRow
+          label={L(locale, "安娜档案", "Anna's Archive")}
+          description={L(
+            locale,
+            "annas-archive.gl · 搜索结果与详情页外链",
+            "annas-archive.gl · link in search results and book detail"
+          )}
+          checked={annasEnabled}
+          onChange={setAnnasEnabled}
+        />
+        <p className="text-[11px] text-muted">
+          {L(locale, "豆瓣搜索始终开启。", "Douban search is always on.")}
+        </p>
+      </div>
+      <div>
+        <FieldLabel>{L(locale, "安娜档案 Secret Key", "Anna's Archive Secret Key")}</FieldLabel>
+        <input
+          className={inputClass}
+          type="password"
+          value={annasSecretKey}
+          onChange={(e) => setAnnasSecretKey(e.target.value)}
+          placeholder={L(locale, "可选，会员 fast_download", "Optional, for member fast_download")}
+          autoComplete="off"
+        />
+        <p className="mt-1 text-[11px] text-muted">
+          {L(
+            locale,
+            "在 tw.annas-archive.gl/account/secret_key 获取；留空则尝试免费镜像链接。",
+            "From tw.annas-archive.gl/account/secret_key; leave empty to try free mirror links."
+          )}
+        </p>
+      </div>
+      <div className="flex justify-end">
+        <button type="button" className={primaryBtn} disabled={saving} onClick={() => void save()}>
+          {saving ? L(locale, "保存中…", "Saving…") : L(locale, "保存", "Save")}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function PushTab(props: { locale: Locale; onMessage?: (message: string) => void }): JSX.Element {
   const { locale } = props;
   const [profile, setProfile] = useState<UserProfile | null>(null);
@@ -2456,8 +2676,8 @@ function PushTab(props: { locale: Locale; onMessage?: (message: string) => void 
         <p className="text-xs leading-relaxed text-neutral-500">
           {L(
             locale,
-            "经济学人新刊可自动入库并推送到 Kindle。收件地址在 Amazon 账户的「发送至 Kindle」中查看。",
-            "New Economist editions can auto-ingest and email to Kindle. Find your @kindle.com address in Amazon Send to Kindle settings."
+            "经济学人新刊可自动入库并推送到 Kindle。图书缓存后发送 Kindle 需在此配置邮箱与 SMTP。收件地址在 Amazon「发送至 Kindle」中查看。",
+            "Economist editions can auto-ingest and email to Kindle. Book caching also uses the Kindle email and SMTP below. Find your @kindle.com address in Amazon Send to Kindle settings."
           )}
         </p>
 

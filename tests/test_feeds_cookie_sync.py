@@ -88,3 +88,28 @@ def test_cookie_import_refreshes_youtube_feeds(tmp_path, monkeypatch) -> None:
     assert cookie_path.is_file()
     netscape = cookie_path.with_suffix(cookie_path.suffix + ".netscape.txt")
     assert not netscape.is_file()
+
+
+def test_persist_zlibrary_cookie(tmp_path, monkeypatch) -> None:
+    from on1y.config import Settings, get_settings
+
+    data_dir = tmp_path / "data"
+    settings = Settings(data_dir=data_dir, db_path=data_dir / "on1y.db")
+    monkeypatch.setattr("on1y.config.get_settings", lambda: settings)
+    monkeypatch.setattr(
+        "on1y.cookies.import_user.verify_cookie_account",
+        lambda *_a, **_k: {"valid": True, "account_name": "zlib"},
+    )
+
+    payload = {
+        "cookies": [
+            {"name": "remix_userid", "value": "9", "domain": ".z-lib.help", "path": "/"},
+            {"name": "remix_userkey", "value": "secret", "domain": ".z-lib.help", "path": "/"},
+        ],
+        "origins": [],
+    }
+    with user_context(1):
+        result = persist_user_cookie_payload("zlibrary", payload, user_id=1)
+
+    assert result["count"] == 2
+    assert (data_dir / "users" / "1" / "cookies" / "zlibrary.json").is_file()

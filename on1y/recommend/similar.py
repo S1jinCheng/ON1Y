@@ -260,6 +260,19 @@ def find_related_items(
 
     ranked = sorted(score_map.items(), key=lambda x: (-x[1], x[0]))[:limit]
     if not ranked:
+        title_q = str(source["raw_title"] or "").strip()
+        if title_q and prepare_fts_query(title_q):
+            for raw_id, score in _fts_candidates(
+                conn,
+                from_raw_id=from_raw_id,
+                fts_query=title_q[:80],
+                scope=scope,
+                user_clause=user_clause,
+                user_params=user_params,
+            ):
+                score_map[raw_id] = score
+        ranked = sorted(score_map.items(), key=lambda x: (-x[1], x[0]))[:limit]
+    if not ranked:
         return []
 
     raw_ids = [rid for rid, _ in ranked]

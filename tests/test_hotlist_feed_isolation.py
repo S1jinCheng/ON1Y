@@ -15,6 +15,16 @@ def test_is_feed_row_meta() -> None:
     assert is_feed_row_meta({}) is True
     assert is_feed_row_meta({"hotlist_source": ""}) is True
     assert is_feed_row_meta({"hotlist_source": "zhihu"}) is False
+    assert is_feed_row_meta({"book_shelf": True}) is False
+    assert is_feed_row_meta({}, platform="book") is False
+
+
+def test_is_feed_row_sql_excludes_books() -> None:
+    from on1y.hotlist.sql import is_feed_row_sql
+
+    clause = is_feed_row_sql("r")
+    assert "platform" in clause
+    assert "book_shelf" in clause
 
 
 def test_zhihu_hotlist_skips_existing_feed_url(storage, monkeypatch) -> None:

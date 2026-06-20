@@ -56,7 +56,9 @@ def save_file_settings(
         current["manual_proxy"] = str(manual_proxy or "").strip()
     path.write_text(json.dumps(current, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     from on1y.config import get_settings
+    from on1y.network.proxy import clear_proxy_check_cache
 
+    clear_proxy_check_cache()
     get_settings.cache_clear()
     return current
 
@@ -74,12 +76,14 @@ def public_settings_view(*, user_id: int | None = None) -> dict[str, Any]:
     system_proxy = detect_system_proxy()
     probed = probe_common_proxies() if mode == "auto" and not system_proxy else None
     effective = effective_ytdlp_proxy(user_id=user_id)
+    probed_ok = bool(probed and probed == effective)
     return {
         "proxy_mode": mode,
         "manual_proxy": manual,
         "env_proxy": env_proxy or None,
         "system_proxy": system_proxy,
         "probed_proxy": probed,
+        "probed_proxy_usable": probed_ok if probed else None,
         "effective_proxy": effective,
         "restart_required": False,
     }
