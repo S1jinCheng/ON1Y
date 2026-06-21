@@ -307,3 +307,61 @@ html.dark .theme-card-3d:hover {
 .on1y-glass-muted {
   color: var(--on1y-glass-nav-muted);
 }
+
+@keyframes kindle-neon-breathe {
+  0%,
+  100% {
+    opacity: 0.92;
+    transform: scale(0.96);
+    filter: saturate(1.5) brightness(1.1);
+    box-shadow:
+      0 0 2px #fff,
+      0 0 6px var(--kindle-neon-glow),
+      0 0 14px var(--kindle-neon-glow),
+      0 0 26px var(--kindle-neon-glow);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.12);
+    filter: saturate(2) brightness(1.35);
+    box-shadow:
+      0 0 3px #fff,
+      0 0 8px var(--kindle-neon-glow),
+      0 0 20px var(--kindle-neon-glow),
+      0 0 36px var(--kindle-neon-glow),
+      0 0 52px var(--kindle-neon-glow);
+  }
+}
+
+.kindle-neon-dot {
+  height: 10px;
+  width: 10px;
+  border-radius: 9999px;
+  background: var(--kindle-neon-core);
+  transition:
+    opacity 0.25s ease,
+    transform 0.25s ease;
+}
+
+.kindle-neon-dot--off {
+  opacity: 0.22;
+  filter: saturate(0.9);
+  box-shadow: none;
+}
+
+.kindle-neon-dot--on {
+  animation: kindle-neon-breathe 2.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kindle-neon-dot--on {
+    animation: none;
+    opacity: 1;
+    filter: saturate(1.8) brightness(1.2);
+    box-shadow:
+      0 0 2px #fff,
+      0 0 8px var(--kindle-neon-glow),
+      0 0 20px var(--kindle-neon-glow),
+      0 0 34px var(--kindle-neon-glow);
+  }
+}

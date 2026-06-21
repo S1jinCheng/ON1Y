@@ -1621,7 +1621,10 @@ def create_app() -> FastAPI:
             item = get_shelf_item(storage, uid, item_id)
             if item is None:
                 raise HTTPException(status_code=404, detail="book not found")
-            item = prepare_shelf_item(storage, uid, item, auto_tag=False)
+            try:
+                item = prepare_shelf_item(storage, uid, item, auto_tag=False)
+            except Exception as exc:
+                logger.warning("books_shelf_related prepare failed item_id=%s: %s", item_id, exc)
             if item.raw_id is None:
                 return {"items": [], "scope": "library", "from_raw_id": None}
             items = find_related_items(
@@ -1631,6 +1634,9 @@ def create_app() -> FastAPI:
                 scope="library",
             )
             return {"items": items, "scope": "library", "from_raw_id": item.raw_id}
+        except Exception as exc:
+            logger.exception("books_shelf_related failed item_id=%s", item_id)
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
         finally:
             storage.close()
 
@@ -1701,6 +1707,24 @@ def create_app() -> FastAPI:
         finally:
             storage.close()
 
+    @app.post("/api/books/shelf/{item_id}/kindle")
+    def books_shelf_send_kindle(item_id: int) -> dict[str, Any]:
+        from on1y.auth.context import get_effective_user_id
+        from on1y.books.acquire import send_shelf_book_to_kindle
+        from on1y.exceptions import ConfigurationError
+
+        uid = get_effective_user_id()
+        storage = get_storage()
+        try:
+            return send_shelf_book_to_kindle(uid, storage, item_id)
+        except ConfigurationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            logger.exception("books_shelf_send_kindle failed item_id=%s", item_id)
+            raise HTTPException(status_code=502, detail=f"Kindle 推送失败：{exc}") from exc
+        finally:
+            storage.close()
+
     @app.get("/api/books/shelf/{item_id}/cached")
     def books_shelf_cached(item_id: int) -> dict[str, Any]:
         from on1y.auth.context import get_effective_user_id
@@ -1752,6 +1776,8 @@ def create_app() -> FastAPI:
                         "acquire_strategy",
                         "preferred_format",
                         "allowed_formats",
+                        "format_filter",
+                        "format_filters",
                         "default_format",
                         "annas_secret_key",
                     )
@@ -1782,6 +1808,7 @@ def create_app() -> FastAPI:
         translator = str(body.get("translator") or "").strip() or None
         publisher = str(body.get("publisher") or "").strip() or None
         isbn = str(body.get("isbn") or "").strip() or None
+        douban_url = str(body.get("douban_url") or "").strip() or None
         douban_cover_url = str(body.get("cover_url") or "").strip() or None
         fmt = str(body.get("format") or "").strip().lower() or None
         uid = get_effective_user_id()
@@ -1793,6 +1820,7 @@ def create_app() -> FastAPI:
                 translator=translator,
                 publisher=publisher,
                 isbn=isbn,
+                douban_url=douban_url,
                 douban_cover_url=douban_cover_url,
                 fmt=fmt,
             )
@@ -1815,6 +1843,12 @@ def create_app() -> FastAPI:
         douban_url = str(body.get("douban_url") or "").strip() or None
         fmt = str(body.get("format") or "").strip().lower() or None
         add_to_shelf = bool(body.get("add_to_shelf", True))
+        shelf_item_id = body.get("shelf_item_id")
+        if shelf_item_id is not None:
+            try:
+                shelf_item_id = int(shelf_item_id)
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail="shelf_item_id must be an integer") from exc
         candidate = body.get("candidate")
         if candidate is not None and not isinstance(candidate, dict):
             raise HTTPException(status_code=400, detail="candidate must be an object")
@@ -1833,6 +1867,7 @@ def create_app() -> FastAPI:
                 fmt=fmt,
                 add_to_shelf=add_to_shelf,
                 candidate=candidate,
+                shelf_item_id=shelf_item_id,
             )
         except ConfigurationError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc

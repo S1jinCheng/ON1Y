@@ -75,12 +75,17 @@ def pick_best_index(candidates: list[str], hints: EditionHints, *, extras: list[
     return best_i
 
 
-def match_quality(hints: EditionHints, chosen_text: str) -> str:
+def match_quality(hints: EditionHints, chosen_text: str, *, candidate: dict | None = None) -> str:
     """high | medium | low — for user-facing warnings."""
+    from on1y.books.translator_match import translator_matches_hint
+
     score = score_candidate(chosen_text, hints)
-    translator = _norm(hints.translator)
-    if translator and translator not in _norm(chosen_text):
-        return "low"
+    if hints.translator:
+        if candidate is not None:
+            if not translator_matches_hint(hints.translator, candidate):
+                return "low"
+        elif _norm(hints.translator) not in _norm(chosen_text):
+            return "low"
     if score >= 50:
         return "high"
     if score >= 20:

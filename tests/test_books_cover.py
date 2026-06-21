@@ -17,6 +17,15 @@ def test_cover_proxy_allowed_douban_and_google():
     assert not cover_proxy_allowed("https://evil.example.com/cover.jpg")
 
 
+def test_cover_proxy_allowed_zlib_hosts():
+    assert cover_proxy_allowed("https://zh.z-lib.help/img/covers/x.jpg")
+    assert cover_proxy_allowed("https://1lib.sk/covers/x.jpg")
+    assert cover_proxy_allowed(
+        "https://s3proxy-alp2-covers.cdn-zlib.sk/covers299/collections/genesis/abc.jpg"
+    )
+    assert cover_proxy_allowed("https://covers.z-lib.sk/cover.jpg")
+
+
 def test_books_cover_route_is_public():
     from on1y.web.auth_http import _PUBLIC_API_PREFIXES
 

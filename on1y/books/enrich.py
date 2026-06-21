@@ -29,6 +29,10 @@ def enrich_shelf_item_from_douban(
     item: BookShelfItem,
 ) -> BookShelfItem:
     """Fill missing cover/summary/translator from Douban page scrape."""
+    from on1y.books.shelf_metadata import douban_enrich_allowed
+
+    if not douban_enrich_allowed(notes=item.notes):
+        return item
     if item.cover_url and item.summary and item.translator:
         return item
     douban_url = douban_url_from_links(item.links)
@@ -43,7 +47,7 @@ def enrich_shelf_item_from_douban(
         return item
     patch = BookShelfUpdate(
         cover_url=normalize_cover_url(item.cover_url or detail.cover_url),
-        translator=item.translator or detail.translator,
+        translator=item.translator if item.translator else detail.translator,
         publisher=item.publisher or detail.publisher,
         summary=item.summary or (detail.summary[:4000] if detail.summary else None),
         author=item.author or detail.author,

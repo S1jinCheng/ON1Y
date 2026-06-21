@@ -20,6 +20,10 @@ logger = logging.getLogger(__name__)
 def _resolve_format_filter(settings: BookSettings, fmt: str | None) -> str | None:
     if fmt and fmt in BOOK_FORMATS:
         return fmt.lower()
+    if settings.format_filters:
+        if len(settings.format_filters) == 1:
+            return str(settings.format_filters[0]).lower()
+        return None
     value = settings.format_filter
     if value and str(value).lower() in BOOK_FORMATS:
         return str(value).lower()

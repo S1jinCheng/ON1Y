@@ -4,9 +4,11 @@ import { BookOpen, CheckCircle2, Loader2, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 
-import { buildAcquireNotice, type BookAcquireNotice } from "@/components/book-acquire-notice";
+import { buildAcquireNotice, KindleStatusBlock, type BookAcquireNotice } from "@/components/book-acquire-notice";
 import { acquireBook, previewAcquireBook } from "@/lib/api";
+import { bookCoverSrc } from "@/lib/book-cover";
 import type { BookAcquireCandidate, BookAcquirePreview, BookAcquireResult } from "@/lib/book-types";
+import { candidateDoubanMismatch } from "@/lib/translator-match";
 import type { Locale } from "@/lib/types";
 
 function L(locale: Locale, zh: string, en: string): string {
@@ -27,6 +29,7 @@ export type BookAcquireRequest = {
   douban_url?: string | null;
   cover_url?: string | null;
   add_to_shelf: boolean;
+  shelf_item_id?: number;
 };
 
 type UseBookAcquireConfirmOptions = {
@@ -86,6 +89,7 @@ export function useBookAcquireConfirm(options: UseBookAcquireConfirmOptions) {
           translator: request.translator,
           publisher: request.publisher,
           isbn: request.isbn,
+          douban_url: request.douban_url,
           cover_url: request.cover_url
         });
         setPreview(result);
@@ -118,6 +122,7 @@ export function useBookAcquireConfirm(options: UseBookAcquireConfirmOptions) {
         isbn: pending.isbn,
         douban_url: pending.douban_url,
         add_to_shelf: pending.add_to_shelf,
+        shelf_item_id: pending.shelf_item_id,
         candidate
       });
       try {
@@ -203,10 +208,21 @@ function BookAcquireConfirmDialog(props: DialogProps): JSX.Element {
     ? L(locale, SOURCE_LABEL[preview.source]?.zh ?? preview.source, SOURCE_LABEL[preview.source]?.en ?? preview.source)
     : "";
 
-  const formatNote =
-    preview?.format_filter != null
-      ? L(locale, `仅 ${preview.format_filter.toUpperCase()}`, `${preview.format_filter.toUpperCase()} only`)
-      : L(locale, "不限格式", "Any format");
+  const formatNote = (() => {
+    const filters = preview?.format_filters ?? [];
+    if (filters.length === 0) {
+      return L(locale, "不限格式 · 各取前 3", "Any format · top 3");
+    }
+    if (filters.length === 1) {
+      return L(locale, `仅 ${filters[0].toUpperCase()} · 前 3`, `${filters[0].toUpperCase()} only · top 3`);
+    }
+    const label = filters.map((f) => f.toUpperCase()).join(" / ");
+    return L(
+      locale,
+      `${label} · 各格式前 3（共 ${preview?.candidates.length ?? filters.length * 3} 条）`,
+      `${label} · top 3 per format (${preview?.candidates.length ?? filters.length * 3} total)`
+    );
+  })();
 
   const dialog = (
     <div
@@ -239,8 +255,8 @@ function BookAcquireConfirmDialog(props: DialogProps): JSX.Element {
                 ? L(locale, "文件已保存到本地缓存", "File saved to local cache")
                 : L(
                     locale,
-                    "以下为 Z-Library 按「最受欢迎」排序的前 3 条，请选一本后下载并推送 Kindle",
-                    "Top 3 Z-Library results by popularity — pick one to download and send to Kindle"
+                    "按设置中的格式筛选：每种勾选格式各取最受欢迎前 3 条",
+                    "Per checked format in settings: top 3 Z-Library results by popularity for each"
                   )}
             </p>
           </div>
@@ -270,6 +286,12 @@ function BookAcquireConfirmDialog(props: DialogProps): JSX.Element {
             <div className="flex flex-col items-center gap-4 py-10 text-center">
               <CheckCircle2 className="h-12 w-12 text-emerald-600 dark:text-emerald-400" />
               <p className="max-w-md text-sm font-medium leading-relaxed text-foreground">{successNotice.message}</p>
+              <KindleStatusBlock
+                locale={locale}
+                result={successResult}
+                hasLocalFile={Boolean(successResult.local_path)}
+                notes={successResult.shelf_item?.notes}
+              />
               {successResult.local_path ? (
                 <p className="max-w-md break-all text-xs text-muted">{successResult.local_path}</p>
               ) : null}
@@ -308,6 +330,7 @@ function BookAcquireConfirmDialog(props: DialogProps): JSX.Element {
                     key={`${candidate.book_id ?? candidate.md5 ?? index}-${candidate.title}`}
                     locale={locale}
                     candidate={candidate}
+                    doubanTranslator={preview.douban.translator}
                     index={index}
                     selected={selectedIndex === index}
                     onSelect={() => onSelect(index)}
@@ -358,11 +381,13 @@ function BookAcquireConfirmDialog(props: DialogProps): JSX.Element {
 function CandidateRow(props: {
   locale: Locale;
   candidate: BookAcquireCandidate;
+  doubanTranslator?: string | null;
   index: number;
   selected: boolean;
   onSelect: () => void;
 }): JSX.Element {
-  const { candidate, index, selected, onSelect } = props;
+  const { candidate, doubanTranslator, index, selected, onSelect, locale } = props;
+  const mismatch = candidateDoubanMismatch(doubanTranslator, candidate);
   const meta = [
     candidate.format.toUpperCase(),
     candidate.publisher,
@@ -390,6 +415,15 @@ function CandidateRow(props: {
       <div className="min-w-0 flex-1">
         <p className="text-sm font-medium leading-snug text-foreground">{candidate.title}</p>
         {candidate.author ? <p className="mt-0.5 text-xs text-muted line-clamp-2">{candidate.author}</p> : null}
+        {mismatch ? (
+          <p className="mt-1 text-[11px] text-amber-700 dark:text-amber-300">
+            {L(
+              locale,
+              "与豆瓣检索译者不一致，入库将按此版本记录",
+              "Differs from Douban translator — shelf will use this edition"
+            )}
+          </p>
+        ) : null}
         {meta ? <p className="mt-1 text-[11px] text-muted">{meta}</p> : null}
       </div>
       <div
@@ -417,7 +451,7 @@ function CoverImage(props: { url?: string | null; title: string }): JSX.Element 
   return (
     // eslint-disable-next-line @next/next/no-img-element
     <img
-      src={url}
+      src={bookCoverSrc(url)}
       alt={title}
       className="h-[72px] w-[52px] shrink-0 rounded border border-border object-cover"
       onError={() => setFailed(true)}

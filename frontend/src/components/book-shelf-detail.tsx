@@ -1,23 +1,23 @@
 "use client";
 
-import { BookOpen, ExternalLink, Loader2, Trash2 } from "lucide-react";
+import { BookOpen, Loader2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { KindleTrafficLight } from "@/components/book-acquire-notice";
 import { ImportanceStars } from "@/components/importance-stars";
 import { RelatedItemsSection } from "@/components/related-items-section";
 import { RichNoteEditor } from "@/components/rich-note-editor";
 import { TagChipEditor } from "@/components/tag-chip-editor";
 import {
-  deleteBookShelfItem,
   fetchRelatedShelfBooks,
   getTaxonomy,
   postRelatedLessRelevant,
-  openLocalPath,
   updateBookShelfItem
 } from "@/lib/api";
 import { bookCoverSrc } from "@/lib/book-cover";
 import type { BookShelfItem, BookStatus } from "@/lib/book-types";
 import type { KnowledgeItem, Locale } from "@/lib/types";
+import { useShelfCachedFiles } from "@/lib/use-shelf-cached-files";
 
 const STATUS_OPTIONS: BookStatus[] = ["reading", "read"];
 
@@ -42,15 +42,13 @@ type Props = {
   locale: Locale;
   item: BookShelfItem;
   onSaved: (item: BookShelfItem) => void;
-  onDeleted: () => void;
   onSelectShelfItem: (id: number) => void;
   onSelectKnowledgeItem: (item: KnowledgeItem) => void;
   onMessage: (msg: string) => void;
 };
 
 export function BookShelfDetail(props: Props): JSX.Element {
-  const { locale, item, onSaved, onDeleted, onSelectShelfItem, onSelectKnowledgeItem, onMessage } =
-    props;
+  const { locale, item, onSaved, onSelectShelfItem, onSelectKnowledgeItem, onMessage } = props;
   const [tags, setTags] = useState<string[]>(item.tags ?? []);
   const [tagSuggestions, setTagSuggestions] = useState<string[]>([]);
   const [related, setRelated] = useState<KnowledgeItem[]>([]);
@@ -58,6 +56,7 @@ export function BookShelfDetail(props: Props): JSX.Element {
   const [relatedLoaded, setRelatedLoaded] = useState(false);
   const [relatedFromRawId, setRelatedFromRawId] = useState<number | null>(item.raw_id ?? null);
 
+  const { hasLocalFile, ready: cachedProbeReady } = useShelfCachedFiles(item.id, item.updated_at);
   const coverSrc = useMemo(() => bookCoverSrc(item.cover_url), [item.cover_url]);
 
   useEffect(() => {
@@ -66,7 +65,7 @@ export function BookShelfDetail(props: Props): JSX.Element {
 
   useEffect(() => {
     let cancelled = false;
-    void getTaxonomy()
+    void getTaxonomy(locale)
       .then((taxonomy) => {
         if (!cancelled) {
           setTagSuggestions(taxonomy.tags.map((row) => row.name));
@@ -78,11 +77,13 @@ export function BookShelfDetail(props: Props): JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [locale]);
 
   useEffect(() => {
     setRelatedFromRawId(item.raw_id ?? null);
   }, [item.id, item.raw_id]);
+
+  const tagsKey = (item.tags ?? []).join("\0");
 
   useEffect(() => {
     let cancelled = false;
@@ -95,9 +96,6 @@ export function BookShelfDetail(props: Props): JSX.Element {
             setRelated(resp.items);
             if (resp.from_raw_id != null) {
               setRelatedFromRawId(resp.from_raw_id);
-              if (item.raw_id == null) {
-                onSaved({ ...item, raw_id: resp.from_raw_id });
-              }
             }
           }
         })
@@ -118,7 +116,8 @@ export function BookShelfDetail(props: Props): JSX.Element {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [item, item.id, item.summary, item.tags, item.raw_id, onMessage, onSaved]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [item.id, tagsKey]);
 
   const saveTags = useCallback(
     async (next: string[]) => {
@@ -139,17 +138,6 @@ export function BookShelfDetail(props: Props): JSX.Element {
       onSaved(updated);
     } catch (error) {
       onMessage(error instanceof Error ? error.message : "update failed");
-    }
-  }
-
-  async function handleDelete(): Promise<void> {
-    if (!window.confirm(L(locale, "从书架移除？", "Remove from shelf?"))) return;
-    try {
-      await deleteBookShelfItem(item.id);
-      onDeleted();
-      onMessage(L(locale, "已移除", "Removed"));
-    } catch (error) {
-      onMessage(error instanceof Error ? error.message : "delete failed");
     }
   }
 
@@ -185,37 +173,34 @@ export function BookShelfDetail(props: Props): JSX.Element {
     onSelectKnowledgeItem(row);
   }
 
-  const doubanLink = item.links.find((l) => l.label === "豆瓣" || /douban\.com/i.test(l.url));
+  const doubanLink = item.links.find(
+    (l) => l.label === "豆瓣" || l.label.startsWith("豆瓣") || /douban\.com/i.test(l.url)
+  );
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="shrink-0 border-b border-border pb-4">
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <label className="text-xs text-muted">
-            {L(locale, "状态", "Status")}
-            <select
-              value={item.status === "read" ? "read" : "reading"}
-              onChange={(e) => void handleStatusChange(e.target.value as BookStatus)}
-              className="ml-2 rounded-md border border-border bg-surface px-2 py-1 text-sm"
-            >
-              {STATUS_OPTIONS.map((opt) => (
-                <option key={opt} value={opt}>
-                  {statusLabel(locale, opt)}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button
-            type="button"
-            onClick={() => void handleDelete()}
-            className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-red-600 hover:bg-red-50"
+      <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border px-1 pb-3">
+        {cachedProbeReady ? (
+          <KindleTrafficLight locale={locale} hasLocalFile={hasLocalFile} notes={item.notes} />
+        ) : (
+          <Loader2 className="h-3.5 w-3.5 animate-spin text-muted" />
+        )}
+        {doubanLink ? (
+          <a
+            href={doubanLink.url}
+            target="_blank"
+            rel="noreferrer"
+            className="text-[11px] text-muted hover:text-foreground"
           >
-            <Trash2 className="h-3.5 w-3.5" />
-            {L(locale, "移除", "Remove")}
-          </button>
-        </div>
+            {L(locale, "豆瓣", "Douban")}
+          </a>
+        ) : (
+          <span />
+        )}
+      </div>
 
-        <div className="flex gap-4">
+      <div className="min-h-0 flex-1 overflow-y-auto pt-4">
+        <div className="mb-4 flex gap-4">
           <div className="w-24 shrink-0">
             {coverSrc ? (
               // eslint-disable-next-line @next/next/no-img-element
@@ -229,50 +214,32 @@ export function BookShelfDetail(props: Props): JSX.Element {
           <div className="min-w-0 flex-1">
             <h2 className="text-lg font-semibold leading-snug">{item.title}</h2>
             {metaLine(item) ? <p className="mt-1 text-sm text-muted">{metaLine(item)}</p> : null}
-            {item.cached_format ? (
-              <p className="mt-2 inline-block rounded bg-soft px-2 py-0.5 text-xs text-muted">
-                {item.cached_format.toUpperCase()}
-                {item.local_path ? L(locale, " · 已缓存", " · cached") : ""}
-              </p>
-            ) : null}
-            {item.local_path ? (
-              <button
-                type="button"
-                onClick={() =>
-                  void openLocalPath(item.local_path!).catch((error) =>
-                    onMessage(error instanceof Error ? error.message : "open failed")
-                  )
-                }
-                className="mt-2 block text-xs text-accent hover:underline"
+            <label className="mt-2 inline-flex items-center text-xs text-muted">
+              {L(locale, "状态", "Status")}
+              <select
+                value={item.status === "read" ? "read" : "reading"}
+                onChange={(e) => void handleStatusChange(e.target.value as BookStatus)}
+                className="ml-2 rounded-md border border-border bg-surface px-2 py-0.5 text-xs text-foreground"
               >
-                {L(locale, "打开本地文件", "Open local file")}
-              </button>
-            ) : null}
-            {doubanLink ? (
-              <a
-                href={doubanLink.url}
-                target="_blank"
-                rel="noreferrer"
-                className="mt-2 inline-flex items-center gap-1 text-xs text-muted hover:text-foreground"
-              >
-                {L(locale, "豆瓣", "Douban")}
-                <ExternalLink className="h-3 w-3" />
-              </a>
-            ) : null}
+                {STATUS_OPTIONS.map((opt) => (
+                  <option key={opt} value={opt}>
+                    {statusLabel(locale, opt)}
+                  </option>
+                ))}
+              </select>
+            </label>
           </div>
         </div>
 
         {item.summary ? (
-          <div className="mt-4">
+          <div className="mb-4">
             <p className="mb-1 text-xs font-medium uppercase tracking-wider text-muted">
               {L(locale, "简介", "Summary")}
             </p>
-            <p className="text-sm leading-relaxed text-muted line-clamp-6">{item.summary}</p>
+            <p className="text-sm leading-relaxed text-muted">{item.summary}</p>
           </div>
         ) : null}
-      </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto py-4">
         <div className="mb-4">
           <div className="mb-2 flex items-center justify-between gap-2">
             <p className="text-xs font-medium uppercase tracking-wider text-muted">
@@ -298,7 +265,6 @@ export function BookShelfDetail(props: Props): JSX.Element {
           <RichNoteEditor
             value={item.user_note_html ?? ""}
             placeholder={L(locale, "记录读后感、摘抄、想法…", "Notes, quotes, thoughts…")}
-            saveLabel={L(locale, "保存笔记", "Save note")}
             onSave={handleSaveNote}
           />
         </div>

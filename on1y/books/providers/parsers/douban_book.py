@@ -48,6 +48,30 @@ def _parse_search_data(html: str) -> list[dict[str, Any]]:
     return []
 
 
+def _looks_like_publisher(text: str | None) -> bool:
+    t = (text or "").strip()
+    if not t:
+        return False
+    if re.search(r"出版社|出版集团|出版公司|书局|书社|Press|Publishing|Books", t, re.I):
+        return True
+    if re.fullmatch(r"\d{4}([-/年]\d{1,2})?", t):
+        return True
+    return False
+
+
+def _looks_like_translator(text: str | None) -> bool:
+    t = (text or "").strip()
+    if not t:
+        return False
+    if _looks_like_publisher(t):
+        return False
+    if "译" in t:
+        return True
+    if re.fullmatch(r"[\u4e00-\u9fff·A-Za-z.\s]{2,24}", t):
+        return True
+    return False
+
+
 def _split_abstract(abstract: str) -> tuple[str | None, str | None, str | None, str | None]:
     """Parse Douban abstract line into author, translator, publisher, pub_meta."""
     text = (abstract or "").strip()
@@ -61,14 +85,31 @@ def _split_abstract(abstract: str) -> tuple[str | None, str | None, str | None, 
     publisher: str | None = None
     pub_meta: str | None = None
     if len(parts) >= 4:
-        translator = parts[1]
-        publisher = parts[2]
-        pub_meta = " / ".join(parts[3:])
+        if _looks_like_publisher(parts[1]) and not _looks_like_translator(parts[1]):
+            translator = None
+            publisher = parts[1]
+            pub_meta = " / ".join(parts[2:])
+        else:
+            translator = parts[1]
+            publisher = parts[2]
+            pub_meta = " / ".join(parts[3:])
     elif len(parts) == 3:
-        publisher = parts[1]
-        pub_meta = parts[2]
+        if _looks_like_publisher(parts[1]):
+            publisher = parts[1]
+            pub_meta = parts[2]
+        elif _looks_like_translator(parts[1]):
+            translator = parts[1]
+            publisher = parts[2]
+        else:
+            publisher = parts[1]
+            pub_meta = parts[2]
     elif len(parts) == 2:
-        publisher = parts[1]
+        if _looks_like_publisher(parts[1]):
+            publisher = parts[1]
+        elif _looks_like_translator(parts[1]):
+            translator = parts[1]
+        else:
+            publisher = parts[1]
     return author, translator, publisher, pub_meta
 
 

@@ -20,16 +20,30 @@ DEFAULT_ALLOWED_FORMATS: list[BookFormat] = ["epub", "pdf", "mobi"]
 
 
 class BookSettings(BaseModel):
-    version: int = 2
+    version: int = 3
     cache_dir: str | None = None
     zlib_base_url: str = DEFAULT_ZLIB_BASE
     acquire_strategy: AcquireStrategy = "match_first"
     preferred_format: BookFormat = "epub"
     allowed_formats: list[BookFormat] = Field(default_factory=lambda: list(DEFAULT_ALLOWED_FORMATS))
-    format_filter: BookFormat | None = None
+    format_filter: BookFormat | None = None  # legacy single-format
+    format_filters: list[BookFormat] = Field(default_factory=list)
     annas_secret_key: str | None = None
     # legacy alias — migrated to preferred_format on load
     default_format: BookFormat | None = None
+
+    @field_validator("format_filters")
+    @classmethod
+    def _clean_format_filters(cls, value: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for raw in value:
+            fmt = str(raw).lower()
+            if fmt not in ("epub", "pdf", "mobi") or fmt in seen:
+                continue
+            seen.add(fmt)
+            cleaned.append(fmt)
+        return cleaned
 
     @field_validator("allowed_formats")
     @classmethod
@@ -48,6 +62,9 @@ class BookSettings(BaseModel):
             data["allowed_formats"] = list(DEFAULT_ALLOWED_FORMATS)
         if not data.get("acquire_strategy"):
             data["acquire_strategy"] = "match_first"
+        if data.get("format_filters") is None:
+            legacy = data.get("format_filter")
+            data["format_filters"] = [legacy] if legacy else []
         return data
 
 

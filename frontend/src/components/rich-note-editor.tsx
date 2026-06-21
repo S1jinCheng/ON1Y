@@ -6,7 +6,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 type RichNoteEditorProps = {
   value: string;
   placeholder: string;
-  saveLabel: string;
+  saveLabel?: string;
   disabled?: boolean;
   onSave: (html: string) => Promise<void>;
 };
@@ -107,12 +107,12 @@ export function RichNoteEditor(props: RichNoteEditorProps): JSX.Element {
         <div className="ml-auto">
           <button
             type="button"
+            title={saveLabel?.trim() || "Save"}
             disabled={disabled || saving || !dirty}
             onClick={() => void handleSave()}
-            className="inline-flex items-center gap-1 rounded border border-black bg-black px-2 py-1 text-xs text-white disabled:cursor-not-allowed disabled:opacity-40"
+            className="inline-flex h-7 w-7 items-center justify-center rounded border border-black bg-black text-white disabled:cursor-not-allowed disabled:opacity-40"
           >
             <Save className="h-3.5 w-3.5" />
-            {saveLabel}
           </button>
         </div>
       </div>

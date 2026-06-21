@@ -454,7 +454,8 @@ export default function KnowledgeWorkbench(): JSX.Element {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [active?.raw_id, active?.summary, active?.distill_status, canLoadRelated]);
+    // Refetch when switching item or when summary/distill first becomes available — not on unrelated active patches.
+  }, [active?.raw_id, active?.distill_status, canLoadRelated]);
 
   async function handleRelatedLessRelevant(toRawId: number): Promise<void> {
     if (!active) {
@@ -1714,6 +1715,18 @@ export default function KnowledgeWorkbench(): JSX.Element {
                     setBooksRefreshKey((k) => k + 1);
                     void getCollectionCounts().then(setCollectionCounts);
                   }}
+                  onItemUpdated={(item) => {
+                    if (activeBook?.id === item.id) {
+                      setActiveBook(item);
+                    }
+                  }}
+                  onRemoved={(id) => {
+                    if (activeBook?.id === id) {
+                      setActiveBook(null);
+                    }
+                    setBooksRefreshKey((k) => k + 1);
+                    void getCollectionCounts().then(setCollectionCounts);
+                  }}
                   onMessage={setMessage}
                 />
               </div>
@@ -2080,8 +2093,6 @@ export default function KnowledgeWorkbench(): JSX.Element {
                 setManualAddBook(false);
                 setActiveEdition(null);
                 setActiveBook(item);
-                setBooksRefreshKey((k) => k + 1);
-                void getCollectionCounts().then(setCollectionCounts);
               }}
               onDeleted={() => {
                 setActiveBook(null);

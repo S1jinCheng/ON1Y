@@ -32,6 +32,7 @@ export type BookSettings = {
   preferred_format: BookFormat;
   allowed_formats: BookFormat[];
   format_filter?: BookFormat | null;
+  format_filters?: BookFormat[];
   /** @deprecated use preferred_format */
   default_format?: BookFormat;
   annas_secret_key?: string | null;
@@ -59,6 +60,7 @@ export type BookAcquirePreview = {
   source: "zlib" | "annas";
   search_query: string;
   format_filter: BookFormat | null;
+  format_filters: BookFormat[];
   total_candidates: number;
   douban: {
     title: string;

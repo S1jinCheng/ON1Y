@@ -13,6 +13,16 @@ _ALLOWED_SUFFIXES = (
     "zlib.li",
     "z-lib.org",
     "z-lib.help",
+    "z-library.sk",
+    "z-lib.sk",
+    "z-lib.fm",
+    "z-lib.gd",
+    "cdn-zlib.sk",
+    "1lib.sk",
+    "1lib.fr",
+    "1lib.education",
+    "singlelogin.me",
+    "singlelogin.re",
     "annas-archive.org",
     "annas-archive.gl",
     "archive.org",
@@ -56,4 +66,11 @@ def cover_fetch_headers(url: str) -> dict[str, str]:
     }
     if "douban" in host:
         headers["Referer"] = "https://book.douban.com/"
+    elif "cdn-zlib" in host:
+        headers["Referer"] = "https://z-lib.sk/"
+    elif any(
+        token in host
+        for token in ("z-lib", "zlib", "1lib", "singlelogin", "z-library")
+    ):
+        headers["Referer"] = f"https://{host}/"
     return headers

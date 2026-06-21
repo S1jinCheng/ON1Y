@@ -2333,8 +2333,7 @@ function AiTab(props: { locale: Locale; onMessage?: (message: string) => void })
 function BooksTab(props: { locale: Locale; onMessage?: (message: string) => void }): JSX.Element {
   const { locale, onMessage } = props;
   const [bookCacheDir, setBookCacheDir] = useState("");
-  const [bookFormatFilterEnabled, setBookFormatFilterEnabled] = useState(false);
-  const [bookFormatFilter, setBookFormatFilter] = useState<BookFormat>("epub");
+  const [bookFormatFilters, setBookFormatFilters] = useState<BookFormat[]>([]);
   const [bookResolvedCacheDir, setBookResolvedCacheDir] = useState("");
   const [zlibEnabled, setZlibEnabled] = useState(true);
   const [annasEnabled, setAnnasEnabled] = useState(true);
@@ -2354,8 +2353,13 @@ function BooksTab(props: { locale: Locale; onMessage?: (message: string) => void
           return;
         }
         setBookCacheDir(bookSettings.cache_dir ?? "");
-        setBookFormatFilterEnabled(Boolean(bookSettings.format_filter));
-        setBookFormatFilter(bookSettings.format_filter ?? bookSettings.preferred_format ?? "epub");
+        const filters =
+          bookSettings.format_filters && bookSettings.format_filters.length > 0
+            ? bookSettings.format_filters
+            : bookSettings.format_filter
+              ? [bookSettings.format_filter]
+              : [];
+        setBookFormatFilters(filters);
         setBookResolvedCacheDir(bookSettings.resolved_cache_dir ?? "");
         const toggles = readBuiltinToggles(sourcesFile);
         setZlibEnabled(toggles.zlibEnabled);
@@ -2399,15 +2403,21 @@ function BooksTab(props: { locale: Locale; onMessage?: (message: string) => void
       const [bookSettings] = await Promise.all([
         saveBookSettings({
           cache_dir: bookCacheDir.trim() || null,
-          format_filter: bookFormatFilterEnabled ? bookFormatFilter : null,
-          preferred_format: bookFormatFilter,
+          format_filters: bookFormatFilters,
+          format_filter: bookFormatFilters.length === 1 ? bookFormatFilters[0] : null,
+          preferred_format: bookFormatFilters[0] ?? "epub",
           annas_secret_key: annasSecretKey.trim() || null
         }),
         saveBookSources(buildBuiltinSourcesSave(zlibEnabled, annasEnabled))
       ]);
       setBookCacheDir(bookSettings.cache_dir ?? "");
-      setBookFormatFilterEnabled(Boolean(bookSettings.format_filter));
-      setBookFormatFilter(bookSettings.format_filter ?? bookSettings.preferred_format ?? "epub");
+      const filters =
+        bookSettings.format_filters && bookSettings.format_filters.length > 0
+          ? bookSettings.format_filters
+          : bookSettings.format_filter
+            ? [bookSettings.format_filter]
+            : [];
+      setBookFormatFilters(filters);
       setBookResolvedCacheDir(bookSettings.resolved_cache_dir ?? "");
       onMessage?.(L(locale, "图书设置已保存", "Book settings saved"));
     } catch (err) {
@@ -2466,29 +2476,34 @@ function BooksTab(props: { locale: Locale; onMessage?: (message: string) => void
         </p>
       </div>
       <div>
-        <ToggleRow
-          label={L(locale, "限制文件格式", "Restrict file format")}
-          description={L(
+        <FieldLabel>{L(locale, "预览格式", "Preview formats")}</FieldLabel>
+        <p className="mb-2 text-[11px] text-muted">
+          {L(
             locale,
-            "关闭时不限格式，展示 Z-Library 最受欢迎的前 3 条；开启后只搜索指定格式",
-            "Off: any format, top 3 by popularity. On: search only the chosen format."
+            "勾选后，选书时每种格式各展示最受欢迎的前 3 条（三格全选最多 9 条）。全不勾选则不限格式，共 3 条。",
+            "Checked formats each show top 3 by popularity (up to 9 if all three). None checked = any format, 3 total."
           )}
-          checked={bookFormatFilterEnabled}
-          onChange={setBookFormatFilterEnabled}
-        />
-        {bookFormatFilterEnabled ? (
-          <select
-            className={`${inputClass} mt-2`}
-            value={bookFormatFilter}
-            onChange={(e) => setBookFormatFilter(e.target.value as BookFormat)}
-          >
-            {BOOK_FORMATS.map((fmt) => (
-              <option key={fmt} value={fmt}>
-                {fmt.toUpperCase()}
-              </option>
-            ))}
-          </select>
-        ) : null}
+        </p>
+        <div className="flex flex-wrap gap-4">
+          {BOOK_FORMATS.map((fmt) => {
+            const checked = bookFormatFilters.includes(fmt);
+            return (
+              <label key={fmt} className="flex cursor-pointer items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  className="rounded border-border"
+                  checked={checked}
+                  onChange={() => {
+                    setBookFormatFilters((prev) =>
+                      checked ? prev.filter((f) => f !== fmt) : [...prev, fmt]
+                    );
+                  }}
+                />
+                <span>{fmt.toUpperCase()}</span>
+              </label>
+            );
+          })}
+        </div>
       </div>
       <div className="space-y-2 border-t border-border pt-4">
         <FieldLabel>{L(locale, "书库来源", "Sources")}</FieldLabel>

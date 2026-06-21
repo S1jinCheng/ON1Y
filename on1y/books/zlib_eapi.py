@@ -117,6 +117,9 @@ class ZlibEapiClient:
         books = self.search_books(title, fmt, limit=10)
         return books[0] if books else None
 
+    def book_detail(self, book_id: str | int, book_hash: str) -> dict[str, Any]:
+        return self._request("GET", f"/eapi/book/{book_id}/{book_hash}")
+
     def search_best_across_formats(
         self,
         hints: EditionHints,
@@ -239,7 +242,7 @@ class ZlibEapiClient:
 
 
 def _zlib_cover_url(book: dict[str, Any], host: str) -> str | None:
-    for key in ("cover", "img", "image"):
+    for key in ("cover", "cover_url", "img", "image", "image_url"):
         value = book.get(key)
         if not value:
             continue
@@ -254,6 +257,35 @@ def _zlib_cover_url(book: dict[str, Any], host: str) -> str | None:
     return None
 
 
+def enrich_zlib_book_cover(
+    client: ZlibEapiClient,
+    book: dict[str, Any],
+    host: str,
+) -> dict[str, Any]:
+    """Merge book detail when search results omit per-edition cover art."""
+    if _zlib_cover_url(book, host):
+        return book
+    book_id = book.get("id")
+    book_hash = book.get("hash")
+    if not book_id or not book_hash:
+        return book
+    try:
+        payload = client.book_detail(book_id, book_hash)
+    except Exception as exc:
+        logger.debug("Z-Library book detail failed for %s/%s: %s", book_id, book_hash, exc)
+        return book
+    detail_book = payload.get("book")
+    if not isinstance(detail_book, dict):
+        detail_book = payload if isinstance(payload, dict) else {}
+    merged = dict(book)
+    for key, value in detail_book.items():
+        if value in (None, ""):
+            continue
+        if key not in merged or merged.get(key) in (None, ""):
+            merged[key] = value
+    return merged
+
+
 def _zlib_book_format(book: dict[str, Any]) -> str:
     ext = str(book.get("extension") or book.get("filetype") or "").lower().lstrip(".")
     if ext in BOOK_FORMATS:
@@ -261,12 +293,7 @@ def _zlib_book_format(book: dict[str, Any]) -> str:
     return "epub"
 
 
-def zlib_book_candidate(
-    book: dict[str, Any],
-    host: str,
-    *,
-    douban_cover: str | None = None,
-) -> dict[str, Any]:
+def zlib_book_candidate(book: dict[str, Any], host: str) -> dict[str, Any]:
     return {
         "source": "zlib",
         "format": _zlib_book_format(book),
@@ -276,7 +303,7 @@ def zlib_book_candidate(
         "year": str(book.get("year") or "").strip() or None,
         "language": str(book.get("language") or "").strip() or None,
         "filesize": str(book.get("filesizeString") or book.get("filesize") or "").strip() or None,
-        "cover_url": _zlib_cover_url(book, host) or douban_cover,
+        "cover_url": _zlib_cover_url(book, host),
         "book_id": book["id"],
         "book_hash": book["hash"],
     }

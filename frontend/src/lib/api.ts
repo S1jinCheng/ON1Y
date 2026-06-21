@@ -43,6 +43,25 @@ import {
 /** Empty = same-origin when UI is served by `on1y serve` (static export). */
 const API_BASE = process.env.NEXT_PUBLIC_ON1Y_API_BASE?.replace(/\/$/, "") ?? "";
 
+/** Backend origin for dev (`npm run dev` on :3000) long requests — bypasses Next rewrite proxy timeouts. */
+const DEV_BACKEND_ORIGIN =
+  process.env.NEXT_PUBLIC_ON1Y_API_BASE?.replace(/\/$/, "") || "http://127.0.0.1:8765";
+
+function isDevFrontendHost(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  const port = window.location.port;
+  return port === "3000" || port === "3001" || port === "3045";
+}
+
+function resolveApiUrl(path: string, direct?: boolean): string {
+  if (direct && isDevFrontendHost()) {
+    return `${DEV_BACKEND_ORIGIN}${path}`;
+  }
+  return `${API_BASE}${path}`;
+}
+
 export function economistEpubDownloadUrl(rawId: number): string {
   const token = getAuthToken();
   const suffix = token ? `?access_token=${encodeURIComponent(token)}` : "";
@@ -58,17 +77,25 @@ function authHeaders(extra?: HeadersInit): HeadersInit {
   };
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+type RequestOptions = RequestInit & { direct?: boolean };
+
+async function request<T>(path: string, init?: RequestOptions): Promise<T> {
+  const { direct, ...fetchInit } = init ?? {};
   let response: Response;
   try {
-    response = await fetch(`${API_BASE}${path}`, {
-      ...init,
-      headers: authHeaders(init?.headers),
+    response = await fetch(resolveApiUrl(path, direct), {
+      ...fetchInit,
+      headers: authHeaders(fetchInit.headers),
       cache: "no-store"
     });
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
       throw new Error("请求超时，请确认 on1y serve 已启动");
+    }
+    if (direct && isDevFrontendHost()) {
+      throw new Error(
+        "无法连接 on1y serve（127.0.0.1:8765）。大文件下载需直连后端，请确认已运行 on1y serve"
+      );
     }
     throw new Error("无法连接后端，请确认 on1y serve 已启动");
   }
@@ -1435,6 +1462,7 @@ export function previewAcquireBook(input: {
   translator?: string | null;
   publisher?: string | null;
   isbn?: string | null;
+  douban_url?: string | null;
   cover_url?: string | null;
   format?: BookFormat;
 }): Promise<BookAcquirePreview> {
@@ -1453,11 +1481,28 @@ export function acquireBook(input: {
   douban_url?: string | null;
   format?: BookFormat;
   add_to_shelf?: boolean;
+  shelf_item_id?: number;
   candidate?: BookAcquireCandidate;
 }): Promise<BookAcquireResult> {
   return request<BookAcquireResult>("/api/books/acquire", {
     method: "POST",
-    body: JSON.stringify(input)
+    body: JSON.stringify(input),
+    direct: true
+  });
+}
+
+export type BookKindleSendResult = {
+  ok: boolean;
+  kindle_sent: boolean;
+  kindle_status?: "sent" | "skipped" | "failed";
+  kindle_detail?: string | null;
+  shelf_item?: BookShelfItem | null;
+};
+
+export function sendBookShelfToKindle(itemId: number): Promise<BookKindleSendResult> {
+  return request<BookKindleSendResult>(`/api/books/shelf/${itemId}/kindle`, {
+    method: "POST",
+    direct: true
   });
 }
 

@@ -2,21 +2,26 @@
 
 import {
   BookOpen,
+  CheckSquare,
   Download,
   ExternalLink,
   Loader2,
   Plus,
   Search,
-  Trash2
+  Square,
+  Star,
+  Trash2,
+  X
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
+import { BookShelfCard } from "@/components/book-shelf-card";
 import { BookShelfDetail } from "@/components/book-shelf-detail";
 import {
   type BookAcquireRequest,
   useBookAcquireConfirm
 } from "@/components/book-acquire-confirm-dialog";
-import { type BookAcquireNotice } from "@/components/book-acquire-notice";
+import { buildKindleSendNotice, type BookAcquireNotice } from "@/components/book-acquire-notice";
 
 import {
   createBookShelfItem,
@@ -28,8 +33,10 @@ import {
   listBookShelf,
   openLocalPath,
   searchBooks,
+  sendBookShelfToKindle,
   updateBookShelfItem
 } from "@/lib/api";
+import { probeShelfCachedFiles, type ShelfCachedState } from "@/lib/use-shelf-cached-files";
 import { readBuiltinToggles, BOOK_ANNAS_BASE, BOOK_ZLIB_BASE } from "@/lib/book-builtin";
 import { bookCoverSrc } from "@/lib/book-cover";
 import type {
@@ -53,6 +60,8 @@ type BooksListColumnProps = {
   onStartManualAdd: () => void;
   onShelfChanged: () => void;
   onEditionShelfAdded: (item: BookShelfItem) => void;
+  onItemUpdated?: (item: BookShelfItem) => void;
+  onRemoved?: (id: number) => void;
   onMessage: (msg: string) => void;
 };
 
@@ -179,11 +188,28 @@ function EditionSourceLinksRow(props: { links: BookLink[] }): JSX.Element | null
 
 function doubanUrlFromLinks(links: BookLink[]): string | null {
   for (const link of links) {
-    if (link.label === "豆瓣" || /douban\.com/i.test(link.url)) {
+    if (link.label === "豆瓣" || link.label.startsWith("豆瓣") || /douban\.com/i.test(link.url)) {
       return link.url;
     }
   }
   return null;
+}
+
+function canRestoreShelf(item: BookShelfItem): boolean {
+  return Boolean(doubanUrlFromLinks(item.links) || item.links.some((l) => /zlib|annas/i.test(l.url)));
+}
+
+function shelfRestoreRequest(item: BookShelfItem): BookAcquireRequest {
+  return {
+    title: item.title,
+    author: item.author,
+    translator: item.translator,
+    publisher: item.publisher,
+    douban_url: doubanUrlFromLinks(item.links),
+    cover_url: item.cover_url,
+    add_to_shelf: true,
+    shelf_item_id: item.id
+  };
 }
 
 function DoubanDetailBody(props: {
@@ -201,11 +227,11 @@ function DoubanDetailBody(props: {
         <div className="flex gap-4">
           <div className="w-24 shrink-0">
             {detail.cover_url ? (
+              // eslint-disable-next-line @next/next/no-img-element
               <img
-                src={detail.cover_url}
+                src={bookCoverSrc(detail.cover_url)}
                 alt=""
                 className="h-36 w-24 rounded object-cover"
-                referrerPolicy="no-referrer"
               />
             ) : (
               <div className="flex h-36 w-24 items-center justify-center rounded bg-panel text-muted">
@@ -311,6 +337,8 @@ export function BooksListColumn(props: BooksListColumnProps): JSX.Element {
     onStartManualAdd,
     onShelfChanged,
     onEditionShelfAdded,
+    onItemUpdated,
+    onRemoved,
     onMessage,
     onAcquireNotice
   } = props;
@@ -323,6 +351,14 @@ export function BooksListColumn(props: BooksListColumnProps): JSX.Element {
   const [items, setItems] = useState<BookShelfItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState<BookStatus | "all">("all");
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [batchDeleteConfirm, setBatchDeleteConfirm] = useState(false);
+  const [cachedById, setCachedById] = useState<Record<number, ShelfCachedState>>({});
+  const [kindleBusyId, setKindleBusyId] = useState<number | null>(null);
+  const [restoreBusyId, setRestoreBusyId] = useState<number | null>(null);
+
+  const allVisibleSelected = items.length > 0 && items.every((row) => selectedIds.has(row.id));
 
   const { startAcquire, acquireDialog } = useBookAcquireConfirm({
     locale,
@@ -330,12 +366,54 @@ export function BooksListColumn(props: BooksListColumnProps): JSX.Element {
     onMessage,
     onSuccess: (result, request) => {
       if (result.shelf_item) {
-        onEditionShelfAdded(result.shelf_item);
+        const row = result.shelf_item;
+        setItems((prev) => {
+          const idx = prev.findIndex((item) => item.id === row.id);
+          if (idx >= 0) {
+            const next = [...prev];
+            next[idx] = row;
+            return next;
+          }
+          return prev;
+        });
+        void probeShelfCachedFiles(row.id).then((state) => {
+          setCachedById((prev) => ({ ...prev, [row.id]: state }));
+        });
+        onItemUpdated?.(row);
+        if (request.shelf_item_id) {
+          onShelfChanged();
+        } else {
+          onEditionShelfAdded(row);
+        }
       } else if (request.add_to_shelf) {
         onShelfChanged();
       }
     }
   });
+
+  useEffect(() => {
+    let cancelled = false;
+    if (items.length === 0) {
+      setCachedById({});
+      return;
+    }
+    void Promise.all(
+      items.map(async (item) => {
+        const state = await probeShelfCachedFiles(item.id);
+        return { id: item.id, state };
+      })
+    ).then((rows) => {
+      if (cancelled) return;
+      const next: Record<number, ShelfCachedState> = {};
+      for (const row of rows) {
+        next[row.id] = row.state;
+      }
+      setCachedById(next);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [items]);
 
   const loadShelf = useCallback(async () => {
     setLoading(true);
@@ -383,6 +461,143 @@ export function BooksListColumn(props: BooksListColumnProps): JSX.Element {
       await startAcquire(editionAcquireRequest(edition, null, addToShelf));
     } finally {
       setAcquiringKey(null);
+    }
+  }
+
+  function handleToggleSelect(id: number): void {
+    if (!selectionMode) {
+      setSelectionMode(true);
+      setSelectedIds(new Set([id]));
+      return;
+    }
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      if (next.size === 0) {
+        setSelectionMode(false);
+        setBatchDeleteConfirm(false);
+      }
+      return next;
+    });
+  }
+
+  function toggleSelectAllVisible(): void {
+    if (allVisibleSelected) {
+      setSelectedIds(new Set());
+      setBatchDeleteConfirm(false);
+      return;
+    }
+    setSelectionMode(true);
+    setSelectedIds(new Set(items.map((row) => row.id)));
+  }
+
+  function exitSelectionMode(): void {
+    setSelectionMode(false);
+    setSelectedIds(new Set());
+    setBatchDeleteConfirm(false);
+  }
+
+  async function handleToggleFavorite(item: BookShelfItem): Promise<void> {
+    const starred = (item.importance ?? 0) >= 1;
+    try {
+      const updated = await updateBookShelfItem(item.id, { importance: starred ? null : 4 });
+      setItems((prev) => prev.map((row) => (row.id === updated.id ? updated : row)));
+      onItemUpdated?.(updated);
+    } catch (error) {
+      onMessage(error instanceof Error ? error.message : "favorite failed");
+    }
+  }
+
+  async function handleSendKindle(item: BookShelfItem): Promise<void> {
+    setKindleBusyId(item.id);
+    try {
+      const result = await sendBookShelfToKindle(item.id);
+      if (result.shelf_item) {
+        setItems((prev) => prev.map((row) => (row.id === result.shelf_item!.id ? result.shelf_item! : row)));
+        onItemUpdated?.(result.shelf_item);
+      }
+      onAcquireNotice(buildKindleSendNotice(locale, result));
+      if (result.kindle_status !== "sent" && !result.kindle_sent) {
+        onMessage(buildKindleSendNotice(locale, result).message);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "kindle failed";
+      onAcquireNotice({ kind: "error", message });
+      onMessage(message);
+    } finally {
+      setKindleBusyId(null);
+    }
+  }
+
+  async function handleRestoreDownload(item: BookShelfItem): Promise<void> {
+    setRestoreBusyId(item.id);
+    try {
+      await startAcquire(shelfRestoreRequest(item));
+    } catch (error) {
+      onMessage(error instanceof Error ? error.message : "restore failed");
+    } finally {
+      setRestoreBusyId(null);
+    }
+  }
+
+  async function handleDeleteItem(id: number): Promise<void> {
+    try {
+      await deleteBookShelfItem(id);
+      setItems((prev) => prev.filter((row) => row.id !== id));
+      onRemoved?.(id);
+      onShelfChanged();
+    } catch (error) {
+      onMessage(error instanceof Error ? error.message : "delete failed");
+    }
+  }
+
+  async function handleBatchFavorite(): Promise<void> {
+    const selected = items.filter((row) => selectedIds.has(row.id));
+    if (selected.length === 0) return;
+    const allStarred = selected.every((row) => (row.importance ?? 0) >= 1);
+    const target = allStarred ? null : 4;
+    try {
+      for (const row of selected) {
+        const isStarred = (row.importance ?? 0) >= 1;
+        if (target !== null && isStarred) continue;
+        if (target === null && !isStarred) continue;
+        const updated = await updateBookShelfItem(row.id, { importance: target });
+        setItems((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
+        if (activeId === updated.id) onItemUpdated?.(updated);
+      }
+      onMessage(
+        locale === "zh"
+          ? target
+            ? `已收藏 ${selected.length} 本`
+            : `已取消收藏 ${selected.length} 本`
+          : target
+            ? `Favorited ${selected.length} books`
+            : `Unfavorited ${selected.length} books`
+      );
+      exitSelectionMode();
+    } catch (error) {
+      onMessage(error instanceof Error ? error.message : "favorite failed");
+    }
+  }
+
+  async function handleBatchDelete(): Promise<void> {
+    const ids = [...selectedIds];
+    if (ids.length === 0) return;
+    try {
+      for (const id of ids) {
+        await deleteBookShelfItem(id);
+        onRemoved?.(id);
+      }
+      setItems((prev) => prev.filter((row) => !selectedIds.has(row.id)));
+      onShelfChanged();
+      exitSelectionMode();
+      onMessage(locale === "zh" ? `已移除 ${ids.length} 本` : `Removed ${ids.length} books`);
+    } catch (error) {
+      onMessage(error instanceof Error ? error.message : "delete failed");
     }
   }
 
@@ -438,11 +653,11 @@ export function BooksListColumn(props: BooksListColumnProps): JSX.Element {
                   className="flex min-w-0 flex-1 gap-3 text-left"
                 >
                   {edition.cover_url ? (
+                    // eslint-disable-next-line @next/next/no-img-element
                     <img
-                      src={edition.cover_url}
+                      src={bookCoverSrc(edition.cover_url)}
                       alt=""
                       className="h-20 w-14 shrink-0 rounded object-cover"
-                      referrerPolicy="no-referrer"
                     />
                   ) : (
                     <div className="flex h-20 w-14 shrink-0 items-center justify-center rounded bg-panel text-muted">
@@ -544,6 +759,79 @@ export function BooksListColumn(props: BooksListColumnProps): JSX.Element {
       </div>
 
       <div className="min-h-0 flex-1 space-y-2 overflow-y-auto">
+        {selectionMode ? (
+          <div className="mb-2 flex items-center justify-between gap-2 rounded-lg border border-border bg-panel px-2 py-1.5">
+            <div className="flex min-w-0 items-center gap-2">
+              <button
+                type="button"
+                onClick={toggleSelectAllVisible}
+                title={locale === "zh" ? "全选" : "Select all"}
+                aria-label={locale === "zh" ? "全选" : "Select all"}
+                aria-pressed={allVisibleSelected}
+                className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-md border transition-colors ${
+                  allVisibleSelected
+                    ? "border-inverse bg-inverse text-inverse-foreground"
+                    : "border-border bg-surface text-muted hover:border-muted"
+                }`}
+              >
+                {allVisibleSelected ? (
+                  <CheckSquare className="h-4 w-4" />
+                ) : (
+                  <Square className="h-4 w-4" />
+                )}
+              </button>
+              <span className="truncate text-xs font-medium text-foreground">
+                {locale === "zh"
+                  ? `已选 ${selectedIds.size} 本`
+                  : `${selectedIds.size} selected`}
+              </span>
+            </div>
+            <div className="flex shrink-0 items-center gap-0.5">
+              <button
+                type="button"
+                onClick={() => void handleBatchFavorite()}
+                disabled={selectedIds.size === 0}
+                title={locale === "zh" ? "收藏" : "Favorite"}
+                aria-label={locale === "zh" ? "收藏" : "Favorite"}
+                className="flex h-8 w-8 items-center justify-center rounded-md text-muted hover:bg-soft hover:text-foreground disabled:opacity-40"
+              >
+                <Star className="h-4 w-4" />
+              </button>
+              {batchDeleteConfirm ? (
+                <button
+                  type="button"
+                  onClick={() => void handleBatchDelete()}
+                  disabled={selectedIds.size === 0}
+                  title={locale === "zh" ? "确认删除" : "Confirm delete"}
+                  aria-label={locale === "zh" ? "确认删除" : "Confirm delete"}
+                  className="flex h-8 w-8 items-center justify-center rounded-md text-red-600 hover:bg-red-50 disabled:opacity-40"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setBatchDeleteConfirm(true)}
+                  disabled={selectedIds.size === 0}
+                  title={locale === "zh" ? "删除" : "Delete"}
+                  aria-label={locale === "zh" ? "删除" : "Delete"}
+                  className="flex h-8 w-8 items-center justify-center rounded-md text-muted hover:bg-soft hover:text-red-500 disabled:opacity-40"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={exitSelectionMode}
+                title={locale === "zh" ? "退出批量" : "Exit batch"}
+                aria-label={locale === "zh" ? "退出批量" : "Exit batch"}
+                className="flex h-8 w-8 items-center justify-center rounded-md text-muted hover:bg-soft hover:text-foreground"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+        ) : null}
         {loading ? (
           <p className="text-sm text-muted">{locale === "zh" ? "加载中…" : "Loading…"}</p>
         ) : items.length === 0 ? (
@@ -551,57 +839,39 @@ export function BooksListColumn(props: BooksListColumnProps): JSX.Element {
             {locale === "zh" ? "书架为空" : "Shelf is empty"}
           </div>
         ) : (
-          items.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => onSelect(item)}
-              className={`w-full rounded-md border p-2.5 text-left text-sm transition-colors ${
-                activeId === item.id && !manualAdd
-                  ? "border-accent/50 bg-accent/5"
-                  : "border-border bg-surface hover:bg-soft"
-              }`}
-            >
-              <div className="flex items-start gap-3">
-                {item.cover_url ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={bookCoverSrc(item.cover_url)}
-                    alt=""
-                    className="h-[72px] w-[52px] shrink-0 rounded object-cover"
-                  />
-                ) : (
-                  <div className="flex h-[72px] w-[52px] shrink-0 items-center justify-center rounded bg-panel text-muted">
-                    <BookOpen className="h-5 w-5" />
-                  </div>
-                )}
-                <div className="min-w-0 flex-1">
-                  <p className="font-medium leading-snug text-foreground line-clamp-2">{item.title}</p>
-                  <p className="mt-0.5 text-xs text-muted line-clamp-1">
-                    {[item.author, item.translator].filter(Boolean).join(" / ")}
-                  </p>
-                  {item.summary ? (
-                    <p className="mt-1 text-xs leading-relaxed text-muted line-clamp-2">{item.summary}</p>
-                  ) : null}
-                  <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                    <span className="rounded bg-soft px-1.5 py-0.5 text-[10px] text-muted">
-                      {statusLabel(locale, item.status)}
-                    </span>
-                    {item.cached_format ? (
-                      <span className="rounded bg-soft px-1.5 py-0.5 text-[10px] text-muted">
-                        {item.cached_format.toUpperCase()}
-                      </span>
-                    ) : null}
-                    {(item.tags ?? []).slice(0, 2).map((tag) => (
-                      <span key={tag} className="rounded bg-soft px-1.5 py-0.5 text-[10px] text-muted">
-                        #{tag}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </button>
-          ))
+          items.map((item) => {
+            const cached = cachedById[item.id];
+            const files = cached?.files ?? [];
+            const cachedReady = cached?.ready ?? false;
+            const primaryPath = files[0]?.path ?? null;
+            return (
+              <BookShelfCard
+                key={item.id}
+                item={item}
+                locale={locale}
+                active={activeId === item.id && !manualAdd}
+                selected={selectedIds.has(item.id)}
+                selectionMode={selectionMode}
+                hasLocalFile={files.length > 0}
+                cachedReady={cachedReady}
+                primaryPath={primaryPath}
+                kindleBusy={kindleBusyId === item.id}
+                restoreBusy={restoreBusyId === item.id}
+                canRestore={canRestoreShelf(item)}
+                onSelect={() => onSelect(item)}
+                onToggleSelected={() => handleToggleSelect(item.id)}
+                onToggleFavorite={() => void handleToggleFavorite(item)}
+                onOpenLocal={() =>
+                  void openLocalPath(primaryPath!).catch((error) =>
+                    onMessage(error instanceof Error ? error.message : "open failed")
+                  )
+                }
+                onSendKindle={() => void handleSendKindle(item)}
+                onRestoreDownload={() => void handleRestoreDownload(item)}
+                onDelete={() => void handleDeleteItem(item.id)}
+              />
+            );
+          })
         )}
       </div>
       </div>
@@ -642,7 +912,12 @@ export function BooksDetailColumn(props: BooksDetailColumnProps): JSX.Element {
   const { startAcquire, acquireDialog } = useBookAcquireConfirm({
     locale,
     onAcquireNotice,
-    onMessage
+    onMessage,
+    onSuccess: (result) => {
+      if (result.shelf_item) {
+        onSaved(result.shelf_item);
+      }
+    }
   });
 
   useEffect(() => {
@@ -670,6 +945,7 @@ export function BooksDetailColumn(props: BooksDetailColumnProps): JSX.Element {
     }
     let cancelled = false;
     setShelfLoading(true);
+    setShelfItem(item);
     void fetchBookShelfItem(item.id)
       .then((data) => {
         if (!cancelled) setShelfItem(data);
@@ -683,6 +959,17 @@ export function BooksDetailColumn(props: BooksDetailColumnProps): JSX.Element {
     return () => {
       cancelled = true;
     };
+  }, [item?.id, edition, manualAdd]);
+
+  useEffect(() => {
+    if (!item || manualAdd || edition) return;
+    setShelfItem((prev) => {
+      if (prev?.id !== item.id) return prev;
+      if (!item.updated_at || !prev.updated_at || item.updated_at >= prev.updated_at) {
+        return { ...prev, ...item };
+      }
+      return prev;
+    });
   }, [item, edition, manualAdd]);
 
   const sourceLinkToggles = { zlibEnabled, annasEnabled };
@@ -784,7 +1071,6 @@ export function BooksDetailColumn(props: BooksDetailColumnProps): JSX.Element {
               locale={locale}
               item={shelfItem}
               onSaved={onSaved}
-              onDeleted={onDeleted}
               onSelectShelfItem={onSelectShelfItem}
               onSelectKnowledgeItem={onSelectKnowledgeItem}
               onMessage={onMessage}

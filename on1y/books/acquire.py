@@ -25,13 +25,22 @@ KINDLE_EMAIL_MAX_BYTES = 50 * 1024 * 1024
 _SAFE_CHARS = re.compile(r"[^\w\u4e00-\u9fff\-]+", re.UNICODE)
 
 
-def _safe_filename(title: str, ext: str, *, translator: str | None = None) -> str:
-    stem = _SAFE_CHARS.sub("_", (title or "book").strip()).strip("_")
-    stem = stem[:100] or "book"
-    if translator and translator.strip():
-        tr = _SAFE_CHARS.sub("_", translator.strip()).strip("_")[:40]
-        if tr:
-            stem = f"{stem}_{tr}"
+def _safe_filename(
+    title: str,
+    ext: str,
+    *,
+    translator: str | None = None,
+    full_label: str | None = None,
+) -> str:
+    if full_label and full_label.strip():
+        stem = _SAFE_CHARS.sub("_", full_label.strip()).strip("_")
+    else:
+        stem = _SAFE_CHARS.sub("_", (title or "book").strip()).strip("_")
+        if translator and translator.strip():
+            tr = _SAFE_CHARS.sub("_", translator.strip()).strip("_")[:40]
+            if tr:
+                stem = f"{stem}_{tr}"
+    stem = stem[:180] or "book"
     suffix = ext if ext.startswith(".") else f".{ext}"
     return f"{stem}{suffix}"
 
@@ -51,18 +60,23 @@ def download_book_file(
     cache_dir: Path,
     settings: BookSettings | None = None,
     candidate: dict[str, Any] | None = None,
+    file_label: str | None = None,
 ) -> tuple[Path, str, dict[str, Any]]:
     """Download ebook to cache_dir; returns path, source, and match metadata."""
     book_settings = settings or load_book_settings(user_id)
     ext_guess = str(
         fmt or (candidate or {}).get("format") or book_settings.preferred_format or "epub"
     ).lower()
-    dest = cache_dir / _safe_filename(hints.title, ext_guess, translator=hints.translator)
+    dest = cache_dir / _safe_filename(
+        hints.title, ext_guess, translator=hints.translator, full_label=file_label
+    )
 
     if candidate:
         source = str(candidate.get("source") or "").strip().lower()
         actual_fmt = str(candidate.get("format") or ext_guess).lower()
-        final_dest = cache_dir / _safe_filename(hints.title, actual_fmt, translator=hints.translator)
+        final_dest = cache_dir / _safe_filename(
+            hints.title, actual_fmt, translator=hints.translator, full_label=file_label
+        )
         final_dest.parent.mkdir(parents=True, exist_ok=True)
 
         if source == "zlib":
@@ -101,7 +115,9 @@ def download_book_file(
                 settings=book_settings,
             )
             actual_fmt = str(meta.get("format") or ext_guess)
-            final_dest = cache_dir / _safe_filename(hints.title, actual_fmt, translator=hints.translator)
+            final_dest = cache_dir / _safe_filename(
+                hints.title, actual_fmt, translator=hints.translator, full_label=file_label
+            )
             final_dest.parent.mkdir(parents=True, exist_ok=True)
             final_dest.write_bytes(data)
 
@@ -121,7 +137,9 @@ def download_book_file(
         dest=dest,
         settings=book_settings,
     )
-    final_dest = cache_dir / _safe_filename(hints.title, actual_fmt, translator=hints.translator)
+    final_dest = cache_dir / _safe_filename(
+        hints.title, actual_fmt, translator=hints.translator, full_label=file_label
+    )
     if final_dest != dest and dest.is_file() and not final_dest.is_file():
         dest.rename(final_dest)
     elif final_dest != dest and dest.is_file() and final_dest.is_file():
@@ -136,6 +154,64 @@ def download_book_file(
     meta["validation"] = validation
     meta["format"] = actual_fmt
     return path, source, meta
+
+
+def resolve_shelf_cached_path(
+    user_id: int,
+    item: BookShelfItem,
+) -> Path | None:
+    from on1y.books.cache_files import list_cached_ebooks
+    from on1y.books.models import parse_cached_path
+
+    path_str = item.local_path or parse_cached_path(item.notes)
+    if path_str:
+        path = Path(path_str)
+        if path.is_file():
+            return path
+    files = list_cached_ebooks(user_id, item.title, notes=item.notes)
+    if not files:
+        return None
+    path = Path(files[0]["path"])
+    return path if path.is_file() else None
+
+
+def send_shelf_book_to_kindle(
+    user_id: int,
+    storage: Any,
+    item_id: int,
+) -> dict[str, Any]:
+    from on1y.books.shelf import get_shelf_item
+
+    from on1y.books.display_name import format_book_label_from_shelf
+
+    item = get_shelf_item(storage, user_id, item_id)
+    if item is None:
+        raise ConfigurationError("书架条目不存在")
+    local_path = resolve_shelf_cached_path(user_id, item)
+    if local_path is None:
+        raise ConfigurationError("未找到本地缓存文件，请先下载电子书")
+    kindle_sent, kindle_status, kindle_detail = maybe_send_kindle(
+        user_id,
+        local_path,
+        title=format_book_label_from_shelf(item),
+    )
+    from on1y.books.kindle_notes import merge_kindle_status
+    from on1y.books.models import BookShelfUpdate
+    from on1y.books.shelf import update_shelf_item
+
+    updated = update_shelf_item(
+        storage,
+        user_id,
+        item_id,
+        BookShelfUpdate(notes=merge_kindle_status(item.notes, kindle_status, kindle_detail)),
+    )
+    return {
+        "ok": True,
+        "kindle_sent": kindle_sent,
+        "kindle_status": kindle_status,
+        "kindle_detail": kindle_detail,
+        "shelf_item": updated.model_dump() if updated else None,
+    }
 
 
 def maybe_send_kindle(user_id: int, local_path: Path, *, title: str) -> tuple[bool, str, str | None]:
@@ -173,11 +249,24 @@ def preview_acquire_book(
     translator: str | None = None,
     publisher: str | None = None,
     isbn: str | None = None,
+    douban_url: str | None = None,
     douban_cover_url: str | None = None,
     fmt: str | None = None,
 ) -> dict[str, Any]:
     """Search and return the best candidate for user confirmation."""
     from on1y.books.preview import preview_ebook_candidates
+
+    cover = (douban_cover_url or "").strip() or None
+    if not cover and douban_url:
+        try:
+            from on1y.books.cover import normalize_cover_url
+            from on1y.books.detail import load_book_detail
+
+            detail = load_book_detail(user_id, douban_url.strip())
+            if detail is not None:
+                cover = normalize_cover_url(detail.cover_url)
+        except Exception:
+            cover = cover or None
 
     hints = EditionHints(
         title=title,
@@ -189,7 +278,7 @@ def preview_acquire_book(
     return preview_ebook_candidates(
         user_id,
         hints=hints,
-        douban_cover_url=douban_cover_url,
+        douban_cover_url=cover,
     )
 
 
@@ -206,9 +295,11 @@ def acquire_book(
     fmt: str | None = None,
     add_to_shelf: bool = True,
     candidate: dict[str, Any] | None = None,
+    shelf_item_id: int | None = None,
 ) -> dict[str, Any]:
     """Download ebook to cache, optionally add shelf item and send to Kindle."""
-    from on1y.books.shelf import create_shelf_item
+    from on1y.books.models import BookShelfUpdate
+    from on1y.books.shelf import create_shelf_item, get_shelf_item, update_shelf_item
 
     settings: BookSettings = load_book_settings(user_id)
     cache_dir = resolve_books_cache_dir(user_id, settings.cache_dir)
@@ -219,6 +310,30 @@ def acquire_book(
         publisher=publisher,
         isbn=isbn,
     )
+    from on1y.books.cover import normalize_cover_url
+    from on1y.books.display_name import format_book_label
+    from on1y.books.shelf_metadata import resolve_shelf_metadata
+
+    resolved_meta: dict[str, Any] | None = None
+    kindle_label = format_book_label(
+        title=title,
+        author=author,
+        translator=translator,
+        publisher=publisher,
+    )
+    file_label: str | None = None
+    if isinstance(candidate, dict):
+        cover_for_meta = normalize_cover_url(str(candidate.get("cover_url") or "").strip() or None)
+        resolved_meta = resolve_shelf_metadata(hints, candidate, cover_url=cover_for_meta)
+        kindle_label = format_book_label(
+            title=str(resolved_meta.get("title") or title),
+            author=resolved_meta.get("author"),
+            translator=resolved_meta.get("translator"),
+            publisher=resolved_meta.get("publisher"),
+            language=resolved_meta.get("language"),
+        )
+        file_label = kindle_label
+
     local_path, source, match_meta = download_book_file(
         user_id,
         hints=hints,
@@ -226,66 +341,92 @@ def acquire_book(
         cache_dir=cache_dir,
         settings=settings,
         candidate=candidate,
+        file_label=file_label,
     )
     book_fmt = str(match_meta.get("format") or fmt or settings.preferred_format or "epub").lower()
 
-    kindle_sent, kindle_status, kindle_detail = maybe_send_kindle(user_id, local_path, title=title)
+    kindle_sent, kindle_status, kindle_detail = maybe_send_kindle(user_id, local_path, title=kindle_label)
 
     shelf_item: BookShelfItem | None = None
+    shelf_title = title
+    resolved_quality = match_meta.get("match_quality")
     if add_to_shelf:
-        from on1y.books.cover import normalize_cover_url
+        meta = resolved_meta
+        if meta is None:
+            cover_url: str | None = None
+            if isinstance(candidate, dict):
+                cover_url = normalize_cover_url(str(candidate.get("cover_url") or "").strip() or None)
+            meta = resolve_shelf_metadata(hints, candidate if isinstance(candidate, dict) else None, cover_url=cover_url)
+        shelf_title = str(meta["title"] or title).strip() or title
+        resolved_quality = meta.get("match_quality") or resolved_quality
 
-        cover_url: str | None = None
-        if isinstance(candidate, dict):
-            cover_url = normalize_cover_url(str(candidate.get("cover_url") or "").strip() or None)
-        summary_text: str | None = None
-        publisher_val = publisher
-        author_val = author
-        translator_val = translator
-        if douban_url:
-            try:
-                from on1y.books.detail import load_book_detail
-
-                douban_detail = load_book_detail(user_id, douban_url)
-                if douban_detail is not None:
-                    cover_url = normalize_cover_url(cover_url or douban_detail.cover_url)
-                    summary_text = douban_detail.summary
-                    publisher_val = publisher_val or douban_detail.publisher
-                    author_val = author_val or douban_detail.author
-                    translator_val = translator_val or douban_detail.translator
-            except Exception as exc:
-                logger.debug("Douban metadata fetch during acquire failed: %s", exc)
-        links: list[BookLink] = []
         if douban_url:
             links = build_edition_links(
-                title=title,
+                title=shelf_title,
                 douban_url=douban_url,
                 zlib_base_url=ZLIB_BASE,
             )
+            if not meta.get("douban_enrich"):
+                links = [
+                    BookLink(label="豆瓣（检索参考）", url=douban_url),
+                    *[link for link in links if link.label != "豆瓣"],
+                ]
         else:
-            links = [BookLink(label=book_fmt.upper(), url=zlib_search_url(title, book_fmt, base_url=ZLIB_BASE))]
+            links = [
+                BookLink(label=book_fmt.upper(), url=zlib_search_url(shelf_title, book_fmt, base_url=ZLIB_BASE))
+            ]
         notes = (
             f"cached: {local_path}\n"
             f"source: {source}\n"
-            f"match: {match_meta.get('match_quality', 'unknown')}"
+            f"match: {meta.get('match_quality', match_meta.get('match_quality', 'unknown'))}"
         )
-        if translator:
-            notes += f"\ntranslator: {translator}"
-        shelf_item = create_shelf_item(
-            storage,
-            user_id,
-            BookShelfCreate(
-                title=title,
-                author=author_val,
-                translator=translator_val,
-                publisher=publisher_val,
-                cover_url=normalize_cover_url(cover_url),
-                summary=summary_text[:4000] if summary_text else None,
-                links=links,
-                notes=notes,
-                cached_format=book_fmt,
-            ),
-        )
+        extra = str(meta.get("notes_extra") or "").strip()
+        if extra:
+            notes += f"\n{extra}"
+        from on1y.books.kindle_notes import merge_kindle_status
+
+        notes = merge_kindle_status(notes, kindle_status, kindle_detail)
+        if shelf_item_id:
+            existing = get_shelf_item(storage, user_id, shelf_item_id)
+            if existing is None:
+                raise ConfigurationError("书架条目不存在")
+            shelf_item = update_shelf_item(
+                storage,
+                user_id,
+                shelf_item_id,
+                BookShelfUpdate(
+                    title=shelf_title,
+                    author=meta.get("author"),
+                    translator=meta.get("translator"),
+                    publisher=meta.get("publisher"),
+                    cover_url=normalize_cover_url(meta.get("cover_url")),
+                    summary=meta.get("summary"),
+                    notes=notes,
+                    cached_format=book_fmt,
+                ),
+            )
+        else:
+            shelf_item = create_shelf_item(
+                storage,
+                user_id,
+                BookShelfCreate(
+                    title=shelf_title,
+                    author=meta.get("author"),
+                    translator=meta.get("translator"),
+                    publisher=meta.get("publisher"),
+                    cover_url=normalize_cover_url(meta.get("cover_url")),
+                    summary=meta.get("summary"),
+                    links=links,
+                    notes=notes,
+                    cached_format=book_fmt,
+                ),
+            )
+        try:
+            from on1y.books.knowledge_sync import prepare_shelf_item
+
+            shelf_item = prepare_shelf_item(storage, user_id, shelf_item)
+        except Exception as exc:
+            logger.warning("Shelf sync after acquire failed for %r: %s", shelf_title, exc)
 
     validation = match_meta.get("validation") or {}
     size_bytes = int(validation.get("size_bytes") or local_path.stat().st_size)
@@ -298,9 +439,9 @@ def acquire_book(
         "kindle_sent": kindle_sent,
         "kindle_status": kindle_status,
         "kindle_detail": kindle_detail,
-        "matched_title": match_meta.get("matched_title"),
+        "matched_title": shelf_title if add_to_shelf else match_meta.get("matched_title"),
         "matched_author": match_meta.get("matched_author"),
-        "match_quality": match_meta.get("match_quality"),
+        "match_quality": resolved_quality,
         "search_query": match_meta.get("search_query"),
         "file_size_bytes": size_bytes,
         "validation_ok": bool(validation.get("ok", True)),
