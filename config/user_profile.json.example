@@ -7,7 +7,7 @@
   },
   "kindle": {
     "enabled": true,
-    "send_to": "chengsijin81_waEOnP@kindle.com"
+    "send_to": "yourname@kindle.com"
   },
   "economist": {
     "auto_ingest_enabled": true,

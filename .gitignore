@@ -59,9 +59,11 @@ Thumbs.db
 *.log
 logs/
 
-# Local config overrides (keep examples in repo)
+# Local config overrides (keep *.example in repo)
 config/feeds.yaml
 config/local.yaml
+config/zhihu_follows.txt
+config/youtube_channels.txt
 
 # Local documentation (README on GitHub is the public intro)
 docs/
@@ -73,3 +75,4 @@ tmp/
 # Frontend build output
 frontend/.next/
 frontend/out/
+frontend/tsconfig.tsbuildinfo
