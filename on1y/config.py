@@ -181,7 +181,7 @@ class Settings(BaseSettings):
     rss_poll_interval_minutes: int = Field(default=30, ge=1)
     auto_sync_enabled: bool = Field(default=False)
     auto_sync_interval_minutes: int = Field(default=30, ge=5, le=24 * 60)
-    auto_sync_platform: str = Field(default="all", pattern="^(bilibili|youtube|zhihu|all)$")
+    auto_sync_platform: str = Field(default="all", pattern="^(bilibili|youtube|zhihu|twitter|all)$")
     auto_sync_ingest: bool = Field(default=True)
     # Parallel pipeline batch size (ingest / subtitles / distill — same as cold start).
     auto_sync_pipeline_batch_size: int = Field(default=25, ge=5, le=100)
@@ -199,7 +199,7 @@ class Settings(BaseSettings):
     # Favorites / playlists polling while serve is running (B站/知乎收藏夹, YouTube WL/Liked)
     collections_sync_enabled: bool = Field(default=True)
     collections_sync_interval_seconds: int = Field(default=120, ge=30, le=3600)
-    collections_sync_platforms: str = Field(default="bilibili,zhihu,youtube")
+    collections_sync_platforms: str = Field(default="bilibili,zhihu,youtube,twitter")
     collections_sync_ingest: bool = Field(default=True)
     collections_sync_ingest_limit: int = Field(default=3, ge=0, le=20)
     collections_sync_startup_delay_seconds: int = Field(default=90, ge=0, le=3600)
@@ -229,6 +229,19 @@ class Settings(BaseSettings):
     zhihu_api_poll_backfill_pages: int = Field(default=5, ge=1, le=50)
     # Zhihu API poll: moments = following feed (/api/v3/moments); activities = per-followee (legacy)
     zhihu_api_poll_mode: str = Field(default="moments", pattern="^(moments|activities)$")
+
+    # X (Twitter) Playwright subscription + bookmarks sync
+    twitter_sync_enabled: bool = Field(default=True)
+    twitter_bookmarks_sync_enabled: bool = Field(default=True)
+    twitter_likes_sync_enabled: bool = Field(default=True)
+    twitter_poll_max_items: int = Field(default=30, ge=1, le=100)
+    twitter_poll_backfill_max_items: int = Field(default=60, ge=1, le=200)
+    twitter_poll_max_scrolls: int = Field(default=3, ge=0, le=20)
+    twitter_bookmarks_max_scrolls: int = Field(default=4, ge=0, le=20)
+    twitter_likes_max_scrolls: int = Field(default=6, ge=0, le=20)
+    twitter_exclude_retweets: bool = Field(default=True)
+    twitter_min_interval_seconds: float = Field(default=3.0, ge=0.0)
+    twitter_antibot_pause_seconds: float = Field(default=300.0, ge=60.0)
 
     log_level: str = Field(default="INFO")
 

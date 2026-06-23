@@ -108,12 +108,14 @@ def sync_bilibili_up_config(
     settings: Settings | None = None,
     dry_run: bool = False,
     enabled: bool = True,
+    user_id: int | None = None,
 ) -> dict[str, Any]:
     settings = settings or get_settings()
-    followings = fetch_bilibili_followings(settings=settings)
+    cookie_path = resolve_cookie_path("bilibili", settings, user_id=user_id)
+    followings = fetch_bilibili_followings(settings=settings, cookie_path=cookie_path)
     count = merge_bilibili_up_feeds_yaml(
         followings,
-        feeds_path=resolve_feeds_config_path(settings),
+        feeds_path=resolve_feeds_config_path(settings, user_id=user_id),
         rsshub_base=settings.bilibili_rsshub_base,
         enabled=enabled,
         dry_run=dry_run,
@@ -205,6 +207,7 @@ def poll_bilibili_dynamic_updates(
     sync_since_ts: int | None = None,
     max_pages: int | None = None,
     backfill_max_days: int | None = None,
+    user_id: int | None = None,
 ) -> dict[str, Any]:
     """Enqueue new videos from following dynamics (polymer feed, type=video)."""
     settings = settings or get_settings()
@@ -227,7 +230,7 @@ def poll_bilibili_dynamic_updates(
     if max_pages is not None:
         pages_max = max_pages
 
-    path = resolve_cookie_path("bilibili", settings)
+    path = resolve_cookie_path("bilibili", settings, user_id=user_id)
     jar = _cookie_jar(path)
     title_index = youtube_title_index(storage)
 
@@ -340,6 +343,7 @@ def poll_bilibili_up_updates(
     sync_since_ts: int | None = None,
     subscription_source: str = "bilibili_up",
     backfill_max_days: int | None = None,
+    user_id: int | None = None,
 ) -> dict[str, Any]:
     """
     Enqueue new uploads from followed UPs via Bilibili API.
@@ -365,7 +369,7 @@ def poll_bilibili_up_updates(
 
     from on1y.cookies.loader import resolve_cookie_path
 
-    path = resolve_cookie_path("bilibili", settings)
+    path = resolve_cookie_path("bilibili", settings, user_id=user_id)
     jar = _cookie_jar(path)
     title_index = youtube_title_index(storage)
 
@@ -632,6 +636,7 @@ def sync_bilibili_subscriptions(
     dry_run: bool = False,
     sync_since_ts: int | None = None,
     backfill_max_days: int | None = None,
+    user_id: int | None = None,
 ) -> dict[str, Any]:
     settings = settings or get_settings()
     report: dict[str, Any] = {"platform": "bilibili"}
@@ -643,10 +648,11 @@ def sync_bilibili_subscriptions(
     followings: list[dict[str, str]] | None = None
     if sync_config:
         if dry_run:
-            followings = fetch_bilibili_followings(settings=settings)
+            cookie_path = resolve_cookie_path("bilibili", settings, user_id=user_id)
+            followings = fetch_bilibili_followings(settings=settings, cookie_path=cookie_path)
             merge_bilibili_up_feeds_yaml(
                 followings,
-                feeds_path=resolve_feeds_config_path(settings),
+                feeds_path=resolve_feeds_config_path(settings, user_id=user_id),
                 rsshub_base=settings.bilibili_rsshub_base,
                 enabled=True,
                 dry_run=True,
@@ -657,7 +663,7 @@ def sync_bilibili_subscriptions(
                 "dry_run": True,
             }
         else:
-            report["config"] = sync_bilibili_up_config(settings=settings)
+            report["config"] = sync_bilibili_up_config(settings=settings, user_id=user_id)
 
     if poll and not dry_run:
         if settings.bilibili_up_poll_mode == "dynamic":
@@ -667,10 +673,12 @@ def sync_bilibili_subscriptions(
                 backfill=backfill,
                 sync_since_ts=sync_since_ts,
                 backfill_max_days=backfill_max_days,
+                user_id=user_id,
             )
         else:
             if followings is None and sync_config:
-                followings = fetch_bilibili_followings(settings=settings)
+                cookie_path = resolve_cookie_path("bilibili", settings, user_id=user_id)
+                followings = fetch_bilibili_followings(settings=settings, cookie_path=cookie_path)
             report["poll"] = poll_bilibili_up_updates(
                 storage,
                 settings=settings,
@@ -678,6 +686,7 @@ def sync_bilibili_subscriptions(
                 backfill=backfill,
                 sync_since_ts=sync_since_ts,
                 backfill_max_days=backfill_max_days,
+                user_id=user_id,
             )
 
     return report

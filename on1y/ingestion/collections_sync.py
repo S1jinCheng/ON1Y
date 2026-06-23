@@ -14,7 +14,7 @@ from on1y.ports.storage import StoragePort
 
 logger = logging.getLogger(__name__)
 
-COLLECTIONS_PLATFORMS = ("bilibili", "zhihu", "youtube")
+COLLECTIONS_PLATFORMS = ("bilibili", "zhihu", "youtube", "twitter")
 
 
 def parse_collections_platforms(value: str) -> list[str]:
@@ -105,6 +105,18 @@ def sync_collections(
                     early_stop_existing_streak=scan["early_stop"],
                     settings=settings,
                 )
+            elif name == "twitter":
+                from on1y.ingestion.twitter_collections import sync_twitter_collections
+
+                platform_report = sync_twitter_collections(
+                    storage,
+                    include_likes=settings.twitter_likes_sync_enabled,
+                    include_bookmarks=settings.twitter_bookmarks_sync_enabled,
+                    dry_run=dry_run,
+                    max_scan=scan["max_scan"],
+                    early_stop_existing_streak=scan["early_stop"],
+                    settings=settings,
+                )
             else:
                 platform_report = sync_youtube_collections(
                     storage,
@@ -157,6 +169,15 @@ def sync_collections(
         from on1y.pipeline.zhihu_catchup import run_zhihu_catchup
 
         report["ingest"]["zhihu"] = run_zhihu_catchup(
+            storage,
+            ingest_per_round=limit,
+            max_rounds=1,
+        )
+
+    if "twitter" in targets and _should_ingest_platform(report, "twitter", storage=storage):
+        from on1y.pipeline.twitter_catchup import run_twitter_catchup
+
+        report["ingest"]["twitter"] = run_twitter_catchup(
             storage,
             ingest_per_round=limit,
             max_rounds=1,

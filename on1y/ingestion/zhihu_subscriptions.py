@@ -160,6 +160,7 @@ def poll_zhihu_following_moments(
     sync_since_ts: int | None = None,
     max_pages: int | None = None,
     backfill_max_days: int | None = None,
+    user_id: int | None = None,
 ) -> dict[str, Any]:
     """Enqueue new content from Zhihu following feed (/api/v3/moments)."""
     settings = settings or get_settings()
@@ -172,7 +173,7 @@ def poll_zhihu_following_moments(
         backfill_max_days=backfill_max_days,
     )
 
-    path = resolve_cookie_path("zhihu", settings)
+    path = resolve_cookie_path("zhihu", settings, user_id=user_id)
     jar = _cookie_jar(path)
     if not jar:
         raise ConfigurationError(f"No zhihu.com cookies in {path}")
@@ -315,6 +316,7 @@ def poll_zhihu_api_subscriptions(
     max_followees_per_run: int | None = None,
     max_pages_per_followee: int | None = None,
     backfill_max_days: int | None = None,
+    user_id: int | None = None,
 ) -> dict[str, Any]:
     """Dispatch Zhihu API poll: moments feed (default) or legacy per-followee activities."""
     settings = settings or get_settings()
@@ -328,6 +330,7 @@ def poll_zhihu_api_subscriptions(
             max_followees_per_run=max_followees_per_run,
             max_pages_per_followee=max_pages_per_followee,
             backfill_max_days=backfill_max_days,
+            user_id=user_id,
         )
     return poll_zhihu_following_moments(
         storage,
@@ -335,6 +338,7 @@ def poll_zhihu_api_subscriptions(
         backfill=backfill,
         sync_since_ts=sync_since_ts,
         backfill_max_days=backfill_max_days,
+        user_id=user_id,
     )
 
 
@@ -378,6 +382,7 @@ def poll_zhihu_follow_activities(
     max_followees_per_run: int | None = None,
     max_pages_per_followee: int | None = None,
     backfill_max_days: int | None = None,
+    user_id: int | None = None,
 ) -> dict[str, Any]:
     """Enqueue new content from followed Zhihu users via API (cookie only)."""
     settings = settings or get_settings()
@@ -390,7 +395,7 @@ def poll_zhihu_follow_activities(
         backfill_max_days=backfill_max_days,
     )
 
-    path = resolve_cookie_path("zhihu", settings)
+    path = resolve_cookie_path("zhihu", settings, user_id=user_id)
     jar = _cookie_jar(path)
     if not jar:
         raise ConfigurationError(f"No zhihu.com cookies in {path}")
@@ -402,7 +407,7 @@ def poll_zhihu_follow_activities(
         else settings.zhihu_api_poll_max_pages
     )
 
-    followees = fetch_zhihu_followees(settings=settings)
+    followees = fetch_zhihu_followees(settings=settings, user_id=user_id)
     rotate_raw, _ = storage.get_rss_feed_state(f"{CURSOR_KEY}-rotate")
     rotate = int(rotate_raw) if rotate_raw and str(rotate_raw).isdigit() else 0
     if not followees:

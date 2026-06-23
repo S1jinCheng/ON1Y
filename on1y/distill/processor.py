@@ -17,10 +17,17 @@ from on1y.taxonomy.constants import OTHER_THEME_SLUG
 
 logger = logging.getLogger(__name__)
 
+SHORT_CONTENT_DISTILL_MAX_CHARS = 150
+
 _SUBTITLE_HINT_RE = re.compile(
     r"WEBVTT|\d{1,2}:\d{2}(:\d{2})?\s*-->",
     re.IGNORECASE,
 )
+
+
+def is_short_content_for_distill(body: str) -> bool:
+    """Skip LLM summary when the body is already short enough to read as-is."""
+    return len((body or "").strip()) < SHORT_CONTENT_DISTILL_MAX_CHARS
 
 
 def list_undistilled_raw_ids(
@@ -62,7 +69,20 @@ def distill_raw_item(
     if not raw.body_text or not raw.body_text.strip():
         raise ValueError(f"raw_item {raw_id} has no body text")
 
+    full_body = raw.body_text.strip()
     existing = storage.get_distilled_by_raw_id(raw_id)
+
+    if is_short_content_for_distill(full_body):
+        if (
+            existing
+            and not force
+            and existing.distill_status == "ok"
+            and (existing.prompt_version or "") == PROMPT_VERSION
+            and (existing.summary or "").strip() == full_body
+        ):
+            return existing.id
+        return _distill_short_content(storage, raw_id, full_body)
+
     if (
         existing
         and not force
@@ -73,7 +93,7 @@ def distill_raw_item(
 
     lang = locale or settings.llm_locale
     max_in = settings.llm_distill_max_input_chars
-    body = raw.body_text.strip()
+    body = full_body
     if len(body) > max_in:
         body = body[:max_in] + "\n[...truncated for fast classify...]"
 
@@ -149,6 +169,25 @@ def run_distill_batch(
             failed += 1
             logger.warning("Distill failed raw_id=%s: %s", raw_id, exc)
     return {"distilled": distilled, "failed": failed}
+
+
+def _distill_short_content(storage: SqliteStorage, raw_id: int, body: str) -> int:
+    """Persist original body as summary — no LLM call for posts under the threshold."""
+    distilled_id = storage.upsert_distilled(
+        raw_id=raw_id,
+        summary=body,
+        key_points=[],
+        topics=[],
+        model=None,
+        prompt_version=PROMPT_VERSION,
+        status="ok",
+        error=None,
+        reader_text=None,
+    )
+    if storage.get_raw_theme_source(raw_id) != "user":
+        storage.set_item_theme_by_slug(raw_id, OTHER_THEME_SLUG, source="llm")
+    logger.info("Short content raw_id=%s: skipped LLM, using body as summary", raw_id)
+    return distilled_id
 
 
 def _clamp_summary(text: str) -> str:

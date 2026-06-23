@@ -40,9 +40,14 @@ def _cookie_jar(cookie_path: Path) -> dict[str, str]:
     return jar
 
 
-def fetch_zhihu_me(*, cookie_path: Path | None = None, settings: Settings | None = None) -> dict[str, Any]:
+def fetch_zhihu_me(
+    *,
+    cookie_path: Path | None = None,
+    settings: Settings | None = None,
+    user_id: int | None = None,
+) -> dict[str, Any]:
     settings = settings or get_settings()
-    path = cookie_path or resolve_cookie_path("zhihu", settings)
+    path = cookie_path or resolve_cookie_path("zhihu", settings, user_id=user_id)
     jar = _cookie_jar(path)
     if not jar:
         raise ConfigurationError(f"No zhihu.com cookies in {path}")
@@ -62,14 +67,15 @@ def fetch_zhihu_followees(
     settings: Settings | None = None,
     page_size: int = 20,
     max_users: int = 500,
+    user_id: int | None = None,
 ) -> list[dict[str, str]]:
     """
     Return followees as {url_token, name, feed_type} dicts.
     Uses the logged-in account from zhihu cookies.
     """
     settings = settings or get_settings()
-    path = cookie_path or resolve_cookie_path("zhihu", settings)
-    me = fetch_zhihu_me(cookie_path=path, settings=settings)
+    path = cookie_path or resolve_cookie_path("zhihu", settings, user_id=user_id)
+    me = fetch_zhihu_me(cookie_path=path, settings=settings, user_id=user_id)
     member_token = str(me["url_token"])
     feed_type = settings.zhihu_follow_feed_type.strip().lower() or "activities"
     jar = _cookie_jar(path)
@@ -116,13 +122,14 @@ def fetch_zhihu_favlists(
     settings: Settings | None = None,
     page_size: int = 20,
     max_lists: int = 200,
+    user_id: int | None = None,
 ) -> list[dict[str, str]]:
     """
     Return the logged-in user's 收藏夹 as {id, name, feed_type=collection} dicts.
     """
     settings = settings or get_settings()
-    path = cookie_path or resolve_cookie_path("zhihu", settings)
-    me = fetch_zhihu_me(cookie_path=path, settings=settings)
+    path = cookie_path or resolve_cookie_path("zhihu", settings, user_id=user_id)
+    me = fetch_zhihu_me(cookie_path=path, settings=settings, user_id=user_id)
     member_token = str(me["url_token"])
     jar = _cookie_jar(path)
 

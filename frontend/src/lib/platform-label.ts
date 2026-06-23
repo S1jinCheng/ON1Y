@@ -4,6 +4,7 @@ const LABELS: Record<string, { zh: string; en: string }> = {
   youtube: { zh: "YouTube", en: "YouTube" },
   zhihu: { zh: "知乎", en: "Zhihu" },
   bilibili: { zh: "哔哩哔哩", en: "Bilibili" },
+  twitter: { zh: "X", en: "X" },
   economist: { zh: "经济学人", en: "The Economist" },
   upload: { zh: "上传", en: "Upload" },
   manual: { zh: "手动录入", en: "Manual" }

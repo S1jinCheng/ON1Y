@@ -13,9 +13,9 @@ import {
 } from "@/lib/api";
 import { t, type Locale, type UiKey } from "@/lib/i18n";
 
-type PlatformKey = "bilibili" | "youtube" | "zhihu";
+type PlatformKey = "bilibili" | "youtube" | "zhihu" | "twitter";
 
-const ALL_PLATFORMS: PlatformKey[] = ["bilibili", "youtube", "zhihu"];
+const ALL_PLATFORMS: PlatformKey[] = ["bilibili", "youtube", "zhihu", "twitter"];
 
 function platformLabel(platform: PlatformKey, ui: (key: UiKey) => string): string {
   if (platform === "bilibili") {
@@ -23,6 +23,9 @@ function platformLabel(platform: PlatformKey, ui: (key: UiKey) => string): strin
   }
   if (platform === "youtube") {
     return ui("platformYoutube");
+  }
+  if (platform === "twitter") {
+    return "X / Twitter";
   }
   return ui("platformZhihu");
 }
@@ -34,6 +37,9 @@ function pickDisplayDate(settings: SubscriptionSettings): string {
     }
     if (p === "youtube") {
       return settings.youtube_sync_since;
+    }
+    if (p === "twitter") {
+      return settings.twitter_sync_since;
     }
     return settings.zhihu_sync_since;
   }).filter((value): value is string => Boolean(value));
@@ -50,12 +56,14 @@ function buildSincePayload(
   bilibili_sync_since?: string | null;
   youtube_sync_since?: string | null;
   zhihu_sync_since?: string | null;
+  twitter_sync_since?: string | null;
 } {
   const since = syncSince.trim();
   const payload: {
     bilibili_sync_since?: string | null;
     youtube_sync_since?: string | null;
     zhihu_sync_since?: string | null;
+    twitter_sync_since?: string | null;
   } = {};
   if (active.includes("bilibili")) {
     payload.bilibili_sync_since = since || "";
@@ -65,6 +73,9 @@ function buildSincePayload(
   }
   if (active.includes("zhihu")) {
     payload.zhihu_sync_since = since || "";
+  }
+  if (active.includes("twitter")) {
+    payload.twitter_sync_since = since || "";
   }
   return payload;
 }
