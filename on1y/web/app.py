@@ -169,6 +169,21 @@ class SubscriptionSyncRequest(BaseModel):
     sync_hotlist: bool = False
 
 
+class ObsidianSettingsRequest(BaseModel):
+    enabled: bool | None = None
+    vault_path: str | None = None
+    inbox_relpath: str | None = None
+    archive_relpath: str | None = None
+    interval_seconds: int | None = Field(default=None, ge=15, le=3600)
+    import_mode: str | None = None
+    auto_distill: bool | None = None
+
+
+class ObsidianSyncRequest(BaseModel):
+    limit: int = Field(default=50, ge=1, le=500)
+    auto_distill: bool | None = None
+
+
 class DistillBackfillRequest(BaseModel):
     platform: str | None = "bilibili"
     batch_size: int = Field(default=10, ge=1, le=20)
@@ -754,6 +769,37 @@ def create_app() -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"saved": True, **public_settings_view()}
+
+    @app.get("/api/obsidian/settings")
+    def obsidian_settings_get() -> dict[str, Any]:
+        from on1y.obsidian.settings import public_settings_view
+
+        return public_settings_view()
+
+    @app.post("/api/obsidian/settings")
+    def obsidian_settings_save(body: ObsidianSettingsRequest) -> dict[str, Any]:
+        from on1y.obsidian.settings import public_settings_view, save_settings
+
+        payload = body.model_dump(exclude_none=True)
+        if body.import_mode is not None:
+            mode = body.import_mode.strip().lower()
+            if mode not in {"move", "keep", "delete"}:
+                raise HTTPException(status_code=400, detail="import_mode must be move, keep, or delete")
+            payload["import_mode"] = mode
+        save_settings(**payload)
+        return {"saved": True, **public_settings_view()}
+
+    @app.post("/api/obsidian/sync")
+    def obsidian_sync_run(body: ObsidianSyncRequest) -> dict[str, Any]:
+        from on1y.obsidian.auto_sync import run_obsidian_sync_once
+
+        return run_obsidian_sync_once(limit=body.limit, auto_distill=body.auto_distill)
+
+    @app.get("/api/obsidian/sync/status")
+    def obsidian_sync_status_route() -> dict[str, Any]:
+        from on1y.obsidian.auto_sync import obsidian_sync_status
+
+        return obsidian_sync_status()
 
     @app.post("/api/sync/full")
     def full_sync() -> dict[str, Any]:
@@ -2924,6 +2970,7 @@ def run_server(*, host: str | None = None, port: int | None = None) -> None:
 
     from on1y.digest.evening_auto import start_evening_digest_loop
     from on1y.hotlist.economist_auto import start_economist_auto_loop
+    from on1y.obsidian.auto_sync import start_obsidian_sync_loop
     from on1y.subscriptions.auto_sync import start_auto_sync_loop
     from on1y.subscriptions.collections_auto_sync import start_collections_sync_loop
 
@@ -2932,6 +2979,7 @@ def run_server(*, host: str | None = None, port: int | None = None) -> None:
     get_storage().close()
     start_auto_sync_loop()
     start_collections_sync_loop()
+    start_obsidian_sync_loop()
     start_economist_auto_loop()
     start_evening_digest_loop()
     uvicorn.run(

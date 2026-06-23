@@ -21,18 +21,18 @@ import {
 import { FormEvent, useEffect, useRef, useState } from "react";
 
 import {
-  clipKnowledgeItem,
   deleteCookieFile,
   buildUserArchiveExportUrl,
   exportUserArchive,
   fetchAuthStatus,
   fetchAuthUsers,
-  getClipStats,
   getCookieStatuses,
   verifyCookiePlatform,
   getDesktopAppStatus,
   getLlmSettings,
   getNetworkSettings,
+  getObsidianSettings,
+  getObsidianSyncStatus,
   getSubscriptionSettings,
   getSubscriptionSyncStatus,
   getSmtpSettings,
@@ -44,8 +44,10 @@ import {
   patchDesktopPrefs,
   patchUserProfile,
   runSubscriptionSync,
+  runObsidianSync,
   saveLlmSettings,
   saveNetworkSettings,
+  saveObsidianSettings,
   saveSmtpSettings,
   saveSubscriptionSettings,
   saveSyncSettings,
@@ -66,6 +68,7 @@ import {
   type DesktopAppStatus,
   type LlmSettingsView,
   type NetworkSettingsView,
+  type ObsidianSettingsView,
   type SmtpSettingsView,
   type SyncSettingsView,
   type UserProfile
@@ -386,29 +389,17 @@ function GeneralTab(props: {
   const [alertEnabled, setAlertEnabled] = useState(true);
   const [alertCooldown, setAlertCooldown] = useState(300);
   const [alertWebhook, setAlertWebhook] = useState("");
-  const [clipUrl, setClipUrl] = useState("");
-  const [clipAutoDistill, setClipAutoDistill] = useState(true);
-  const [clipping, setClipping] = useState(false);
-  const [clipStats, setClipStats] = useState<{
-    clipped_items: number;
-    distilled_ok: number;
-    distilled_fail_or_pending: number;
-    clip_success_rate: number;
-    distill_fail_rate: number;
-    distill_latency_seconds_avg: number;
-  } | null>(null);
   const archiveImportRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       try {
-        const [profile, status, network, syncSettings, clip] = await Promise.all([
+        const [profile, status, network, syncSettings] = await Promise.all([
           getUserProfile(),
           getDesktopAppStatus(),
           getNetworkSettings(),
-          getSyncSettings(),
-          getClipStats().catch(() => null)
+          getSyncSettings()
         ]);
         if (cancelled) {
           return;
@@ -432,7 +423,6 @@ function GeneralTab(props: {
         setAlertEnabled(Boolean(syncSettings.alert_enabled));
         setAlertCooldown(syncSettings.alert_cooldown_seconds);
         setAlertWebhook(syncSettings.alert_webhook_url ?? "");
-        setClipStats(clip);
       } catch (err) {
         props.onMessage?.(err instanceof Error ? err.message : String(err));
       } finally {
@@ -614,47 +604,6 @@ function GeneralTab(props: {
     }
   }
 
-  function buildClipBookmarkletHref(): string {
-    const code =
-      "(async()=>{try{const base='http://127.0.0.1:8765';const selected=(window.getSelection&&window.getSelection()?.toString())||'';const payload={url:location.href,title:document.title||'',selected_text:selected,clip_source:'bookmarklet',auto_distill:true};const r=await fetch(base+'/api/knowledge/clip',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});if(!r.ok){throw new Error('HTTP '+r.status)}const data=await r.json();alert('Clipped to On1y #'+data.raw_id);}catch(e){alert('On1y clip failed: '+(e&&e.message?e.message:e));}})();";
-    return `javascript:${encodeURIComponent(code)}`;
-  }
-
-  async function onManualClipSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
-    event.preventDefault();
-    const url = clipUrl.trim();
-    if (!url) {
-      props.onMessage?.(L(locale, "请输入 URL", "Please enter a URL"));
-      return;
-    }
-    setClipping(true);
-    try {
-      const result = await clipKnowledgeItem({
-        url,
-        auto_distill: clipAutoDistill,
-        clip_source: "manual"
-      });
-      props.onMessage?.(
-        result.existing
-          ? L(
-              locale,
-              `已记录剪藏（已存在条目 #${result.raw_id}，次数 ${result.clip_count}）`,
-              `Clip recorded on existing item #${result.raw_id} (${result.clip_count} clips)`
-            )
-          : L(locale, `已剪藏到知识库 #${result.raw_id}`, `Clipped to library #${result.raw_id}`)
-      );
-      setClipUrl("");
-      const latest = await getClipStats().catch(() => null);
-      if (latest) {
-        setClipStats(latest);
-      }
-    } catch (err) {
-      props.onMessage?.(err instanceof Error ? err.message : String(err));
-    } finally {
-      setClipping(false);
-    }
-  }
-
   if (loading) {
     return <LoadingRow locale={locale} />;
   }
@@ -803,72 +752,6 @@ function GeneralTab(props: {
             </div>
           </div>
         ) : null}
-      </section>
-
-      <section className="space-y-3">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-neutral-400">
-          {L(locale, "网页剪藏", "Web clipping")}
-        </h3>
-        <p className="text-[11px] leading-relaxed text-neutral-500">
-          {L(
-            locale,
-            "把下面链接拖到浏览器书签栏。浏览网页时点击它，当前页面（含可选选中文本）会通过 Jina + On1y 管线入库并生成摘要标签。",
-            "Drag the link below to your bookmarks bar. While reading a page, click it to clip into On1y (Jina + distill pipeline)."
-          )}
-        </p>
-        <a
-          href={buildClipBookmarkletHref()}
-          className="inline-flex items-center rounded-lg border border-border bg-soft/60 px-3 py-2 text-sm font-medium text-foreground hover:bg-soft"
-        >
-          {L(locale, "On1y 剪藏", "On1y Clip")}
-        </a>
-        <div className="rounded-lg border border-border bg-panel/60 px-3 py-3">
-          <p className="text-sm font-medium text-foreground">
-            {L(locale, "手动剪藏 URL", "Manual clip by URL")}
-          </p>
-          <form className="mt-2 space-y-2" onSubmit={(e) => void onManualClipSubmit(e)}>
-            <input
-              className={inputClass}
-              value={clipUrl}
-              onChange={(e) => setClipUrl(e.target.value)}
-              placeholder="https://..."
-              disabled={clipping}
-            />
-            <label className="inline-flex items-center gap-2 text-xs text-muted">
-              <input
-                type="checkbox"
-                className="rounded border-border"
-                checked={clipAutoDistill}
-                onChange={(e) => setClipAutoDistill(e.target.checked)}
-                disabled={clipping}
-              />
-              {L(locale, "入库后自动摘要与标签", "Auto distill after ingest")}
-            </label>
-            <div className="flex justify-end">
-              <button type="submit" className={ghostBtn} disabled={clipping}>
-                {clipping ? L(locale, "剪藏中…", "Clipping…") : L(locale, "保存到信息流", "Save to feed")}
-              </button>
-            </div>
-          </form>
-          {clipStats ? (
-            <div className="mt-3 rounded border border-border bg-surface px-3 py-2 text-xs text-muted">
-              <div>
-                {L(locale, "累计剪藏", "Total clips")}: {clipStats.clipped_items}
-              </div>
-              <div>
-                {L(locale, "摘要成功率", "Distill success rate")}:{" "}
-                {(clipStats.clip_success_rate * 100).toFixed(1)}%
-              </div>
-              <div>
-                {L(locale, "摘要失败/待处理率", "Distill fail/pending rate")}:{" "}
-                {(clipStats.distill_fail_rate * 100).toFixed(1)}%
-              </div>
-              <div>
-                {L(locale, "平均摘要延迟", "Avg distill latency")}: {clipStats.distill_latency_seconds_avg}s
-              </div>
-            </div>
-          ) : null}
-        </div>
       </section>
 
       <section className="space-y-3">
@@ -2338,6 +2221,18 @@ function BooksTab(props: { locale: Locale; onMessage?: (message: string) => void
   const [annasEnabled, setAnnasEnabled] = useState(true);
   const [annasSecretKey, setAnnasSecretKey] = useState("");
   const [browsingBookCacheDir, setBrowsingBookCacheDir] = useState(false);
+  const [obsidian, setObsidian] = useState<ObsidianSettingsView | null>(null);
+  const [obsidianSaving, setObsidianSaving] = useState(false);
+  const [obsidianRunning, setObsidianRunning] = useState(false);
+  const [browsingObsidianVault, setBrowsingObsidianVault] = useState(false);
+  const [obsidianStatus, setObsidianStatus] = useState<{
+    running: boolean;
+    started_at?: string | null;
+    finished_at?: string | null;
+    last_report?: Record<string, unknown> | null;
+    last_error?: string | null;
+    user_id?: number | null;
+  } | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const onMessageRef = useRef(onMessage);
@@ -2347,7 +2242,12 @@ function BooksTab(props: { locale: Locale; onMessage?: (message: string) => void
     let cancelled = false;
     void (async () => {
       try {
-        const [bookSettings, sourcesFile] = await Promise.all([fetchBookSettings(), fetchBookSources()]);
+        const [bookSettings, sourcesFile, obsidianSettings, obsidianSyncStatus] = await Promise.all([
+          fetchBookSettings(),
+          fetchBookSources(),
+          getObsidianSettings().catch(() => null),
+          getObsidianSyncStatus().catch(() => null)
+        ]);
         if (cancelled) {
           return;
         }
@@ -2364,6 +2264,8 @@ function BooksTab(props: { locale: Locale; onMessage?: (message: string) => void
         setZlibEnabled(toggles.zlibEnabled);
         setAnnasEnabled(toggles.annasEnabled);
         setAnnasSecretKey(bookSettings.annas_secret_key ?? "");
+        setObsidian(obsidianSettings);
+        setObsidianStatus(obsidianSyncStatus);
       } catch (err) {
         onMessageRef.current?.(err instanceof Error ? err.message : String(err));
       } finally {
@@ -2396,6 +2298,21 @@ function BooksTab(props: { locale: Locale; onMessage?: (message: string) => void
     }
   }
 
+  async function onBrowseObsidianVault(): Promise<void> {
+    setBrowsingObsidianVault(true);
+    try {
+      const picked = await pickFolder();
+      if (!picked) {
+        return;
+      }
+      setObsidian((prev) => (prev ? { ...prev, vault_path: picked } : prev));
+    } catch (err) {
+      onMessage?.(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBrowsingObsidianVault(false);
+    }
+  }
+
   async function save(): Promise<void> {
     setSaving(true);
     try {
@@ -2423,6 +2340,44 @@ function BooksTab(props: { locale: Locale; onMessage?: (message: string) => void
       onMessage?.(err instanceof Error ? err.message : String(err));
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function saveObsidian(): Promise<void> {
+    if (!obsidian) {
+      return;
+    }
+    setObsidianSaving(true);
+    try {
+      const saved = await saveObsidianSettings(obsidian);
+      setObsidian(saved);
+      onMessage?.(L(locale, "Obsidian 设置已保存", "Obsidian settings saved"));
+    } catch (err) {
+      onMessage?.(err instanceof Error ? err.message : String(err));
+    } finally {
+      setObsidianSaving(false);
+    }
+  }
+
+  async function runObsidianNow(): Promise<void> {
+    setObsidianRunning(true);
+    try {
+      const report = await runObsidianSync();
+      onMessage?.(
+        L(
+          locale,
+          `Obsidian 同步完成：导入 ${report.imported}，跳过 ${report.skipped}，失败 ${report.failed}`,
+          `Obsidian sync done: imported ${report.imported}, skipped ${report.skipped}, failed ${report.failed}`
+        )
+      );
+      const status = await getObsidianSyncStatus().catch(() => null);
+      if (status) {
+        setObsidianStatus(status);
+      }
+    } catch (err) {
+      onMessage?.(err instanceof Error ? err.message : String(err));
+    } finally {
+      setObsidianRunning(false);
     }
   }
 
@@ -2547,6 +2502,134 @@ function BooksTab(props: { locale: Locale; onMessage?: (message: string) => void
             "From tw.annas-archive.gl/account/secret_key; leave empty to try free mirror links."
           )}
         </p>
+      </div>
+      <div className="space-y-3 border-t border-border pt-4">
+        <div className="flex items-center gap-2">
+          <BookOpen className="h-4 w-4 text-muted" />
+          <FieldLabel>{L(locale, "Obsidian 同步", "Obsidian sync")}</FieldLabel>
+        </div>
+        <p className="text-[11px] text-muted">
+          {L(
+            locale,
+            "将 Obsidian 中指定目录的 Markdown 导入 On1y（默认每 60 秒）。",
+            "Import Markdown from a configured Obsidian folder into On1y (default every 60 seconds)."
+          )}
+        </p>
+        {obsidian ? (
+          <div className="space-y-2 rounded-lg border border-border bg-panel/60 px-3 py-3">
+            <ToggleRow
+              label={L(locale, "启用 Obsidian 自动导入", "Enable Obsidian auto-import")}
+              checked={obsidian.enabled}
+              onChange={(checked) => setObsidian((prev) => (prev ? { ...prev, enabled: checked } : prev))}
+            />
+            <div>
+              <FieldLabel>{L(locale, "Vault 路径", "Vault path")}</FieldLabel>
+              <div className="flex gap-2">
+                <input
+                  className={`${inputClass} min-w-0 flex-1`}
+                  value={obsidian.vault_path}
+                  onChange={(e) =>
+                    setObsidian((prev) => (prev ? { ...prev, vault_path: e.target.value } : prev))
+                  }
+                  placeholder="D:\\ObsidianVault"
+                />
+                <button
+                  type="button"
+                  className={`inline-flex shrink-0 items-center gap-1.5 ${ghostBtn} px-3`}
+                  disabled={browsingObsidianVault}
+                  onClick={() => void onBrowseObsidianVault()}
+                  title={L(locale, "浏览本地目录", "Browse local folder")}
+                >
+                  {browsingObsidianVault ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <FolderOpen className="h-4 w-4" />
+                  )}
+                  {L(locale, "浏览", "Browse")}
+                </button>
+              </div>
+            </div>
+            <div className="grid gap-2 md:grid-cols-2">
+              <div>
+                <FieldLabel>{L(locale, "导入目录（相对路径）", "Inbox rel path")}</FieldLabel>
+                <input
+                  className={inputClass}
+                  value={obsidian.inbox_relpath}
+                  onChange={(e) =>
+                    setObsidian((prev) => (prev ? { ...prev, inbox_relpath: e.target.value } : prev))
+                  }
+                />
+              </div>
+              <div>
+                <FieldLabel>{L(locale, "归档目录（相对路径）", "Archive rel path")}</FieldLabel>
+                <input
+                  className={inputClass}
+                  value={obsidian.archive_relpath}
+                  onChange={(e) =>
+                    setObsidian((prev) => (prev ? { ...prev, archive_relpath: e.target.value } : prev))
+                  }
+                />
+              </div>
+            </div>
+            <div className="grid gap-2 md:grid-cols-2">
+              <div>
+                <FieldLabel>{L(locale, "扫描周期（秒）", "Interval (seconds)")}</FieldLabel>
+                <input
+                  type="number"
+                  min={15}
+                  max={3600}
+                  className={inputClass}
+                  value={obsidian.interval_seconds}
+                  onChange={(e) =>
+                    setObsidian((prev) =>
+                      prev
+                        ? { ...prev, interval_seconds: Math.max(15, Math.min(3600, Number(e.target.value) || 60)) }
+                        : prev
+                    )
+                  }
+                />
+              </div>
+              <div className="pt-5">
+                <label className="inline-flex items-center gap-2 text-xs text-muted">
+                  <input
+                    type="checkbox"
+                    className="rounded border-border"
+                    checked={obsidian.auto_distill}
+                    onChange={(e) =>
+                      setObsidian((prev) => (prev ? { ...prev, auto_distill: e.target.checked } : prev))
+                    }
+                  />
+                  {L(locale, "自动摘要", "Auto distill")}
+                </label>
+              </div>
+            </div>
+            <p className="text-[11px] text-muted">
+              {L(
+                locale,
+                "Obsidian 与 On1y 独立管理：导入只读，不会移动或删除你的 Vault 文件。",
+                "Obsidian and On1y are independent: import is read-only and never moves/deletes vault files."
+              )}
+            </p>
+            {obsidianStatus?.last_error ? (
+              <p className="text-xs text-red-500">{obsidianStatus.last_error}</p>
+            ) : null}
+            <div className="flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                className={ghostBtn}
+                disabled={obsidianRunning}
+                onClick={() => void runObsidianNow()}
+              >
+                {obsidianRunning ? L(locale, "同步中…", "Syncing…") : L(locale, "立即同步", "Run sync now")}
+              </button>
+              <button type="button" className={primaryBtn} disabled={obsidianSaving} onClick={() => void saveObsidian()}>
+                {obsidianSaving ? L(locale, "保存中…", "Saving…") : L(locale, "保存 Obsidian 设置", "Save Obsidian settings")}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <LoadingRow locale={locale} />
+        )}
       </div>
       <div className="flex justify-end">
         <button type="button" className={primaryBtn} disabled={saving} onClick={() => void save()}>

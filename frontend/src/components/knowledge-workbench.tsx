@@ -74,8 +74,6 @@ import {
   patchItemClassification,
   patchItemImportance,
   saveItemNote,
-  retryDistill,
-  retryExtract,
   restoreKnowledgeItem,
   toggleItemFavorite,
   translateItemTranscript,
@@ -527,6 +525,10 @@ export default function KnowledgeWorkbench(): JSX.Element {
 
   const originalTextPanelProps = {
     bodyText: reader?.body_text ?? "",
+    markdownText:
+      active?.platform === "obsidian"
+        ? (reader?.raw_body_text ?? reader?.body_text ?? "")
+        : undefined,
     locale,
     emptyLabel: ui("noReaderText"),
     expandLabel: ui("expandReader"),
@@ -1326,40 +1328,6 @@ export default function KnowledgeWorkbench(): JSX.Element {
     await uploadDocument(file, true);
     setMessage(ui("uploadClassify"));
     await refreshData();
-  }
-
-  async function handleRetryExtract(): Promise<void> {
-    if (!active) {
-      return;
-    }
-    setLoading(true);
-    try {
-      await retryExtract(active.raw_id, true);
-      setMessage(locale === "zh" ? "已重试抽取并重跑摘要" : "Re-ran extraction and distill");
-      await refreshData();
-      await loadReader(active.raw_id);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function handleRetryDistill(): Promise<void> {
-    if (!active) {
-      return;
-    }
-    setLoading(true);
-    try {
-      await retryDistill(active.raw_id, true);
-      setMessage(locale === "zh" ? "已重跑摘要与标签" : "Re-ran distill");
-      await refreshData();
-      await loadReader(active.raw_id);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setLoading(false);
-    }
   }
 
   async function handleCreateTheme(name: string, description: string): Promise<void> {
@@ -2295,6 +2263,28 @@ export default function KnowledgeWorkbench(): JSX.Element {
                         <ExternalLink className="h-3 w-3" />
                       </a>
                     ) : null}
+                    {active.platform === "obsidian" && reader?.obsidian_uri ? (
+                      <a
+                        href={reader.obsidian_uri}
+                        onClick={(e) => handleExternalLinkClick(e, reader.obsidian_uri || "")}
+                        className="inline-flex items-center gap-1 text-xs text-muted underline-offset-2 hover:text-foreground hover:underline"
+                      >
+                        {locale === "zh" ? "打开 Obsidian" : "Open in Obsidian"}
+                        <ExternalLink className="h-3 w-3" />
+                      </a>
+                    ) : null}
+                    {active.platform === "obsidian" && reader?.obsidian_source_url ? (
+                      <a
+                        href={reader.obsidian_source_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        onClick={(e) => handleOpenOriginalLink(e, reader.obsidian_source_url || "", active.raw_id)}
+                        className="inline-flex items-center gap-1 text-xs text-muted underline-offset-2 hover:text-foreground hover:underline"
+                      >
+                        {locale === "zh" ? "原文链接" : "Original link"}
+                        <ExternalLink className="h-3 w-3" />
+                      </a>
+                    ) : null}
                     {active.is_read || active.read_at ? (
                       <button
                         type="button"
@@ -2304,20 +2294,6 @@ export default function KnowledgeWorkbench(): JSX.Element {
                         {ui("markUnread")}
                       </button>
                     ) : null}
-                    <button
-                      type="button"
-                      onClick={() => void handleRetryExtract()}
-                      className="text-xs text-muted underline-offset-2 hover:text-foreground hover:underline"
-                    >
-                      {locale === "zh" ? "重试抽取" : "Retry extract"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void handleRetryDistill()}
-                      className="text-xs text-muted underline-offset-2 hover:text-foreground hover:underline"
-                    >
-                      {locale === "zh" ? "重跑摘要" : "Retry distill"}
-                    </button>
                   </div>
                 </div>
               </div>
@@ -2351,17 +2327,6 @@ export default function KnowledgeWorkbench(): JSX.Element {
                   }
                 />
               </div>
-
-              {reader?.jina_markdown?.trim() ? (
-                <div className="border-b border-border px-4 py-3">
-                  <p className="mb-2 text-xs font-medium uppercase tracking-wider text-muted">
-                    {locale === "zh" ? "Jina Markdown" : "Jina Markdown"}
-                  </p>
-                  <div className="prose prose-sm max-w-none text-foreground prose-p:my-1 prose-p:text-foreground">
-                    <ReactMarkdown>{reader.jina_markdown}</ReactMarkdown>
-                  </div>
-                </div>
-              ) : null}
 
               {(!isHotlist || isEconomistHotlist) && active ? (
                 <div className="border-b border-border px-4 py-3">

@@ -16,6 +16,7 @@ _W_TAG = 3.0
 _W_THEME = 2.0
 _W_FTS = 4.0
 _CANDIDATE_POOL = 80
+_MIN_RELATED_SCORE = 6.0
 
 _DISTILLED_OK = """
     d.distill_status = 'ok'
@@ -227,51 +228,10 @@ def find_related_items(
         ):
             score_map[raw_id] = score_map.get(raw_id, 0.0) + score
 
-    if not score_map and tag_names:
-        theme_only = conn.execute(
-            f"""
-            SELECT r.id AS raw_id
-            FROM raw_items r
-            INNER JOIN distilled_items d ON d.raw_id = r.id
-            WHERE r.id != ?
-              AND (r.deleted_at IS NULL OR r.deleted_at = '')
-              AND {_DISTILLED_OK}
-              AND {_scope_clause(scope)}
-              AND ? IS NOT NULL AND r.theme_id = ?
-              AND NOT EXISTS (
-                  SELECT 1 FROM recommendation_feedback rf
-                  WHERE rf.from_raw_id = ? AND rf.to_raw_id = r.id
-              )
-              {f" AND {user_clause}" if user_clause else ""}
-            ORDER BY r.ingested_at DESC
-            LIMIT ?
-            """,
-            (
-                from_raw_id,
-                theme_id,
-                theme_id,
-                from_raw_id,
-                *user_params,
-                limit,
-            ),
-        ).fetchall()
-        for row in theme_only:
-            score_map[int(row["raw_id"])] = _W_THEME
-
-    ranked = sorted(score_map.items(), key=lambda x: (-x[1], x[0]))[:limit]
-    if not ranked:
-        title_q = str(source["raw_title"] or "").strip()
-        if title_q and prepare_fts_query(title_q):
-            for raw_id, score in _fts_candidates(
-                conn,
-                from_raw_id=from_raw_id,
-                fts_query=title_q[:80],
-                scope=scope,
-                user_clause=user_clause,
-                user_params=user_params,
-            ):
-                score_map[raw_id] = score
-        ranked = sorted(score_map.items(), key=lambda x: (-x[1], x[0]))[:limit]
+    ranked = sorted(
+        ((rid, score) for rid, score in score_map.items() if score >= _MIN_RELATED_SCORE),
+        key=lambda x: (-x[1], x[0]),
+    )[:limit]
     if not ranked:
         return []
 

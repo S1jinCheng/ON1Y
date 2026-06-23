@@ -2,6 +2,7 @@
 
 import { Languages, Loader2, Maximize2, Minimize2 } from "lucide-react";
 import { useState } from "react";
+import ReactMarkdown from "react-markdown";
 
 import {
   formatOriginalText,
@@ -25,6 +26,7 @@ type OriginalTextPanelProps = {
   translateLabel?: string;
   translatingLabel?: string;
   onTranslate?: () => Promise<void>;
+  markdownText?: string | null;
 };
 
 export function OriginalTextPanel(props: OriginalTextPanelProps): JSX.Element {
@@ -42,16 +44,19 @@ export function OriginalTextPanel(props: OriginalTextPanelProps): JSX.Element {
     descriptionFallbackLabel,
     translateLabel,
     translatingLabel,
-    onTranslate
+    onTranslate,
+    markdownText
   } = props;
 
   const [translating, setTranslating] = useState(false);
+  const [viewMode, setViewMode] = useState<"txt" | "md">("txt");
 
   const picked = pickLocaleTranscript(bodyText, locale, translatedBodyText);
   const cleaned = formatOriginalText(bodyText, { locale, translatedBodyText });
   const html = originalTextToHtml(cleaned);
   const isNoSubtitle = picked.kind === "none";
   const canTranslate = locale === "zh" && picked.kind === "en" && Boolean(onTranslate);
+  const hasMarkdown = Boolean((markdownText || "").trim());
 
   async function handleTranslate(): Promise<void> {
     if (!onTranslate || translating) {
@@ -80,6 +85,24 @@ export function OriginalTextPanel(props: OriginalTextPanelProps): JSX.Element {
   return (
     <div className={`flex flex-col ${expanded ? "h-full min-h-0 flex-1" : ""}`}>
       <div className="mb-2 flex shrink-0 flex-wrap items-center justify-end gap-2">
+        {hasMarkdown ? (
+          <div className="inline-flex overflow-hidden rounded border border-border text-xs">
+            <button
+              type="button"
+              className={`px-2 py-1 ${viewMode === "txt" ? "bg-soft text-foreground" : "text-muted hover:bg-soft"}`}
+              onClick={() => setViewMode("txt")}
+            >
+              TXT
+            </button>
+            <button
+              type="button"
+              className={`px-2 py-1 ${viewMode === "md" ? "bg-soft text-foreground" : "text-muted hover:bg-soft"}`}
+              onClick={() => setViewMode("md")}
+            >
+              MD
+            </button>
+          </div>
+        ) : null}
         {canTranslate ? (
           <button
             type="button"
@@ -130,7 +153,15 @@ export function OriginalTextPanel(props: OriginalTextPanelProps): JSX.Element {
         </p>
       ) : null}
 
-      {cleaned ? (
+      {viewMode === "md" && hasMarkdown ? (
+        <div
+          className={`original-reading rounded-md border border-border bg-panel px-5 py-4 text-foreground ${readingClass} ${scrollClass}`}
+        >
+          <div className="prose prose-sm max-w-none text-foreground prose-p:my-1 prose-p:text-foreground">
+            <ReactMarkdown>{markdownText || ""}</ReactMarkdown>
+          </div>
+        </div>
+      ) : cleaned ? (
         <div
           className={`original-reading rounded-md border border-border bg-panel px-5 py-4 text-foreground ${readingClass} ${scrollClass} [&_.original-heading]:mb-3 [&_.original-heading]:mt-5 [&_.original-heading]:font-semibold [&_.original-heading]:text-foreground [&_.original-paragraph]:mb-4 [&_.original-paragraph]:indent-8 [&_.original-paragraph]:text-justify`}
           dangerouslySetInnerHTML={{ __html: html }}

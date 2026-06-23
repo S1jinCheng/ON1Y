@@ -2178,6 +2178,10 @@ class SqliteStorage:
             from on1y.hotlist.economist_urls import resolve_economist_epub_url
 
             item_url = resolve_economist_epub_url(item_url, meta)
+        elif str(row["platform"]) == "obsidian":
+            source_url = str(meta.get("obsidian_source_url") or "").strip()
+            if source_url:
+                item_url = source_url
         return {
             "raw_id": int(row["id"]),
             "url": item_url,
@@ -2195,6 +2199,9 @@ class SqliteStorage:
             "extract_strategy": str(meta.get("extract_strategy") or "").strip() or None,
             "jina_markdown": str(meta.get("jina_markdown") or ""),
             "jina_markdown_length": _as_int_or_none(meta.get("jina_markdown_length")),
+            "obsidian_uri": str(meta.get("obsidian_uri") or "").strip() or None,
+            "obsidian_source_url": str(meta.get("obsidian_source_url") or "").strip() or None,
+            "obsidian_path": str(meta.get("obsidian_path") or "").strip() or None,
             "transcript_kind": transcript_kind,
             "translated_body_text": translated_body_text,
             "can_translate": transcript_kind == "en" and not translated_body_text,
@@ -3295,6 +3302,10 @@ class SqliteStorage:
                 from on1y.hotlist.economist_urls import resolve_economist_epub_url
 
                 item_url = resolve_economist_epub_url(item_url, meta)
+            elif str(row["platform"]) == "obsidian":
+                source_url = str(meta.get("obsidian_source_url") or "").strip()
+                if source_url:
+                    item_url = source_url
             items.append(
                 {
                     "raw_id": raw_id,

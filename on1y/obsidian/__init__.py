@@ -1,0 +1,2 @@
+"""Obsidian integration utilities."""
+

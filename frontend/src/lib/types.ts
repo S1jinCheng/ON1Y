@@ -93,6 +93,7 @@ export type ReaderContent = {
   title: string | null;
   platform: string;
   body_text: string | null;
+  raw_body_text?: string | null;
   summary: string | null;
   reader_text: string | null;
   author: string;
@@ -107,6 +108,9 @@ export type ReaderContent = {
   extract_strategy?: string | null;
   jina_markdown?: string | null;
   jina_markdown_length?: number | null;
+  obsidian_uri?: string | null;
+  obsidian_source_url?: string | null;
+  obsidian_path?: string | null;
   transcript_kind: TranscriptKind;
   translated_body_text: string | null;
   can_translate: boolean;

@@ -1237,6 +1237,58 @@ export function saveSyncSettings(payload: Partial<SyncSettingsView>): Promise<Sy
   });
 }
 
+export type ObsidianSettingsView = {
+  enabled: boolean;
+  vault_path: string;
+  inbox_relpath: string;
+  archive_relpath: string;
+  interval_seconds: number;
+  import_mode: "move" | "keep" | "delete";
+  auto_distill: boolean;
+};
+
+export function getObsidianSettings(): Promise<ObsidianSettingsView> {
+  return request<ObsidianSettingsView>("/api/obsidian/settings");
+}
+
+export function saveObsidianSettings(payload: Partial<ObsidianSettingsView>): Promise<ObsidianSettingsView & { saved: boolean }> {
+  return request("/api/obsidian/settings", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function runObsidianSync(payload?: {
+  limit?: number;
+  auto_distill?: boolean;
+}): Promise<{
+  enabled: boolean;
+  reason: string;
+  scanned: number;
+  imported: number;
+  failed: number;
+  skipped: number;
+  distilled?: number;
+  error_count?: number;
+  errors?: string[];
+}> {
+  return request("/api/obsidian/sync", {
+    method: "POST",
+    body: JSON.stringify(payload ?? {})
+  });
+}
+
+export function getObsidianSyncStatus(): Promise<{
+  running: boolean;
+  started_at?: string | null;
+  finished_at?: string | null;
+  last_report?: Record<string, unknown> | null;
+  last_error?: string | null;
+  user_id?: number | null;
+}> {
+  return request("/api/obsidian/sync/status");
+}
+
 export type PipelineAlert = {
   id: string;
   kind: "rate_limit" | "antibot" | "cookie_expired" | string;
