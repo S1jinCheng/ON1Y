@@ -174,14 +174,50 @@ class ObsidianSettingsRequest(BaseModel):
     vault_path: str | None = None
     inbox_relpath: str | None = None
     archive_relpath: str | None = None
+    outbox_relpath: str | None = None
     interval_seconds: int | None = Field(default=None, ge=15, le=3600)
     import_mode: str | None = None
     auto_distill: bool | None = None
+    writeback_enabled: bool | None = None
 
 
 class ObsidianSyncRequest(BaseModel):
     limit: int = Field(default=50, ge=1, le=500)
     auto_distill: bool | None = None
+
+
+class RelationUpsertRequest(BaseModel):
+    from_raw_id: int
+    to_raw_id: int
+    relation_type: str = "obsidian_link"
+    note: str | None = None
+    confidence: float | None = Field(default=1.0, ge=0.0, le=1.0)
+
+
+class ObsidianWritebackRequest(BaseModel):
+    target_rel_path: str = Field(min_length=1, max_length=1000)
+    content_md: str | None = None
+    block_anchor: str | None = Field(default=None, max_length=200)
+    link_raw_id: int | None = None
+    relation_type: str = "obsidian_link"
+    summary: str | None = None
+    context: str | None = None
+    note: str | None = None
+    on1y_url: str | None = None
+    apply_now: bool = False
+
+
+class RetrieveRequest(BaseModel):
+    query: str | None = None
+    from_raw_id: int | None = None
+    mode: str = "keyword"
+    limit: int = Field(default=20, ge=1, le=100)
+    offset: int = Field(default=0, ge=0)
+    theme_id: int | None = None
+    tag_ids: list[int] | None = None
+    collection: str = "feed"
+    platform: str | None = None
+    source: str | None = None
 
 
 class DistillBackfillRequest(BaseModel):
@@ -800,6 +836,62 @@ def create_app() -> FastAPI:
         from on1y.obsidian.auto_sync import obsidian_sync_status
 
         return obsidian_sync_status()
+
+    @app.get("/api/obsidian/writeback/queue")
+    def obsidian_writeback_queue(
+        status: str | None = Query(default=None),
+        limit: int = Query(default=200, ge=1, le=500),
+    ) -> dict[str, Any]:
+        storage = get_storage()
+        try:
+            rows = storage.list_obsidian_writeback_queue(status=status, limit=limit)
+            return {"items": rows, "count": len(rows), "status": status or "all"}
+        finally:
+            storage.close()
+
+    @app.post("/api/obsidian/writeback/apply")
+    def obsidian_writeback_apply(limit: int = Query(default=20, ge=1, le=200)) -> dict[str, Any]:
+        from on1y.obsidian.writeback import apply_writeback_queue
+
+        storage = get_storage()
+        try:
+            return apply_writeback_queue(storage, limit=limit)
+        finally:
+            storage.close()
+
+    @app.post("/api/obsidian/writeback")
+    def obsidian_writeback_enqueue(body: ObsidianWritebackRequest) -> dict[str, Any]:
+        from on1y.obsidian.writeback import build_writeback_block, enqueue_writeback
+
+        content = (body.content_md or "").strip()
+        if not content:
+            if body.link_raw_id is None:
+                raise HTTPException(status_code=400, detail="content_md or link_raw_id is required")
+            on1y_url = (body.on1y_url or "").strip() or f"on1y://knowledge/{body.link_raw_id}"
+            content = build_writeback_block(
+                on1y_url=on1y_url,
+                relation_type=body.relation_type,
+                summary=body.summary,
+                context=body.context,
+                note=body.note,
+            )
+        storage = get_storage()
+        try:
+            queued = enqueue_writeback(
+                storage,
+                target_rel_path=body.target_rel_path,
+                content_md=content,
+                block_anchor=body.block_anchor,
+                link_raw_id=body.link_raw_id,
+            )
+            result: dict[str, Any] = {"queued": queued}
+            if body.apply_now:
+                from on1y.obsidian.writeback import apply_writeback_queue
+
+                result["apply"] = apply_writeback_queue(storage, limit=20)
+            return result
+        finally:
+            storage.close()
 
     @app.post("/api/sync/full")
     def full_sync() -> dict[str, Any]:
@@ -2402,6 +2494,50 @@ def create_app() -> FastAPI:
         finally:
             storage.close()
 
+    @app.post("/api/knowledge/retrieve")
+    def knowledge_retrieve(body: RetrieveRequest) -> dict[str, Any]:
+        from on1y.retrieve import retrieve
+
+        storage = get_storage()
+        try:
+            return retrieve(
+                storage,
+                query=body.query,
+                from_raw_id=body.from_raw_id,
+                mode=body.mode,
+                limit=body.limit,
+                offset=body.offset,
+                theme_id=body.theme_id,
+                tag_ids=body.tag_ids,
+                collection=body.collection,
+                platform=body.platform,
+                source=body.source,
+            )
+        finally:
+            storage.close()
+
+    @app.get("/api/knowledge/retrieve/context")
+    def knowledge_retrieve_context(raw_ids: str, max_chars: int = Query(default=4000, ge=500, le=10000)) -> dict[str, Any]:
+        from on1y.retrieve import pack_context
+
+        ids: list[int] = []
+        for token in (raw_ids or "").split(","):
+            part = token.strip()
+            if not part:
+                continue
+            try:
+                ids.append(int(part))
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=f"invalid raw id: {part}") from exc
+        if not ids:
+            raise HTTPException(status_code=400, detail="raw_ids is required")
+        storage = get_storage()
+        try:
+            chunks = pack_context(storage, ids, max_chars_per_doc=max_chars)
+            return {"contexts": chunks, "count": len(chunks)}
+        finally:
+            storage.close()
+
     @app.post("/api/knowledge/items/manual")
     def create_manual_item(body: ManualItemRequest) -> dict[str, Any]:
         from on1y.distill.processor import distill_raw_item
@@ -2676,6 +2812,235 @@ def create_app() -> FastAPI:
             conn = storage._connect()
             record_less_relevant(conn, from_raw_id=from_raw_id, to_raw_id=to_raw_id)
             conn.commit()
+            return {"ok": True}
+        finally:
+            storage.close()
+
+    @app.get("/api/knowledge/items/{raw_id}/relations")
+    def knowledge_item_relations(raw_id: int) -> dict[str, Any]:
+        storage = get_storage()
+        try:
+            raw = storage.get_raw_by_id_for_user(raw_id)
+            if raw is None:
+                raise HTTPException(status_code=404, detail="not found")
+            rows = storage.list_item_relations(raw_id)
+            other_ids: set[int] = set()
+            for row in rows:
+                from_id = int(row.get("from_raw_id") or 0)
+                to_id = int(row.get("to_raw_id") or 0)
+                other = to_id if from_id == raw_id else from_id
+                if other > 0:
+                    other_ids.add(other)
+            item_map: dict[int, dict[str, Any]] = {}
+            if other_ids:
+                conn = storage._connect()
+                placeholders = ",".join("?" for _ in other_ids)
+                raw_rows = conn.execute(
+                    f"""
+                    SELECT
+                        r.id AS raw_id,
+                        r.url,
+                        r.raw_title,
+                        r.platform,
+                        r.source,
+                        r.content_type,
+                        r.ingested_at,
+                        r.deleted_at,
+                        r.source_meta,
+                        r.theme_id,
+                        d.summary,
+                        d.topics,
+                        d.prompt_version,
+                        d.distill_status
+                    FROM raw_items r
+                    LEFT JOIN distilled_items d ON d.raw_id = r.id
+                    WHERE r.id IN ({placeholders})
+                      AND r.deleted_at IS NULL
+                    """,
+                    tuple(other_ids),
+                ).fetchall()
+                for item in storage._assemble_knowledge_items(raw_rows):
+                    rid = int(item.get("raw_id") or 0)
+                    if rid > 0:
+                        item_map[rid] = item
+            payload: list[dict[str, Any]] = []
+            for row in rows:
+                record = dict(row)
+                from_id = int(record.get("from_raw_id") or 0)
+                to_id = int(record.get("to_raw_id") or 0)
+                other = to_id if from_id == raw_id else from_id
+                if other in item_map:
+                    record["other_item"] = item_map[other]
+                payload.append(record)
+            return {"items": payload, "count": len(payload)}
+        finally:
+            storage.close()
+
+    @app.post("/api/knowledge/relations")
+    def create_knowledge_relation(body: RelationUpsertRequest) -> dict[str, Any]:
+        from on1y.obsidian.writeback import build_writeback_block, enqueue_writeback
+
+        allowed = {
+            "same_topic",
+            "references",
+            "subset_of",
+            "series",
+            "contradicts",
+            "related",
+            "obsidian_link",
+        }
+        relation_type = body.relation_type.strip().lower()
+        if relation_type not in allowed:
+            raise HTTPException(status_code=400, detail=f"unsupported relation_type: {body.relation_type}")
+        storage = get_storage()
+        try:
+            raw_rows: dict[int, Any] = {}
+            for rid in (body.from_raw_id, body.to_raw_id):
+                raw = storage.get_raw_by_id_for_user(rid)
+                if raw is None:
+                    raise HTTPException(status_code=404, detail=f"raw item not found: {rid}")
+                raw_rows[rid] = raw
+            try:
+                storage.add_relation(
+                    from_raw_id=body.from_raw_id,
+                    to_raw_id=body.to_raw_id,
+                    relation_type=relation_type,
+                    note=(body.note or "").strip() or None,
+                    confidence=body.confidence,
+                    source="user",
+                )
+            except Exception as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            # Passive writeback: user links in On1y, background sync applies queued markdown append.
+            if relation_type == "obsidian_link":
+                a = raw_rows.get(body.from_raw_id)
+                b = raw_rows.get(body.to_raw_id)
+                pairs: list[tuple[Any, Any]] = []
+                touched_obsidian_ids: set[int] = set()
+                if a is not None and b is not None:
+                    if str(a.platform or "").strip().lower() == "obsidian":
+                        pairs.append((a, b))
+                    if str(b.platform or "").strip().lower() == "obsidian":
+                        pairs.append((b, a))
+                for obsidian_raw, other_raw in pairs:
+                    touched_obsidian_ids.add(int(obsidian_raw.id))
+                    if hasattr(storage, "merge_source_meta"):
+                        storage.merge_source_meta(
+                            int(obsidian_raw.id),
+                            {"obsidian_writeback_status": "pending"},
+                        )
+                    target_rel_path = str((obsidian_raw.source_meta or {}).get("obsidian_path") or "").strip()
+                    if not target_rel_path:
+                        continue
+                    on1y_url = str(other_raw.url or "").strip() or f"on1y://knowledge/{other_raw.id}"
+                    summary = str((other_raw.raw_title or "").strip() or "")
+                    note = (body.note or "").strip() or None
+                    block_md = build_writeback_block(
+                        on1y_url=on1y_url,
+                        relation_type=relation_type,
+                        summary=summary or None,
+                        context=note,
+                        note=note,
+                        link_raw_id=int(other_raw.id),
+                    )
+                    try:
+                        enqueue_writeback(
+                            storage,
+                            target_rel_path=target_rel_path,
+                            content_md=block_md,
+                            link_raw_id=int(other_raw.id),
+                        )
+                    except Exception:
+                        logger.exception(
+                            "enqueue obsidian writeback failed from=%s to=%s",
+                            body.from_raw_id,
+                            body.to_raw_id,
+                        )
+                try:
+                    from on1y.obsidian.writeback import apply_writeback_queue
+
+                    result = apply_writeback_queue(storage, limit=20, force=True)
+                    status = "pending"
+                    if int(result.get("applied") or 0) > 0:
+                        status = "applied"
+                    elif int(result.get("failed") or 0) > 0:
+                        status = "failed"
+                    elif int(result.get("skipped") or 0) > 0:
+                        status = "skipped"
+                    if touched_obsidian_ids and hasattr(storage, "merge_source_meta"):
+                        now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+                        for obsidian_id in touched_obsidian_ids:
+                            patch: dict[str, Any] = {"obsidian_writeback_status": status}
+                            if status == "applied":
+                                patch["obsidian_writeback_at"] = now
+                            storage.merge_source_meta(obsidian_id, patch)
+                except Exception:
+                    logger.exception(
+                        "apply obsidian writeback failed from=%s to=%s",
+                        body.from_raw_id,
+                        body.to_raw_id,
+                    )
+            return {"ok": True}
+        finally:
+            storage.close()
+
+    @app.delete("/api/knowledge/relations/{relation_id}")
+    def delete_knowledge_relation(relation_id: int, raw_id: int | None = Query(default=None)) -> dict[str, Any]:
+        storage = get_storage()
+        try:
+            row = storage._connect().execute(
+                """
+                SELECT id, from_raw_id, to_raw_id, relation_type
+                FROM item_relations
+                WHERE id = ?
+                """,
+                (relation_id,),
+            ).fetchone()
+            if row is None:
+                raise HTTPException(status_code=404, detail="relation not found")
+            from_raw_id = int(row["from_raw_id"])
+            to_raw_id = int(row["to_raw_id"])
+            if raw_id is not None and raw_id not in {from_raw_id, to_raw_id}:
+                raise HTTPException(status_code=404, detail="relation not found")
+            from_raw = storage.get_raw_by_id_for_user(from_raw_id)
+            to_raw = storage.get_raw_by_id_for_user(to_raw_id)
+            if from_raw is None or to_raw is None:
+                raise HTTPException(status_code=404, detail="relation not found")
+            deleted = storage.delete_relation(relation_id, raw_id=raw_id)
+            if not deleted:
+                raise HTTPException(status_code=404, detail="relation not found")
+            if str(row["relation_type"] or "").strip().lower() == "obsidian_link":
+                from on1y.obsidian.writeback import remove_writeback_block
+
+                pairs: list[tuple[Any, Any]] = []
+                if str(from_raw.platform or "").strip().lower() == "obsidian":
+                    pairs.append((from_raw, to_raw))
+                if str(to_raw.platform or "").strip().lower() == "obsidian":
+                    pairs.append((to_raw, from_raw))
+                for obsidian_raw, other_raw in pairs:
+                    target_rel_path = str((obsidian_raw.source_meta or {}).get("obsidian_path") or "").strip()
+                    if not target_rel_path:
+                        continue
+                    try:
+                        result = remove_writeback_block(
+                            storage,
+                            target_rel_path=target_rel_path,
+                            link_raw_id=int(other_raw.id),
+                            force=True,
+                        )
+                        if hasattr(storage, "merge_source_meta") and int(result.get("removed") or 0) > 0:
+                            now = (
+                                datetime.now(timezone.utc)
+                                .replace(microsecond=0)
+                                .isoformat()
+                                .replace("+00:00", "Z")
+                            )
+                            storage.merge_source_meta(
+                                int(obsidian_raw.id),
+                                {"obsidian_writeback_status": "applied", "obsidian_writeback_at": now},
+                            )
+                    except Exception:
+                        logger.exception("remove obsidian writeback failed relation_id=%s", relation_id)
             return {"ok": True}
         finally:
             storage.close()

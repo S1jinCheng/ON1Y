@@ -1242,9 +1242,11 @@ export type ObsidianSettingsView = {
   vault_path: string;
   inbox_relpath: string;
   archive_relpath: string;
+  outbox_relpath: string;
   interval_seconds: number;
   import_mode: "move" | "keep" | "delete";
   auto_distill: boolean;
+  writeback_enabled: boolean;
 };
 
 export function getObsidianSettings(): Promise<ObsidianSettingsView> {
@@ -1287,6 +1289,120 @@ export function getObsidianSyncStatus(): Promise<{
   user_id?: number | null;
 }> {
   return request("/api/obsidian/sync/status");
+}
+
+export type ItemRelation = {
+  id: number;
+  from_raw_id: number;
+  to_raw_id: number;
+  relation_type: string;
+  confidence?: number | null;
+  note?: string | null;
+  source: string;
+  from_title?: string | null;
+  to_title?: string | null;
+  from_url?: string | null;
+  to_url?: string | null;
+  from_platform?: string | null;
+  to_platform?: string | null;
+  other_item?: KnowledgeItem;
+};
+
+export function getItemRelations(rawId: number): Promise<{ items: ItemRelation[]; count: number }> {
+  return request(`/api/knowledge/items/${rawId}/relations`);
+}
+
+export function createItemRelation(payload: {
+  from_raw_id: number;
+  to_raw_id: number;
+  relation_type?: string;
+  note?: string;
+  confidence?: number;
+}): Promise<{ ok: boolean }> {
+  return request("/api/knowledge/relations", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function deleteItemRelation(relationId: number, rawId?: number): Promise<{ ok: boolean }> {
+  const q = rawId ? `?raw_id=${rawId}` : "";
+  return request(`/api/knowledge/relations/${relationId}${q}`, { method: "DELETE" });
+}
+
+export type RetrieveHit = {
+  raw_id: number;
+  score: number;
+  score_parts: Record<string, number>;
+  item: KnowledgeItem;
+};
+
+export function retrieveKnowledge(payload: {
+  query?: string;
+  from_raw_id?: number;
+  mode?: "keyword" | "similar" | "hybrid" | "semantic";
+  limit?: number;
+  offset?: number;
+  theme_id?: number;
+  tag_ids?: number[];
+  collection?: "feed" | "favorites" | "trash" | "hotlist" | "notes";
+  platform?: string;
+  source?: string;
+}): Promise<{ mode: string; engine: string; total: number; hits: RetrieveHit[] }> {
+  return request("/api/knowledge/retrieve", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function getRetrieveContext(
+  rawIds: number[],
+  maxChars = 4000
+): Promise<{ contexts: Array<Record<string, unknown>>; count: number }> {
+  const query = new URLSearchParams({
+    raw_ids: rawIds.join(","),
+    max_chars: String(maxChars)
+  });
+  return request(`/api/knowledge/retrieve/context?${query.toString()}`);
+}
+
+export function getObsidianWritebackQueue(params?: {
+  status?: "pending" | "processing" | "applied" | "failed" | "skipped";
+  limit?: number;
+}): Promise<{ items: Array<Record<string, unknown>>; count: number; status: string }> {
+  const query = new URLSearchParams();
+  if (params?.status) {
+    query.set("status", params.status);
+  }
+  if (params?.limit) {
+    query.set("limit", String(params.limit));
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request(`/api/obsidian/writeback/queue${suffix}`);
+}
+
+export function enqueueObsidianWriteback(payload: {
+  target_rel_path: string;
+  content_md?: string;
+  block_anchor?: string;
+  link_raw_id?: number;
+  relation_type?: string;
+  summary?: string;
+  context?: string;
+  note?: string;
+  on1y_url?: string;
+  apply_now?: boolean;
+}): Promise<Record<string, unknown>> {
+  return request("/api/obsidian/writeback", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function applyObsidianWriteback(limit = 20): Promise<Record<string, unknown>> {
+  return request(`/api/obsidian/writeback/apply?limit=${limit}`, {
+    method: "POST"
+  });
 }
 
 export type PipelineAlert = {

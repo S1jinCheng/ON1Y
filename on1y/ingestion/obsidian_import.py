@@ -51,7 +51,8 @@ def import_obsidian_batch(
     cfg, inbox_dir, archive_dir = resolve_paths(user_id=user_id)
     if not cfg.enabled:
         return {"enabled": False, "reason": "disabled", "scanned": 0, "imported": 0, "failed": 0, "skipped": 0}
-    if inbox_dir is None:
+    vault_raw = (cfg.vault_path or "").strip()
+    if not vault_raw:
         return {
             "enabled": True,
             "reason": "vault_path_missing",
@@ -60,11 +61,12 @@ def import_obsidian_batch(
             "failed": 0,
             "skipped": 0,
         }
-    if not inbox_dir.is_dir():
+    vault_dir = Path(vault_raw).expanduser().resolve()
+    if not vault_dir.is_dir():
         return {
             "enabled": True,
-            "reason": "inbox_not_found",
-            "inbox": str(inbox_dir),
+            "reason": "vault_not_found",
+            "vault": str(vault_dir),
             "scanned": 0,
             "imported": 0,
             "failed": 0,
@@ -72,7 +74,17 @@ def import_obsidian_batch(
         }
 
     should_distill = cfg.auto_distill if auto_distill is None else bool(auto_distill)
-    rows = sorted((p for p in inbox_dir.rglob("*.md") if p.is_file()), key=lambda p: p.stat().st_mtime)
+    exclude_roots = [vault_dir / ".obsidian"]
+    if archive_dir is not None:
+        exclude_roots.append(archive_dir.resolve())
+    outbox_relpath = str(getattr(cfg, "outbox_relpath", "") or "").strip()
+    if outbox_relpath:
+        exclude_roots.append((vault_dir / outbox_relpath).resolve())
+    rows = sorted(
+        _collect_markdown_files(vault_dir, exclude_roots=exclude_roots),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
     report: dict[str, Any] = {
         "enabled": True,
         "reason": "ok",
@@ -82,21 +94,52 @@ def import_obsidian_batch(
         "skipped": 0,
         "distilled": 0,
         "errors": [],
-        "inbox": str(inbox_dir),
+        "inbox": str(inbox_dir) if inbox_dir is not None else "",
+        "vault": str(vault_dir),
         "archive": str(archive_dir) if archive_dir is not None else None,
     }
     for file_path in rows[: max(1, limit)]:
         report["scanned"] += 1
         try:
-            parsed = _parse_note(file_path, inbox_dir=inbox_dir)
+            parsed = _parse_note(file_path, root_dir=vault_dir)
             if parsed is None:
                 report["skipped"] += 1
                 continue
             existing = storage.get_raw_by_url(parsed.url) if parsed.url else None
+            collided_raw_id: int | None = None
+            if existing and str(existing.platform or "").strip().lower() != "obsidian":
+                # Never overwrite non-Obsidian items; keep stable source URL in metadata.
+                collided_raw_id = int(existing.id)
+                parsed.url = f"on1y://obsidian/{parsed.content_hash}"
             if existing and _already_imported_from_same_note(existing.source_meta, parsed):
                 report["skipped"] += 1
                 continue
             raw = _upsert_note(storage, parsed)
+            if collided_raw_id and hasattr(storage, "add_relation"):
+                try:
+                    storage.add_relation(
+                        from_raw_id=raw.id,
+                        to_raw_id=collided_raw_id,
+                        relation_type="obsidian_link",
+                        note="import_url_collision",
+                        confidence=1.0,
+                        source="import",
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.debug("skip collision relation raw=%s to=%s", raw.id, collided_raw_id)
+            if cfg.vault_path.strip() and hasattr(storage, "upsert_obsidian_registry"):
+                try:
+                    registry_id = storage.upsert_obsidian_registry(
+                        raw_id=raw.id,
+                        vault_path=str(Path(cfg.vault_path).expanduser().resolve()),
+                        rel_path=parsed.rel_path,
+                        content_hash=parsed.content_hash,
+                        mtime=parsed.mtime,
+                    )
+                    if hasattr(storage, "merge_source_meta"):
+                        storage.merge_source_meta(raw.id, {"obsidian_registry_id": registry_id})
+                except Exception as exc:  # noqa: BLE001
+                    report["errors"].append(f"registry #{raw.id}: {exc}")
             if parsed.tags or parsed.theme_slug:
                 storage.set_item_classification(
                     raw.id,
@@ -121,7 +164,7 @@ def import_obsidian_batch(
     return report
 
 
-def _parse_note(path: Path, *, inbox_dir: Path) -> ParsedObsidianNote | None:
+def _parse_note(path: Path, *, root_dir: Path) -> ParsedObsidianNote | None:
     if path.stat().st_size > _MAX_FILE_BYTES:
         return None
     text = path.read_text(encoding="utf-8", errors="replace")
@@ -142,7 +185,7 @@ def _parse_note(path: Path, *, inbox_dir: Path) -> ParsedObsidianNote | None:
     author = str(frontmatter.get("author") or "").strip() or None
     description = str(frontmatter.get("description") or "").strip() or None
     content_hash = hashlib.sha256(body.encode("utf-8", errors="ignore")).hexdigest()
-    rel_path = path.relative_to(inbox_dir).as_posix()
+    rel_path = path.relative_to(root_dir).as_posix()
     source_url = normalized_url or f"on1y://obsidian/{content_hash}"
     return ParsedObsidianNote(
         path=path,
@@ -160,6 +203,19 @@ def _parse_note(path: Path, *, inbox_dir: Path) -> ParsedObsidianNote | None:
         mtime=path.stat().st_mtime,
         abs_path=str(path.resolve()),
     )
+
+
+def _collect_markdown_files(vault_dir: Path, *, exclude_roots: list[Path]) -> list[Path]:
+    normalized: list[Path] = [p.resolve() for p in exclude_roots if p]
+    files: list[Path] = []
+    for candidate in vault_dir.rglob("*.md"):
+        if not candidate.is_file():
+            continue
+        resolved = candidate.resolve()
+        if any(str(resolved).startswith(str(root)) for root in normalized):
+            continue
+        files.append(resolved)
+    return files
 
 
 def _split_frontmatter(text: str) -> tuple[dict[str, Any], str]:
@@ -224,6 +280,7 @@ def _upsert_note(storage: StoragePort, parsed: ParsedObsidianNote):
     obsidian_uri = _build_obsidian_uri(parsed.abs_path)
     source_meta = {
         "clip_source": "obsidian",
+        "obsidian_stream": True,
         "obsidian_path": parsed.rel_path,
         "obsidian_abs_path": parsed.abs_path,
         "obsidian_uri": obsidian_uri,

@@ -10,17 +10,19 @@ import {
   Flame,
   Forward,
   Inbox,
+  Network,
   NotebookPen,
   RefreshCw,
   RotateCcw,
   Search,
   Square,
   Star,
+  Check,
   Trash2,
   X
 } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import ReactMarkdown from "react-markdown";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 
@@ -65,7 +67,10 @@ import {
   type EconomistWeekOption,
   type HotlistSource,
   getReaderContent,
+  getItemRelations,
   getRelatedItems,
+  createItemRelation,
+  deleteItemRelation,
   markItemRead,
   patchItemRead,
   postRelatedLessRelevant,
@@ -111,6 +116,13 @@ import type { Locale } from "@/lib/i18n";
 
 /** Match backend `SHORT_CONTENT_DISTILL_MAX_CHARS`. */
 const SHORT_CONTENT_SUMMARY_MAX_CHARS = 150;
+
+type LinkedRelation = {
+  relationId: number;
+  relationType: string;
+  note: string | null;
+  item: KnowledgeItem;
+};
 
 function filterValue(value: string): string | undefined {
   return value === ALL_FILTER || value === "" ? undefined : value;
@@ -175,6 +187,7 @@ function ColumnScroll(props: {
 const INITIAL_FEED_BATCH = 40;
 /** Scroll pagination batch size (API max 200). */
 const FEED_BATCH_SIZE = 80;
+const RELATION_SEARCH_BATCH_SIZE = 200;
 
 function resolveCover(item: {
   cover_image?: string;
@@ -228,6 +241,99 @@ function extractStrategyLabel(strategy: string | null | undefined, locale: Local
     return locale === "zh" ? "网页回退" : "HTML fallback";
   }
   return key || (locale === "zh" ? "抽取" : "Extract");
+}
+
+function escapeHtml(input: string): string {
+  return input
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function highlightTextHtml(text: string, needle: string): string {
+  const source = text || "";
+  const q = needle.trim();
+  if (!q) {
+    return "";
+  }
+  const escapedNeedle = q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const matcher = new RegExp(escapedNeedle, "gi");
+  const escapedSource = escapeHtml(source);
+  return escapedSource.replace(matcher, (m) => `<mark>${m}</mark>`);
+}
+
+function withLocalSearchHighlight(item: KnowledgeItem, q: string): KnowledgeItem {
+  const title = item.title || item.url || "";
+  const summary = item.summary || item.search_snippet || "";
+  return {
+    ...item,
+    search_title_html: highlightTextHtml(title, q),
+    search_summary_html: highlightTextHtml(summary, q)
+  };
+}
+
+type ObsidianWritebackLight = "red" | "yellow" | "green";
+
+function resolveObsidianWritebackLight(
+  linkedCount: number,
+  status: string | null | undefined
+): ObsidianWritebackLight {
+  if (linkedCount <= 0) {
+    return "red";
+  }
+  const key = (status || "").trim().toLowerCase();
+  if (key === "applied") {
+    return "green";
+  }
+  return "yellow";
+}
+
+function obsidianWritebackLightLabel(
+  locale: Locale,
+  light: ObsidianWritebackLight
+): string {
+  if (light === "green") {
+    return locale === "zh" ? "已关联且写回成功" : "Linked and writeback success";
+  }
+  if (light === "yellow") {
+    return locale === "zh" ? "已关联，等待写回成功" : "Linked, waiting writeback success";
+  }
+  return locale === "zh" ? "未关联未写回" : "Not linked and not written back";
+}
+
+function ObsidianWritebackIndicator(props: {
+  locale: Locale;
+  linkedCount: number;
+  status: string | null | undefined;
+}): JSX.Element {
+  const activeLight = resolveObsidianWritebackLight(props.linkedCount, props.status);
+  const title = obsidianWritebackLightLabel(props.locale, activeLight);
+  const dots: Array<{ key: ObsidianWritebackLight; core: string; glow: string }> = [
+    { key: "red", core: "#FF0000", glow: "#FF0000" },
+    { key: "yellow", core: "#FCEE09", glow: "#FFF000" },
+    { key: "green", core: "#00FF22", glow: "#00FF44" }
+  ];
+  return (
+    <span className="inline-flex items-center gap-[7px]" title={title} role="status" aria-label={title}>
+      {dots.map((dot) => (
+        <span
+          key={dot.key}
+          className={`kindle-neon-dot ${
+            activeLight === dot.key ? "kindle-neon-dot--on" : "kindle-neon-dot--off"
+          }`}
+          style={
+            {
+              "--kindle-neon-core": dot.core,
+              "--kindle-neon-glow": dot.glow
+            } as CSSProperties
+          }
+          aria-hidden
+        />
+      ))}
+    </span>
+  );
 }
 
 function AuthorAvatar(props: {
@@ -303,6 +409,14 @@ export default function KnowledgeWorkbench(): JSX.Element {
   const [message, setMessage] = useState<string>("");
   const [tagList, setTagList] = useState<string[]>([]);
   const [relatedItems, setRelatedItems] = useState<KnowledgeItem[]>([]);
+  const [linkedRelations, setLinkedRelations] = useState<LinkedRelation[]>([]);
+  const [selectedLinkedIds, setSelectedLinkedIds] = useState<Set<number>>(new Set());
+  const [relationQuery, setRelationQuery] = useState("");
+  const [relationSearchResults, setRelationSearchResults] = useState<KnowledgeItem[]>([]);
+  const [relationSearchPool, setRelationSearchPool] = useState<KnowledgeItem[]>([]);
+  const [relationSearching, setRelationSearching] = useState(false);
+  const [relationPanelOpen, setRelationPanelOpen] = useState(false);
+  const [selectedRelationCandidateIds, setSelectedRelationCandidateIds] = useState<Set<number>>(new Set());
   const [readerExpanded, setReaderExpanded] = useState<boolean>(false);
   const [searchTotal, setSearchTotal] = useState<number | undefined>(undefined);
   const [searchEngine, setSearchEngine] = useState<string | undefined>(undefined);
@@ -353,6 +467,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
       { label: locale === "zh" ? "B站" : "Bilibili", value: "bilibili" },
       { label: "YouTube", value: "youtube" },
       { label: platformLabel("twitter", locale), value: "twitter" },
+      { label: platformLabel("obsidian", locale), value: "obsidian" },
       { label: locale === "zh" ? "其他" : "Other", value: "other" }
     ],
     [locale]
@@ -390,6 +505,39 @@ export default function KnowledgeWorkbench(): JSX.Element {
         ? items
         : sortKnowledgeItems(items, sortMode, locale, { hasSearch }),
     [items, sortMode, locale, hasSearch, isHotlist]
+  );
+  const linkedRawIdSet = useMemo(
+    () => new Set(linkedRelations.map((row) => row.item.raw_id)),
+    [linkedRelations]
+  );
+
+  const relationCandidateItems = useMemo(() => {
+    const base = relationQuery.trim() ? relationSearchResults : relatedItems;
+    const activeId = active?.raw_id;
+    return base.filter((item) => item.raw_id !== activeId && !linkedRawIdSet.has(item.raw_id));
+  }, [relationQuery, relationSearchResults, relatedItems, active?.raw_id, linkedRawIdSet]);
+
+  const relationItemLookup = useMemo(() => {
+    const map = new Map<number, KnowledgeItem>();
+    for (const row of items) {
+      map.set(row.raw_id, row);
+    }
+    for (const row of relatedItems) {
+      map.set(row.raw_id, row);
+    }
+    for (const row of relationSearchResults) {
+      map.set(row.raw_id, row);
+    }
+    return map;
+  }, [items, relatedItems, relationSearchResults]);
+
+  const linkedRelationsDisplay = useMemo(
+    () =>
+      linkedRelations.map((row) => ({
+        ...row,
+        item: relationItemLookup.get(row.item.raw_id) ?? row.item
+      })),
+    [linkedRelations, relationItemLookup]
   );
 
   const allVisibleSelected =
@@ -489,6 +637,93 @@ export default function KnowledgeWorkbench(): JSX.Element {
     // Refetch when switching item or when summary/distill first becomes available — not on unrelated active patches.
   }, [active?.raw_id, active?.distill_status, canLoadRelated]);
 
+  function mapRelationRows(
+    rawId: number,
+    rows: Awaited<ReturnType<typeof getItemRelations>>["items"]
+  ): LinkedRelation[] {
+    return rows
+      .map((row) => {
+        if (row.other_item) {
+          return {
+            relationId: row.id,
+            relationType: row.relation_type,
+            note: row.note ?? null,
+            item: row.other_item
+          } as LinkedRelation;
+        }
+        const otherRawId = row.from_raw_id === rawId ? row.to_raw_id : row.from_raw_id;
+        const title = row.from_raw_id === rawId ? row.to_title : row.from_title;
+        const url = row.from_raw_id === rawId ? row.to_url : row.from_url;
+        const platform = row.from_raw_id === rawId ? row.to_platform : row.from_platform;
+        if (!otherRawId || !url) {
+          return null;
+        }
+        const item = {
+          raw_id: otherRawId,
+          url,
+          title: title ?? null,
+          platform: platform ?? "manual",
+          source: "manual",
+          content_type: "article",
+          ingested_at: null,
+          summary: row.note ?? null,
+          topics: [],
+          prompt_version: null,
+          distill_status: "ok",
+          author: "On1y",
+          author_avatar: "",
+          author_url: "",
+          cover_image: "",
+          theme_id: null,
+          theme: null,
+          themes: [],
+          tags: []
+        } as KnowledgeItem;
+        return {
+          relationId: row.id,
+          relationType: row.relation_type,
+          note: row.note ?? null,
+          item
+        } as LinkedRelation;
+      })
+      .filter((row): row is LinkedRelation => row !== null);
+  }
+
+  async function reloadLinkedRelations(rawId: number): Promise<void> {
+    const data = await getItemRelations(rawId);
+    setLinkedRelations(mapRelationRows(rawId, data.items));
+  }
+
+  useEffect(() => {
+    if (!active) {
+      setLinkedRelations([]);
+      setSelectedLinkedIds(new Set());
+      setRelationSearchResults([]);
+      setRelationQuery("");
+      setSelectedRelationCandidateIds(new Set());
+      setRelationPanelOpen(false);
+      return;
+    }
+    let cancelled = false;
+    void getItemRelations(active.raw_id)
+      .then((data) => {
+        if (cancelled) {
+          return;
+        }
+        setLinkedRelations(mapRelationRows(active.raw_id, data.items));
+        setSelectedLinkedIds(new Set());
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setLinkedRelations([]);
+          setSelectedLinkedIds(new Set());
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [active?.raw_id]);
+
   async function handleRelatedLessRelevant(toRawId: number): Promise<void> {
     if (!active) {
       return;
@@ -500,6 +735,219 @@ export default function KnowledgeWorkbench(): JSX.Element {
       setMessage(error instanceof Error ? error.message : String(error));
     }
   }
+
+  async function handleLinkItem(toRawId: number): Promise<void> {
+    if (!active) {
+      return;
+    }
+    try {
+      await createItemRelation({
+        from_raw_id: active.raw_id,
+        to_raw_id: toRawId,
+        relation_type: "obsidian_link",
+        confidence: 1
+      });
+      await reloadLinkedRelations(active.raw_id);
+      setRelationSearchResults((prev) => prev.filter((row) => row.raw_id !== toRawId));
+      setSelectedRelationCandidateIds((prev) => {
+        if (!prev.has(toRawId)) {
+          return prev;
+        }
+        const next = new Set(prev);
+        next.delete(toRawId);
+        return next;
+      });
+      void loadReader(active.raw_id);
+      setMessage(locale === "zh" ? "已建立关联" : "Linked");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function handleUnlinkItem(targetRawId: number): Promise<void> {
+    if (!active) {
+      return;
+    }
+    const relation = linkedRelations.find((row) => row.item.raw_id === targetRawId);
+    if (!relation) {
+      return;
+    }
+    try {
+      await deleteItemRelation(relation.relationId, active.raw_id);
+      await reloadLinkedRelations(active.raw_id);
+      setMessage(locale === "zh" ? "已取消关联" : "Unlinked");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function handleUnlinkSelected(): Promise<void> {
+    if (!active) {
+      return;
+    }
+    const ids = Array.from(selectedLinkedIds);
+    if (ids.length === 0) {
+      return;
+    }
+    for (const rawId of ids) {
+      // eslint-disable-next-line no-await-in-loop
+      await handleUnlinkItem(rawId);
+    }
+    setSelectedLinkedIds(new Set());
+  }
+
+  async function handleConfirmRelationCandidates(): Promise<void> {
+    const ids = Array.from(selectedRelationCandidateIds);
+    if (ids.length === 0) {
+      return;
+    }
+    for (const rawId of ids) {
+      // eslint-disable-next-line no-await-in-loop
+      await handleLinkItem(rawId);
+    }
+    setSelectedRelationCandidateIds(new Set());
+  }
+
+  useEffect(() => {
+    if (!relationPanelOpen) {
+      return;
+    }
+    const candidateIds = new Set(relationCandidateItems.map((item) => item.raw_id));
+    setSelectedRelationCandidateIds((prev) => {
+      if (prev.size === 0) {
+        return prev;
+      }
+      const next = new Set<number>();
+      for (const rawId of prev) {
+        if (candidateIds.has(rawId)) {
+          next.add(rawId);
+        }
+      }
+      return next.size === prev.size ? prev : next;
+    });
+  }, [relationPanelOpen, relationCandidateItems]);
+
+  useEffect(() => {
+    if (!relationPanelOpen) {
+      return;
+    }
+    // Opening relation panel should default to recommendation candidates.
+    setRelationQuery("");
+    setRelationSearchResults([]);
+    setSelectedRelationCandidateIds(new Set());
+  }, [relationPanelOpen]);
+
+  useEffect(() => {
+    if (!relationPanelOpen || !active) {
+      return;
+    }
+    let cancelled = false;
+    setRelationSearchPool([]);
+    void (async () => {
+      const seen = new Set<number>();
+      let offset = 0;
+      while (!cancelled) {
+        const resp = await getKnowledgeItems({
+          collection: "feed",
+          limit: RELATION_SEARCH_BATCH_SIZE,
+          offset
+        });
+        const chunk = resp.items;
+        if (!chunk.length) {
+          break;
+        }
+        const append: KnowledgeItem[] = [];
+        for (const row of chunk) {
+          if (seen.has(row.raw_id)) {
+            continue;
+          }
+          seen.add(row.raw_id);
+          append.push(row);
+        }
+        if (append.length > 0 && !cancelled) {
+          setRelationSearchPool((prev) => [...prev, ...append]);
+        }
+        if (chunk.length < RELATION_SEARCH_BATCH_SIZE) {
+          break;
+        }
+        offset += chunk.length;
+      }
+    })().catch(() => {
+      if (!cancelled) {
+        setRelationSearchPool([]);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [relationPanelOpen, active?.raw_id]);
+
+  useEffect(() => {
+    if (!relationPanelOpen) {
+      return;
+    }
+    const q = relationQuery.trim();
+    if (!q) {
+      setRelationSearchResults([]);
+      setRelationSearching(false);
+      return;
+    }
+    let cancelled = false;
+    setRelationSearching(true);
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const resp = await getKnowledgeItems({ q, collection: "feed", limit: 200 });
+          if (cancelled || !active) {
+            return;
+          }
+          const linkedRawIds = new Set(linkedRelations.map((row) => row.item.raw_id));
+          const backendCandidates = resp.items.filter(
+            (row) => row.raw_id !== active.raw_id && !linkedRawIds.has(row.raw_id)
+          );
+          const needle = q.toLowerCase();
+          const localPool = [...items, ...relationSearchPool];
+          const mergedPool = new Map<number, KnowledgeItem>();
+          for (const row of localPool) {
+            mergedPool.set(row.raw_id, row);
+          }
+          const localHits = Array.from(mergedPool.values()).filter((row) => {
+            if (row.raw_id === active.raw_id || linkedRawIds.has(row.raw_id)) {
+              return false;
+            }
+            const tags = row.tags.map((tg) => tg.name).join(" ");
+            const haystack = [row.title || "", row.summary || "", row.author || "", tags]
+              .join(" ")
+              .toLowerCase();
+            return haystack.includes(needle);
+          });
+          const merged = new Map<number, KnowledgeItem>();
+          for (const row of backendCandidates) {
+            merged.set(row.raw_id, row);
+          }
+          for (const row of localHits) {
+            if (!merged.has(row.raw_id)) {
+              merged.set(row.raw_id, withLocalSearchHighlight(row, q));
+            }
+          }
+          setRelationSearchResults(Array.from(merged.values()));
+        } catch (error) {
+          if (!cancelled) {
+            setMessage(error instanceof Error ? error.message : String(error));
+            setRelationSearchResults([]);
+          }
+        } finally {
+          if (!cancelled) {
+            setRelationSearching(false);
+          }
+        }
+      })();
+    }, 220);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [relationPanelOpen, relationQuery, active?.raw_id, linkedRelations, items, relationSearchPool, setMessage]);
 
   async function handleTranslateTranscript(): Promise<void> {
     if (!active) {
@@ -2118,7 +2566,6 @@ export default function KnowledgeWorkbench(): JSX.Element {
           </ColumnScroll>
           )}
         </Panel>
-
         <PanelResizeHandle className="w-px bg-border" />
 
         <Panel minSize={22} defaultSize={58} className="min-h-0 overflow-hidden">
@@ -2251,6 +2698,15 @@ export default function KnowledgeWorkbench(): JSX.Element {
                         {extractStrategyLabel(active.extract_strategy, locale)}
                       </span>
                     ) : null}
+                    {active.is_read || active.read_at ? (
+                      <button
+                        type="button"
+                        onClick={() => void handleMarkUnread()}
+                        className="text-xs text-muted underline-offset-2 hover:text-foreground hover:underline"
+                      >
+                        {ui("markUnread")}
+                      </button>
+                    ) : null}
                     {!isEconomistHotlist ? (
                       <a
                         href={active.url}
@@ -2285,14 +2741,21 @@ export default function KnowledgeWorkbench(): JSX.Element {
                         <ExternalLink className="h-3 w-3" />
                       </a>
                     ) : null}
-                    {active.is_read || active.read_at ? (
-                      <button
-                        type="button"
-                        onClick={() => void handleMarkUnread()}
-                        className="text-xs text-muted underline-offset-2 hover:text-foreground hover:underline"
-                      >
-                        {ui("markUnread")}
-                      </button>
+                    <button
+                      type="button"
+                      onClick={() => setRelationPanelOpen((prev) => !prev)}
+                      className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs font-medium text-violet-600 hover:bg-violet-500/10 dark:text-violet-400"
+                      title={locale === "zh" ? "关联管理" : "Relation manager"}
+                    >
+                      <Network className="h-3.5 w-3.5" />
+                      {locale === "zh" ? "关联" : "Link"}
+                    </button>
+                    {active.platform === "obsidian" ? (
+                      <ObsidianWritebackIndicator
+                        locale={locale}
+                        linkedCount={linkedRelations.length}
+                        status={reader?.obsidian_writeback_status ?? active.obsidian_writeback_status ?? null}
+                      />
                     ) : null}
                   </div>
                 </div>
@@ -2386,6 +2849,199 @@ export default function KnowledgeWorkbench(): JSX.Element {
             </ColumnScroll>
           )}
         </Panel>
+        {relationPanelOpen && !isBooks ? (
+          <>
+            <PanelResizeHandle className="w-px bg-border" />
+            <Panel minSize={18} defaultSize={22} className="min-h-0 overflow-hidden">
+              <ColumnScroll className="p-3">
+                <div className="mb-2 flex items-center gap-2">
+                  <h2 className="min-w-0 flex-1 text-xs font-medium uppercase tracking-wider text-muted">
+                    {locale === "zh" ? "关联候选" : "Link candidates"}
+                  </h2>
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs font-medium text-violet-600 hover:bg-violet-500/10 dark:text-violet-400"
+                    onClick={() => setRelationPanelOpen(false)}
+                  >
+                    <X className="h-3.5 w-3.5" />
+                    {locale === "zh" ? "关闭" : "Close"}
+                  </button>
+                </div>
+                <div className="mb-3 flex items-center gap-2">
+                  <div className="on1y-glass-trigger inline-flex h-9 min-w-0 flex-1 items-center gap-2 rounded-md px-2">
+                    <Search className="h-4 w-4 text-muted" />
+                    <input
+                      value={relationQuery}
+                      onChange={(event) => setRelationQuery(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                        }
+                      }}
+                      aria-label={locale === "zh" ? "搜索关联候选" : "Search candidates"}
+                      className="w-full bg-transparent text-sm text-foreground outline-none"
+                      placeholder={locale === "zh" ? "搜索标题 / 标签 / 正文…" : "Search title / tags / body..."}
+                    />
+                  </div>
+                  {relationSearching ? (
+                    <span className="text-xs text-muted">
+                      {locale === "zh" ? "搜索中…" : "Searching..."}
+                    </span>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="inline-flex h-9 items-center gap-1 rounded-md bg-violet-600 px-3 text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={selectedRelationCandidateIds.size === 0}
+                    onClick={() => void handleConfirmRelationCandidates()}
+                  >
+                    <Check className="h-3.5 w-3.5" />
+                    {locale === "zh"
+                      ? `确认关联 (${selectedRelationCandidateIds.size})`
+                      : `Link selected (${selectedRelationCandidateIds.size})`}
+                  </button>
+                </div>
+                <p className="mb-2 text-[11px] text-muted">
+                  {relationQuery.trim()
+                    ? locale === "zh"
+                      ? "搜索命中会在标题/摘要中高亮显示"
+                      : "Search hits are highlighted in title/summary"
+                    : locale === "zh"
+                      ? "默认展示推荐系统结果"
+                      : "Showing recommendation results by default"}
+                </p>
+                <div className="space-y-2">
+                  {relationCandidateItems.map((item) => (
+                    <FeedItemCard
+                      key={`rel-${item.raw_id}`}
+                      item={item}
+                      active={selectedRelationCandidateIds.has(item.raw_id)}
+                      locale={locale}
+                      themes={themes}
+                      compact={false}
+                      unknownAuthorLabel={ui("unknownAuthor")}
+                      noSummaryLabel={ui("noSummary")}
+                      moveThemeLabel={ui("moveTheme")}
+                      favoriteLabel={ui("favorite")}
+                      unfavoriteLabel={ui("unfavorite")}
+                      deleteLabel={ui("deleteItem")}
+                      deleteConfirmLabel={ui("deleteConfirm")}
+                      batchSelectLabel={ui("batchSelect")}
+                      highlightTerm={relationQuery.trim()}
+                      authorAvatar={
+                        <AuthorAvatar
+                          author={item.author}
+                          authorAvatar={resolveAuthorAvatar(item.author_avatar)}
+                          unknownLabel={ui("unknownAuthor")}
+                          size="md"
+                        />
+                      }
+                      selectionMode
+                      selected={selectedRelationCandidateIds.has(item.raw_id)}
+                      onToggleSelected={() =>
+                        setSelectedRelationCandidateIds((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(item.raw_id)) {
+                            next.delete(item.raw_id);
+                          } else {
+                            next.add(item.raw_id);
+                          }
+                          return next;
+                        })
+                      }
+                      onSelect={() =>
+                        setSelectedRelationCandidateIds((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(item.raw_id)) {
+                            next.delete(item.raw_id);
+                          } else {
+                            next.add(item.raw_id);
+                          }
+                          return next;
+                        })
+                      }
+                      onMoveTheme={() => undefined}
+                      onToggleFavorite={() => undefined}
+                      onDelete={() => undefined}
+                    />
+                  ))}
+                  {relationCandidateItems.length === 0 ? (
+                    <div className="rounded border border-dashed border-border p-4 text-sm text-muted">
+                      {relationQuery.trim()
+                        ? locale === "zh"
+                          ? "没有搜索到可关联内容"
+                          : "No matching candidate"
+                        : locale === "zh"
+                          ? "暂无推荐候选"
+                          : "No recommended candidate"}
+                    </div>
+                  ) : null}
+                </div>
+                {linkedRelations.length > 0 ? (
+                  <div className="border-t border-border px-1 py-3">
+                    <div className="mb-2 flex items-center justify-between px-1">
+                      <p className="text-xs font-medium uppercase tracking-wider text-muted">
+                        {locale === "zh" ? "已关联" : "Linked"}
+                      </p>
+                      <button
+                        type="button"
+                        className="rounded-md px-2 py-1 text-xs text-muted hover:bg-soft hover:text-foreground disabled:opacity-40"
+                        disabled={selectedLinkedIds.size === 0}
+                        onClick={() => void handleUnlinkSelected()}
+                      >
+                        {locale === "zh" ? "取消关联所选" : "Unlink selected"}
+                      </button>
+                    </div>
+                    <div className="space-y-2">
+                      {linkedRelationsDisplay.map((row) => (
+                        <FeedItemCard
+                          key={`linked-${row.item.raw_id}`}
+                          item={row.item}
+                          active={active?.raw_id === row.item.raw_id}
+                          locale={locale}
+                          themes={themes}
+                          compact={false}
+                          unknownAuthorLabel={ui("unknownAuthor")}
+                          noSummaryLabel={ui("noSummary")}
+                          moveThemeLabel={ui("moveTheme")}
+                          favoriteLabel={ui("favorite")}
+                          unfavoriteLabel={ui("unfavorite")}
+                          deleteLabel={ui("deleteItem")}
+                          deleteConfirmLabel={ui("deleteConfirm")}
+                          batchSelectLabel={ui("batchSelect")}
+                          authorAvatar={
+                            <AuthorAvatar
+                              author={row.item.author}
+                              authorAvatar={resolveAuthorAvatar(row.item.author_avatar)}
+                              unknownLabel={ui("unknownAuthor")}
+                              size="md"
+                            />
+                          }
+                          selectionMode
+                          selected={selectedLinkedIds.has(row.item.raw_id)}
+                          onToggleSelected={() =>
+                            setSelectedLinkedIds((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(row.item.raw_id)) {
+                                next.delete(row.item.raw_id);
+                              } else {
+                                next.add(row.item.raw_id);
+                              }
+                              return next;
+                            })
+                          }
+                          onSelect={() => void selectItem(row.item)}
+                          onMoveTheme={() => undefined}
+                          onToggleFavorite={() => undefined}
+                          onDelete={() => undefined}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </ColumnScroll>
+            </Panel>
+          </>
+        ) : null}
         </PanelGroup>
       )}
     </div>

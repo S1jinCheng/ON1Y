@@ -2225,6 +2225,7 @@ function BooksTab(props: { locale: Locale; onMessage?: (message: string) => void
   const [obsidianSaving, setObsidianSaving] = useState(false);
   const [obsidianRunning, setObsidianRunning] = useState(false);
   const [browsingObsidianVault, setBrowsingObsidianVault] = useState(false);
+  const [browsingObsidianInbox, setBrowsingObsidianInbox] = useState(false);
   const [obsidianStatus, setObsidianStatus] = useState<{
     running: boolean;
     started_at?: string | null;
@@ -2310,6 +2311,54 @@ function BooksTab(props: { locale: Locale; onMessage?: (message: string) => void
       onMessage?.(err instanceof Error ? err.message : String(err));
     } finally {
       setBrowsingObsidianVault(false);
+    }
+  }
+
+  function normalizeFsPath(input: string): string {
+    return input.replace(/\\/g, "/").replace(/\/+$/, "");
+  }
+
+  function toVaultRelativePath(vaultPath: string, pickedPath: string): string | null {
+    const vaultNorm = normalizeFsPath(vaultPath).toLowerCase();
+    const pickedNorm = normalizeFsPath(pickedPath);
+    const pickedLower = pickedNorm.toLowerCase();
+    if (!vaultNorm || pickedLower === vaultNorm) {
+      return "";
+    }
+    const prefix = `${vaultNorm}/`;
+    if (!pickedLower.startsWith(prefix)) {
+      return null;
+    }
+    return pickedNorm.slice(prefix.length).replace(/^\/+/, "");
+  }
+
+  async function onBrowseObsidianRelPath(field: "inbox_relpath"): Promise<void> {
+    if (!obsidian?.vault_path.trim()) {
+      onMessage?.(L(locale, "请先设置 Vault 路径", "Set Vault path first"));
+      return;
+    }
+    setBrowsingObsidianInbox(true);
+    try {
+      const picked = await pickFolder();
+      if (!picked) {
+        return;
+      }
+      const rel = toVaultRelativePath(obsidian.vault_path, picked);
+      if (rel === null) {
+        onMessage?.(
+          L(
+            locale,
+            "所选目录不在当前 Vault 下，请在 Vault 内选择目录",
+            "Selected folder is outside current vault; choose one inside vault"
+          )
+        );
+        return;
+      }
+      setObsidian((prev) => (prev ? { ...prev, [field]: rel || "" } : prev));
+    } catch (err) {
+      onMessage?.(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBrowsingObsidianInbox(false);
     }
   }
 
@@ -2522,6 +2571,13 @@ function BooksTab(props: { locale: Locale; onMessage?: (message: string) => void
               checked={obsidian.enabled}
               onChange={(checked) => setObsidian((prev) => (prev ? { ...prev, enabled: checked } : prev))}
             />
+            <ToggleRow
+              label={L(locale, "启用 On1y 写回 Obsidian", "Enable On1y writeback to Obsidian")}
+              checked={obsidian.writeback_enabled}
+              onChange={(checked) =>
+                setObsidian((prev) => (prev ? { ...prev, writeback_enabled: checked } : prev))
+              }
+            />
             <div>
               <FieldLabel>{L(locale, "Vault 路径", "Vault path")}</FieldLabel>
               <div className="flex gap-2">
@@ -2549,26 +2605,31 @@ function BooksTab(props: { locale: Locale; onMessage?: (message: string) => void
                 </button>
               </div>
             </div>
-            <div className="grid gap-2 md:grid-cols-2">
-              <div>
-                <FieldLabel>{L(locale, "导入目录（相对路径）", "Inbox rel path")}</FieldLabel>
+            <div>
+              <FieldLabel>{L(locale, "导入目录（相对路径）", "Import folder (relative path)")}</FieldLabel>
+              <div className="flex gap-2">
                 <input
-                  className={inputClass}
+                  className={`${inputClass} min-w-0 flex-1`}
                   value={obsidian.inbox_relpath}
                   onChange={(e) =>
                     setObsidian((prev) => (prev ? { ...prev, inbox_relpath: e.target.value } : prev))
                   }
+                  placeholder="Inbox/Clippings"
                 />
-              </div>
-              <div>
-                <FieldLabel>{L(locale, "归档目录（相对路径）", "Archive rel path")}</FieldLabel>
-                <input
-                  className={inputClass}
-                  value={obsidian.archive_relpath}
-                  onChange={(e) =>
-                    setObsidian((prev) => (prev ? { ...prev, archive_relpath: e.target.value } : prev))
-                  }
-                />
+                <button
+                  type="button"
+                  className={`inline-flex shrink-0 items-center gap-1.5 ${ghostBtn} px-3`}
+                  disabled={browsingObsidianInbox}
+                  onClick={() => void onBrowseObsidianRelPath("inbox_relpath")}
+                  title={L(locale, "浏览 Vault 内目录", "Browse folder in vault")}
+                >
+                  {browsingObsidianInbox ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <FolderOpen className="h-4 w-4" />
+                  )}
+                  {L(locale, "浏览", "Browse")}
+                </button>
               </div>
             </div>
             <div className="grid gap-2 md:grid-cols-2">
