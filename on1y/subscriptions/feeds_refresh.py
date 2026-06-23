@@ -45,7 +45,7 @@ def refresh_subscription_feeds_from_cookie(
     if platform == "bilibili":
         from on1y.ingestion.bilibili_subscriptions import sync_bilibili_up_config
 
-        return sync_bilibili_up_config(settings=settings)
+        return sync_bilibili_up_config(settings=settings, user_id=uid)
     if platform == "youtube":
         return refresh_youtube_feeds(
             settings=settings,
@@ -56,7 +56,7 @@ def refresh_subscription_feeds_from_cookie(
     if platform == "zhihu":
         if settings.zhihu_follow_sync_mode == "api":
             return {"platform": "zhihu", "skipped": True, "skip_reason": "api_mode"}
-        return refresh_zhihu_follow_feeds(settings=settings)
+        return refresh_zhihu_follow_feeds(settings=settings, user_id=uid)
     raise ValueError(f"unsupported platform: {platform}")
 
 
@@ -131,12 +131,13 @@ def refresh_zhihu_follow_feeds(
     settings: Settings | None = None,
     follows_path: Path | None = None,
     dry_run: bool = False,
+    user_id: int | None = None,
 ) -> dict[str, Any]:
     settings = settings or get_settings()
     path = follows_path or DEFAULT_ZHIHU_FOLLOWS
     report: dict[str, Any] = {"platform": "zhihu", "dry_run": dry_run}
 
-    followees = fetch_zhihu_followees(settings=settings)
+    followees = fetch_zhihu_followees(settings=settings, user_id=user_id)
     added, total = merge_follows_file(followees, path)
     report["followees_fetched"] = len(followees)
     report["follows_added"] = added
@@ -145,7 +146,7 @@ def refresh_zhihu_follow_feeds(
     follows = follows_from_file(path)
     count = merge_zhihu_feeds_yaml(
         follows,
-        feeds_path=resolve_feeds_config_path(settings),
+        feeds_path=resolve_feeds_config_path(settings, user_id=user_id),
         rsshub_base=settings.zhihu_rsshub_base,
         enabled=True,
         dry_run=dry_run,

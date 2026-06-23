@@ -105,9 +105,12 @@ def _drain_backlog_for_users() -> None:
 
     storage = get_storage()
     try:
-        user_ids = list_sync_user_ids(storage)
+        user_ids = list_sync_user_ids(storage, current_user_only=True)
     finally:
         storage.close()
+    if not user_ids:
+        logger.warning("Auto sync skipped: no active logged-in user for backlog drain")
+        return
 
     for uid in user_ids:
         with user_context(uid):
@@ -152,9 +155,12 @@ def _run_auto_sync_tick(*, poll_only: bool = False) -> None:
     settings = get_settings()
     storage = get_storage()
     try:
-        user_ids = list_sync_user_ids(storage)
+        user_ids = list_sync_user_ids(storage, current_user_only=True)
     finally:
         storage.close()
+    if not user_ids:
+        logger.warning("Auto sync tick skipped: no active logged-in user")
+        return
 
     ingest = settings.auto_sync_ingest and not poll_only
     if poll_only:

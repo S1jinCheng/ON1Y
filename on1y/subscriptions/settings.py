@@ -13,7 +13,7 @@ from on1y.config import get_settings
 
 logger = logging.getLogger(__name__)
 
-PLATFORMS = ("bilibili", "youtube", "zhihu")
+PLATFORMS = ("bilibili", "youtube", "zhihu", "twitter")
 
 
 def settings_file_path(*, user_id: int | None = None) -> Path:
@@ -32,6 +32,7 @@ def _empty_payload() -> dict[str, Any]:
         "bilibili_sync_since": None,
         "youtube_sync_since": None,
         "zhihu_sync_since": None,
+        "twitter_sync_since": None,
         "enabled_platforms": list(PLATFORMS),
     }
 
@@ -126,6 +127,7 @@ def save_subscription_settings(
     bilibili_sync_since: str | None = None,
     youtube_sync_since: str | None = None,
     zhihu_sync_since: str | None = None,
+    twitter_sync_since: str | None = None,
     enabled_platforms: list[str] | None = None,
     user_id: int | None = None,
 ) -> None:
@@ -147,6 +149,7 @@ def save_subscription_settings(
         "bilibili_sync_since": normalize("bilibili_sync_since", bilibili_sync_since),
         "youtube_sync_since": normalize("youtube_sync_since", youtube_sync_since),
         "zhihu_sync_since": normalize("zhihu_sync_since", zhihu_sync_since),
+        "twitter_sync_since": normalize("twitter_sync_since", twitter_sync_since),
         "enabled_platforms": current.get("enabled_platforms") or list(PLATFORMS),
     }
     if enabled_platforms is not None:

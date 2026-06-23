@@ -313,6 +313,17 @@ def _sync_collections_phase(
                         early_stop_existing_streak=COLLECTIONS_EARLY_STOP,
                         settings=settings,
                     )
+                elif name == "twitter":
+                    from on1y.ingestion.twitter_collections import sync_twitter_collections
+
+                    platform_report = sync_twitter_collections(
+                        storage,
+                        include_likes=settings.twitter_likes_sync_enabled,
+                        include_bookmarks=settings.twitter_bookmarks_sync_enabled,
+                        max_scan=max_scan,
+                        early_stop_existing_streak=COLLECTIONS_EARLY_STOP,
+                        settings=settings,
+                    )
                 else:
                     platform_report = sync_youtube_collections(
                         storage,
@@ -420,6 +431,23 @@ def _sync_subscriptions_phase(
             logger.exception("Full sync RSS %s failed", rss_platform)
             rss_report["error"] = str(exc)
         report[rss_platform] = rss_report
+
+    if settings.twitter_sync_enabled:
+        twitter_report: dict[str, Any] = {}
+        try:
+            progress and progress.set_phase("subscriptions", detail="同步订阅 · X")
+            from on1y.ingestion.twitter_subscriptions import poll_twitter_home_timeline
+
+            with phase_timer.span("subscriptions.twitter.poll"):
+                twitter_report["poll"] = poll_twitter_home_timeline(
+                    storage,
+                    settings=settings,
+                    backfill=True,
+                )
+        except Exception as exc:
+            logger.exception("Full sync twitter failed")
+            twitter_report["error"] = str(exc)
+        report["twitter"] = twitter_report
 
     return report
 
@@ -793,7 +821,7 @@ def _user_has_sync_cookies(user_id: int) -> bool:
 
     return any(
         user_cookie_path(user_id, platform).is_file()
-        for platform in ("bilibili", "youtube", "zhihu")
+        for platform in ("bilibili", "youtube", "zhihu", "twitter")
     )
 
 

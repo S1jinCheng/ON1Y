@@ -251,7 +251,10 @@ def install_auth_middleware(app: Any) -> None:
 
         settings = get_settings()
         if settings.single_user_mode or not settings.auth_required:
+            from on1y.user.accounts import set_active_sync_user_id
+
             set_current_user_id(1)
+            set_active_sync_user_id(1)
             try:
                 return await call_next(request)
             finally:
@@ -267,7 +270,10 @@ def install_auth_middleware(app: Any) -> None:
         except Exception:
             return JSONResponse(status_code=401, content={"detail": "invalid or expired token"})
 
+        from on1y.user.accounts import set_active_sync_user_id
+
         set_current_user_id(user_id)
+        set_active_sync_user_id(user_id)
         try:
             return await call_next(request)
         finally:

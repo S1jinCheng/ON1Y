@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -12,6 +13,9 @@ _stop = threading.Event()
 _state_lock = threading.Lock()
 _state: dict = {
     "running": False,
+    "started_at": None,
+    "finished_at": None,
+    "user_id": None,
     "last_report": None,
     "last_error": None,
 }
@@ -63,11 +67,16 @@ def _run_tick(*, ingest: bool) -> None:
 
     storage = get_storage()
     try:
-        user_ids = list_sync_user_ids(storage)
+        user_ids = list_sync_user_ids(storage, current_user_only=True)
     finally:
         storage.close()
+    if not user_ids:
+        logger.warning("Collections sync tick skipped: no active logged-in user")
+        return
 
     for uid in user_ids:
+        with _state_lock:
+            _state["user_id"] = uid
         with user_context(uid):
             settings = resolve_settings(user_id=uid)
             if not settings.collections_sync_enabled:
@@ -83,6 +92,7 @@ def _run_tick(*, ingest: bool) -> None:
                 with _state_lock:
                     _state["last_report"] = report
                     _state["last_error"] = None
+                    _state["user_id"] = uid
                 if report.get("enqueued_total"):
                     logger.info(
                         "Collections sync user=%s enqueued=%s",
@@ -93,6 +103,7 @@ def _run_tick(*, ingest: bool) -> None:
                 logger.exception("Collections sync tick failed for user %s", uid)
                 with _state_lock:
                     _state["last_error"] = str(exc)
+                    _state["user_id"] = uid
             finally:
                 storage.close()
 
@@ -111,6 +122,8 @@ def _loop() -> None:
     while not _stop.is_set():
         with _state_lock:
             _state["running"] = True
+            _state["started_at"] = datetime.now(timezone.utc).isoformat()
+            _state["finished_at"] = None
         try:
             _run_tick(ingest=not first or not settings.collections_sync_startup_poll_only)
         except Exception:
@@ -118,6 +131,7 @@ def _loop() -> None:
         finally:
             with _state_lock:
                 _state["running"] = False
+                _state["finished_at"] = datetime.now(timezone.utc).isoformat()
             first = False
 
         from on1y.sync_settings.settings import resolve_settings

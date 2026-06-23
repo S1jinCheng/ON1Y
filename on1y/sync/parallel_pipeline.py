@@ -78,6 +78,14 @@ def _ingest_worker(
                             ingest_per_round=batch_size,
                             max_rounds=1,
                         )
+                    elif platform == "twitter":
+                        from on1y.pipeline.twitter_catchup import run_twitter_catchup
+
+                        result = run_twitter_catchup(
+                            storage,
+                            ingest_per_round=batch_size,
+                            max_rounds=1,
+                        )
                     else:
                         result = _pipeline_ingest_batch(
                             storage,

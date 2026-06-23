@@ -9,7 +9,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-SYNC_PLATFORM_ORDER = ("bilibili", "youtube", "zhihu")
+SYNC_PLATFORM_ORDER = ("bilibili", "youtube", "zhihu", "twitter")
 
 # Routine auto-sync gap backfill: cap lookback even if user sync_since is older.
 AUTO_SYNC_GAP_BACKFILL_MAX_DAYS = 7
@@ -47,7 +47,7 @@ def normalize_sync_platforms(
     if platforms:
         out = [p for p in platforms if p in allowed]
         if not out:
-            raise ValueError("platforms must include at least one of bilibili, youtube, zhihu")
+            raise ValueError("platforms must include at least one of bilibili, youtube, zhihu, twitter")
         return out
     if platform == "all":
         return list(SYNC_PLATFORM_ORDER)
@@ -82,7 +82,7 @@ def _execute_subscription_sync(
 
     uid = user_id if user_id is not None else get_current_user_id()
     if uid is None:
-        uid = 1
+        raise RuntimeError("Subscription sync requires user_id or active user context")
     batch_size = pipeline_batch_size or resolve_settings(user_id=uid).auto_sync_pipeline_batch_size
 
     combined: dict[str, Any] = {"platforms": platforms, "use_ai_summary": use_ai_summary}
@@ -138,6 +138,7 @@ def _execute_subscription_sync(
                     sync_hotlist=False,
                     refresh_feeds=refresh_feeds,
                     backfill_max_days=backfill_max_days,
+                    user_id=uid,
                 )
                 nested = platform_report.get(name)
                 poll = (
@@ -301,6 +302,8 @@ def run_subscription_sync_blocking(
 
     targets = normalize_sync_platforms(platform=platform, platforms=platforms)
     uid = user_id if user_id is not None else get_current_user_id()
+    if uid is None:
+        raise RuntimeError("Subscription sync requires user_id or active user context")
     with _lock:
         if _state["running"]:
             return None
@@ -361,11 +364,15 @@ def start_subscription_sync_job(
     except ValueError as exc:
         return {"started": False, "running": False, "message": str(exc)}
 
-    from on1y.auth.context import get_current_user_id, get_effective_user_id, user_context
+    from on1y.auth.context import get_current_user_id, user_context
 
     uid = user_id if user_id is not None else get_current_user_id()
     if uid is None:
-        uid = get_effective_user_id()
+        return {
+            "started": False,
+            "running": False,
+            "message": "缺少用户上下文：请登录后重试",
+        }
 
     with _lock:
         if _state["running"]:

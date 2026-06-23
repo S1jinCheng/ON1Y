@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from dataclasses import dataclass
 from typing import Any
 
@@ -13,6 +14,21 @@ from on1y.user.migrate import migrate_legacy_files_to_user
 from on1y.user.profile import _default_payload, _normalize_profile
 
 logger = logging.getLogger(__name__)
+
+_active_sync_user_lock = threading.Lock()
+_active_sync_user_id: int | None = None
+
+
+def set_active_sync_user_id(user_id: int | None) -> None:
+    """Remember which logged-in user owns background auto-sync loops."""
+    global _active_sync_user_id
+    with _active_sync_user_lock:
+        _active_sync_user_id = int(user_id) if user_id is not None else None
+
+
+def get_active_sync_user_id() -> int | None:
+    with _active_sync_user_lock:
+        return _active_sync_user_id
 
 
 @dataclass(frozen=True)
@@ -312,12 +328,20 @@ class UserStore:
             )
 
 
-def list_sync_user_ids(storage: Any) -> list[int]:
+def list_sync_user_ids(storage: Any, *, current_user_only: bool = False) -> list[int]:
     """User ids for background sync loops; single-user installs always use id=1."""
     from on1y.config import get_settings
 
     settings = get_settings()
-    if settings.single_user_mode or not settings.multi_user_background_sync:
+    if settings.single_user_mode:
+        return [1]
+    if current_user_only:
+        uid = get_active_sync_user_id()
+        if uid is None:
+            return []
+        active_ids = set(UserStore(storage).list_active_user_ids())
+        return [uid] if uid in active_ids else []
+    if not settings.multi_user_background_sync:
         return [1]
     return UserStore(storage).list_active_user_ids()
 
