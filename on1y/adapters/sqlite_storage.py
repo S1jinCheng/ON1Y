@@ -47,6 +47,14 @@ SCHEMA_V17_PATH = PROJECT_ROOT / "sql" / "schema_v17.sql"
 SCHEMA_V18_PATH = PROJECT_ROOT / "sql" / "schema_v18.sql"
 
 
+def _as_int_or_none(value: Any) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
 class SqliteStorage:
     """Thread-local connections per instance; suitable for single-worker Phase 1."""
 
@@ -2181,6 +2189,12 @@ class SqliteStorage:
             "reader_text": row["reader_text"],
             "user_note_html": str(meta.get("user_note_html") or ""),
             "annotated_body_html": str(meta.get("annotated_body_html") or ""),
+            "clip_source": str(meta.get("clip_source") or "").strip() or None,
+            "clip_title": str(meta.get("clip_title") or "").strip() or None,
+            "clip_count": _as_int_or_none(meta.get("clip_count")),
+            "extract_strategy": str(meta.get("extract_strategy") or "").strip() or None,
+            "jina_markdown": str(meta.get("jina_markdown") or ""),
+            "jina_markdown_length": _as_int_or_none(meta.get("jina_markdown_length")),
             "transcript_kind": transcript_kind,
             "translated_body_text": translated_body_text,
             "can_translate": transcript_kind == "en" and not translated_body_text,
@@ -3311,6 +3325,9 @@ class SqliteStorage:
                     "is_read": read_at is not None,
                     "has_note": has_note,
                     "importance": importance,
+                    "clip_source": str(meta.get("clip_source") or "").strip() or None,
+                    "clip_count": _as_int_or_none(meta.get("clip_count")),
+                    "extract_strategy": str(meta.get("extract_strategy") or "").strip() or None,
                     "deleted_at": row["deleted_at"]
                     if "deleted_at" in row.keys()
                     else None,

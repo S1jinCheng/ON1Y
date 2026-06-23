@@ -6,7 +6,9 @@ import importlib.util
 import logging
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
@@ -28,11 +30,64 @@ from on1y.utils.platform import PLATFORM_ZHIHU
 logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+_CLIP_SOURCE_VALUES = {"manual", "bookmarklet", "extension"}
+
+
+def _clean_clip_source(value: str | None) -> str:
+    raw = (value or "").strip().lower()
+    return raw if raw in _CLIP_SOURCE_VALUES else "manual"
+
+
+def _clip_meta_patch(
+    *,
+    clip_source: str,
+    clip_title: str | None = None,
+    html_snapshot: str | None = None,
+    selected_text: str | None = None,
+    prior_clip_count: int | None = None,
+) -> dict[str, Any]:
+    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    patch: dict[str, Any] = {
+        "clip_source": clip_source,
+        "clipped_at": now,
+        "last_clipped_at": now,
+        "clip_count": int(prior_clip_count or 0) + 1,
+    }
+    title = (clip_title or "").strip()
+    if title:
+        patch["clip_title"] = title[:500]
+    if html_snapshot:
+        patch["html_snapshot"] = html_snapshot[:60_000]
+        patch["html_snapshot_length"] = len(html_snapshot)
+    selected = (selected_text or "").strip()
+    if selected:
+        patch["selected_text"] = selected[:12_000]
+        patch["selected_text_length"] = len(selected)
+    return patch
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 class IngestRequest(BaseModel):
     url: str
     queue: bool = False
+    auto_distill: bool = False
+    clip_source: str = "manual"
+    clip_title: str | None = None
+
+
+class ClipRequest(BaseModel):
+    url: str
+    title: str | None = None
+    selected_text: str | None = None
+    html_snapshot: str | None = None
+    auto_distill: bool = True
+    clip_source: str = "bookmarklet"
 
 
 class WorkerRequest(BaseModel):
@@ -96,6 +151,7 @@ class SubscriptionSettingsRequest(BaseModel):
     bilibili_sync_since: str | None = None
     youtube_sync_since: str | None = None
     zhihu_sync_since: str | None = None
+    twitter_sync_since: str | None = None
     enabled_platforms: list[str] | None = None
 
 
@@ -421,12 +477,49 @@ def create_app() -> FastAPI:
 
     @app.post("/api/ingest")
     def ingest(body: IngestRequest) -> dict[str, Any]:
+        from on1y.distill.processor import distill_raw_item
+        from on1y.utils.platform import normalize_url
+
         storage = get_storage()
         try:
+            normalized = normalize_url(body.url)
+            clip_source = _clean_clip_source(body.clip_source)
+            existing = storage.get_raw_by_url(normalized)
+            base_meta = _clip_meta_patch(
+                clip_source=clip_source,
+                clip_title=body.clip_title,
+                prior_clip_count=_safe_int((existing.source_meta or {}).get("clip_count"), 0)
+                if existing
+                else None,
+            )
             if body.queue:
-                pending_id = enqueue_url(storage, body.url, source=SourceType.MANUAL)
+                pending_id = enqueue_url(
+                    storage,
+                    normalized,
+                    source=SourceType.MANUAL,
+                    source_meta=base_meta,
+                )
                 return {"queued": True, "pending_id": pending_id, "url": body.url}
-            raw = process_url(storage, body.url, source=SourceType.MANUAL)
+            raw = process_url(
+                storage,
+                normalized,
+                source=SourceType.MANUAL,
+                source_meta=base_meta,
+                preferred_title=body.clip_title,
+            )
+            storage.merge_source_meta(raw.id, base_meta)
+            distilled_id = None
+            distill_elapsed_ms = None
+            distill_failed = False
+            if body.auto_distill:
+                started = perf_counter()
+                try:
+                    distilled_id = distill_raw_item(storage, raw.id)
+                except Exception as exc:
+                    distill_failed = True
+                    logger.warning("Auto-distill failed raw_id=%s: %s", raw.id, exc)
+                finally:
+                    distill_elapsed_ms = int((perf_counter() - started) * 1000)
             return {
                 "queued": False,
                 "id": raw.id,
@@ -435,6 +528,77 @@ def create_app() -> FastAPI:
                 "extract_status": raw.extract_status.value,
                 "word_count": raw.word_count,
                 "title": raw.raw_title,
+                "auto_distill": body.auto_distill,
+                "distilled_id": distilled_id,
+                "distill_elapsed_ms": distill_elapsed_ms,
+                "distill_failed": distill_failed,
+            }
+        finally:
+            storage.close()
+
+    @app.post("/api/knowledge/clip")
+    def clip_knowledge_item(body: ClipRequest) -> dict[str, Any]:
+        from on1y.distill.processor import distill_raw_item
+        from on1y.utils.platform import normalize_url
+
+        storage = get_storage()
+        try:
+            normalized = normalize_url(body.url)
+            clip_source = _clean_clip_source(body.clip_source)
+            existing = storage.get_raw_by_url(normalized)
+            clip_meta = _clip_meta_patch(
+                clip_source=clip_source,
+                clip_title=body.title,
+                html_snapshot=body.html_snapshot,
+                selected_text=body.selected_text,
+                prior_clip_count=_safe_int((existing.source_meta or {}).get("clip_count"), 0)
+                if existing
+                else None,
+            )
+            selected_text = (body.selected_text or "").strip()
+            clipped_existing = False
+            if existing is not None and not selected_text:
+                raw = existing
+                clipped_existing = True
+            else:
+                raw = process_url(
+                    storage,
+                    normalized,
+                    source=SourceType.MANUAL,
+                    source_meta=clip_meta,
+                    preferred_body_text=selected_text or None,
+                    preferred_title=body.title,
+                    preferred_source_meta={"extract_strategy": "selected_text"} if selected_text else None,
+                )
+            storage.merge_source_meta(raw.id, clip_meta)
+            distilled_id = None
+            distill_elapsed_ms = None
+            distill_failed = False
+            if body.auto_distill:
+                started = perf_counter()
+                try:
+                    distilled_id = distill_raw_item(storage, raw.id)
+                except Exception as exc:
+                    distill_failed = True
+                    logger.warning("Clip auto-distill failed raw_id=%s: %s", raw.id, exc)
+                finally:
+                    distill_elapsed_ms = int((perf_counter() - started) * 1000)
+            merged = storage.get_raw_by_id(raw.id)
+            meta = dict(merged.source_meta or {}) if merged else {}
+            return {
+                "raw_id": raw.id,
+                "url": raw.url,
+                "title": raw.raw_title,
+                "platform": raw.platform,
+                "extract_status": raw.extract_status.value,
+                "distilled_id": distilled_id,
+                "auto_distill": body.auto_distill,
+                "existing": clipped_existing,
+                "clip_source": str(meta.get("clip_source") or clip_source),
+                "clip_count": _safe_int(meta.get("clip_count"), 1),
+                "extract_strategy": str(meta.get("extract_strategy") or ""),
+                "distill_elapsed_ms": distill_elapsed_ms,
+                "distill_failed": distill_failed,
             }
         finally:
             storage.close()
@@ -584,6 +748,7 @@ def create_app() -> FastAPI:
                 bilibili_sync_since=body.bilibili_sync_since,
                 youtube_sync_since=body.youtube_sync_since,
                 zhihu_sync_since=body.zhihu_sync_since,
+                twitter_sync_since=body.twitter_sync_since,
                 enabled_platforms=body.enabled_platforms,
             )
         except ValueError as exc:
@@ -1175,15 +1340,46 @@ def create_app() -> FastAPI:
 
     @app.get("/api/collections/sync/status")
     def collections_sync_status() -> dict[str, Any]:
+        from on1y.auth.context import get_current_user_id
         from on1y.subscriptions.collections_auto_sync import collections_sync_status as get_status
 
-        return get_status()
+        status = get_status()
+        uid = get_current_user_id()
+        owner = status.get("user_id")
+        if uid is not None and owner not in (None, uid):
+            return {
+                **status,
+                "running": False,
+                "started_at": None,
+                "finished_at": None,
+                "user_id": None,
+                "last_report": None,
+                "last_error": None,
+            }
+        return status
 
     @app.get("/api/subscriptions/sync/status")
     def subscription_sync_status() -> dict[str, Any]:
+        from on1y.auth.context import get_current_user_id
         from on1y.subscriptions.sync_job import subscription_sync_status as get_status
 
-        return get_status()
+        status = get_status()
+        uid = get_current_user_id()
+        owner = status.get("user_id")
+        if uid is not None and owner not in (None, uid):
+            return {
+                **status,
+                "running": False,
+                "started_at": None,
+                "finished_at": None,
+                "last_report": None,
+                "error": None,
+                "user_id": None,
+                "mode": None,
+                "backfill": False,
+                "progress": None,
+            }
+        return status
 
     @app.post("/api/llm/test")
     def llm_settings_test(body: LlmSettingsRequest | None = None) -> dict[str, Any]:
@@ -2191,6 +2387,98 @@ def create_app() -> FastAPI:
                 "raw_id": raw.id,
                 "url": raw.url,
                 "distilled_id": distilled_id,
+            }
+        finally:
+            storage.close()
+
+    @app.get("/api/knowledge/clip/stats")
+    def clip_stats() -> dict[str, Any]:
+        storage = get_storage()
+        try:
+            conn = storage._connect()
+            row = conn.execute(
+                """
+                SELECT
+                    COUNT(1) AS clipped_items,
+                    SUM(CASE WHEN d.distill_status = 'ok' THEN 1 ELSE 0 END) AS distilled_ok,
+                    SUM(CASE
+                        WHEN d.raw_id IS NULL OR COALESCE(d.distill_status, '') != 'ok'
+                        THEN 1 ELSE 0 END
+                    ) AS distilled_fail_or_pending,
+                    AVG(CASE
+                        WHEN d.distilled_at IS NOT NULL
+                        THEN (julianday(d.distilled_at) - julianday(r.ingested_at)) * 86400.0
+                        ELSE NULL END
+                    ) AS avg_distill_latency_seconds
+                FROM raw_items r
+                LEFT JOIN distilled_items d ON d.raw_id = r.id
+                WHERE COALESCE(CAST(json_extract(r.source_meta, '$.clip_count') AS INTEGER), 0) > 0
+                """
+            ).fetchone()
+            clipped_items = int(row["clipped_items"] or 0) if row else 0
+            distilled_ok = int(row["distilled_ok"] or 0) if row else 0
+            fail_or_pending = int(row["distilled_fail_or_pending"] or 0) if row else 0
+            latency = float(row["avg_distill_latency_seconds"] or 0.0) if row else 0.0
+            success_rate = (distilled_ok / clipped_items) if clipped_items > 0 else 0.0
+            fail_rate = (fail_or_pending / clipped_items) if clipped_items > 0 else 0.0
+            return {
+                "clipped_items": clipped_items,
+                "distilled_ok": distilled_ok,
+                "distilled_fail_or_pending": fail_or_pending,
+                "clip_success_rate": round(success_rate, 4),
+                "distill_fail_rate": round(fail_rate, 4),
+                "distill_latency_seconds_avg": round(latency, 2),
+            }
+        finally:
+            storage.close()
+
+    @app.post("/api/knowledge/items/{raw_id}/retry-extract")
+    def retry_extract(raw_id: int, auto_distill: bool = Query(default=True)) -> dict[str, Any]:
+        from on1y.distill.processor import distill_raw_item
+
+        storage = get_storage()
+        try:
+            raw = storage.get_raw_by_id_for_user(raw_id)
+            if raw is None:
+                raise HTTPException(status_code=404, detail="raw item not found")
+            prior_meta = dict(raw.source_meta or {})
+            refreshed = process_url(
+                storage,
+                raw.url,
+                source=raw.source,
+                source_meta=prior_meta,
+                preferred_title=prior_meta.get("clip_title"),
+            )
+            storage.merge_source_meta(raw_id, {"retry_extract_at": datetime.now(timezone.utc).isoformat()})
+            distilled_id = None
+            if auto_distill:
+                distilled_id = distill_raw_item(storage, refreshed.id, force=True)
+            return {
+                "raw_id": refreshed.id,
+                "url": refreshed.url,
+                "extract_status": refreshed.extract_status.value,
+                "distilled_id": distilled_id,
+            }
+        finally:
+            storage.close()
+
+    @app.post("/api/knowledge/items/{raw_id}/retry-distill")
+    def retry_distill(raw_id: int, force: bool = Query(default=True)) -> dict[str, Any]:
+        from on1y.distill.processor import distill_raw_item
+
+        storage = get_storage()
+        try:
+            raw = storage.get_raw_by_id_for_user(raw_id)
+            if raw is None:
+                raise HTTPException(status_code=404, detail="raw item not found")
+            started = perf_counter()
+            distilled_id = distill_raw_item(storage, raw_id, force=force)
+            elapsed_ms = int((perf_counter() - started) * 1000)
+            storage.merge_source_meta(raw_id, {"retry_distill_at": datetime.now(timezone.utc).isoformat()})
+            return {
+                "raw_id": raw_id,
+                "distilled_id": distilled_id,
+                "elapsed_ms": elapsed_ms,
             }
         finally:
             storage.close()

@@ -18,6 +18,7 @@ from on1y.utils.platform import detect_platform
 logger = logging.getLogger(__name__)
 
 _TAG_RE = re.compile(r"<[^>]+>")
+_JINA_MARKDOWN_MAX_CHARS = 120_000
 
 
 class ArticleExtractor(BaseExtractor):
@@ -51,9 +52,16 @@ class ArticleExtractor(BaseExtractor):
         title: str | None = None
         body: str | None = None
         errors: list[str] = []
+        source_meta: dict[str, object] = {}
 
         try:
             title, body = self._fetch_jina(url)
+            stripped = (body or "").strip()
+            if stripped:
+                source_meta["extract_strategy"] = "jina"
+                source_meta["jina_markdown_length"] = len(stripped)
+                source_meta["jina_markdown"] = stripped[:_JINA_MARKDOWN_MAX_CHARS]
+                source_meta["extract_quality_score"] = _quality_score(stripped)
         except Exception as exc:
             errors.append(f"jina: {exc}")
             logger.debug("Jina Reader failed for %s: %s", url, exc)
@@ -64,6 +72,8 @@ class ArticleExtractor(BaseExtractor):
                 if body_bs and len(body_bs.strip()) >= len((body or "").strip()):
                     title = title or title_bs
                     body = body_bs
+                    source_meta["extract_strategy"] = "bs4"
+                    source_meta["extract_quality_score"] = _quality_score(body_bs)
             except Exception as exc:
                 errors.append(f"bs4: {exc}")
                 logger.debug("BeautifulSoup failed for %s: %s", url, exc)
@@ -83,12 +93,14 @@ class ArticleExtractor(BaseExtractor):
                 body_text=body,
                 content_type=ContentType.ARTICLE,
                 reason="; ".join(errors) or "short_content",
+                source_meta=source_meta,
             )
         return self._ok(
             platform=platform,
             raw_title=title,
             body_text=body,
             content_type=ContentType.ARTICLE,
+            source_meta=source_meta,
         )
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
@@ -134,3 +146,14 @@ def _extract_markdown_title(markdown: str) -> str | None:
         if s.startswith("Title:"):
             return s[6:].strip()
     return None
+
+
+def _quality_score(text: str) -> float:
+    normalized = (text or "").strip()
+    if not normalized:
+        return 0.0
+    length_score = min(len(normalized) / 4000.0, 1.0) * 0.55
+    paragraph_count = len([line for line in normalized.splitlines() if line.strip()])
+    structure_score = min(paragraph_count / 60.0, 1.0) * 0.35
+    heading_bonus = 0.1 if "# " in normalized[:2000] else 0.0
+    return round(min(length_score + structure_score + heading_bonus, 1.0), 3)

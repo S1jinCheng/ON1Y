@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from typing import Any
+
+from pydantic import BaseModel, Field
 
 from on1y.models.enums import ContentType, ExtractStatus
 
@@ -19,6 +21,7 @@ class ExtractResult(BaseModel):
     author: str | None = None
     author_avatar: str | None = None
     author_url: str | None = None
+    source_meta: dict[str, Any] = Field(default_factory=dict)
 
     def word_count(self) -> int:
         return len(self.body_text.split())

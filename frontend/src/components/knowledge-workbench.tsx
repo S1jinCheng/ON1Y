@@ -74,6 +74,8 @@ import {
   patchItemClassification,
   patchItemImportance,
   saveItemNote,
+  retryDistill,
+  retryExtract,
   restoreKnowledgeItem,
   toggleItemFavorite,
   translateItemTranscript,
@@ -108,6 +110,9 @@ import {
   useKnowledgeFilterStore
 } from "@/store/knowledge-store";
 import type { Locale } from "@/lib/i18n";
+
+/** Match backend `SHORT_CONTENT_DISTILL_MAX_CHARS`. */
+const SHORT_CONTENT_SUMMARY_MAX_CHARS = 150;
 
 function filterValue(value: string): string | undefined {
   return value === ALL_FILTER || value === "" ? undefined : value;
@@ -197,6 +202,34 @@ function resolveAuthorAvatar(authorAvatar?: string): string | undefined {
     return undefined;
   }
   return avatar;
+}
+
+function clipSourceLabel(source: string | null | undefined, locale: Locale): string {
+  const key = (source || "").trim().toLowerCase();
+  if (key === "bookmarklet") {
+    return locale === "zh" ? "网页剪藏" : "Web clip";
+  }
+  if (key === "extension") {
+    return locale === "zh" ? "浏览器扩展" : "Browser extension";
+  }
+  if (key === "manual") {
+    return locale === "zh" ? "手动剪藏" : "Manual clip";
+  }
+  return locale === "zh" ? "剪藏" : "Clip";
+}
+
+function extractStrategyLabel(strategy: string | null | undefined, locale: Locale): string {
+  const key = (strategy || "").trim().toLowerCase();
+  if (key === "selected_text") {
+    return locale === "zh" ? "选中文本" : "Selected text";
+  }
+  if (key === "jina") {
+    return locale === "zh" ? "Jina" : "Jina";
+  }
+  if (key === "bs4") {
+    return locale === "zh" ? "网页回退" : "HTML fallback";
+  }
+  return key || (locale === "zh" ? "抽取" : "Extract");
 }
 
 function AuthorAvatar(props: {
@@ -321,6 +354,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
       { label: locale === "zh" ? "知乎" : "Zhihu", value: "zhihu" },
       { label: locale === "zh" ? "B站" : "Bilibili", value: "bilibili" },
       { label: "YouTube", value: "youtube" },
+      { label: platformLabel("twitter", locale), value: "twitter" },
       { label: locale === "zh" ? "其他" : "Other", value: "other" }
     ],
     [locale]
@@ -507,6 +541,10 @@ export default function KnowledgeWorkbench(): JSX.Element {
         ? handleTranslateTranscript
         : undefined
   } as const;
+
+  const hideAiSummary =
+    (reader?.body_text ?? "").trim().length > 0 &&
+    (reader?.body_text ?? "").trim().length < SHORT_CONTENT_SUMMARY_MAX_CHARS;
 
   function buildItemsQuery(offset: number, limit = FEED_BATCH_SIZE) {
     return {
@@ -1288,6 +1326,40 @@ export default function KnowledgeWorkbench(): JSX.Element {
     await uploadDocument(file, true);
     setMessage(ui("uploadClassify"));
     await refreshData();
+  }
+
+  async function handleRetryExtract(): Promise<void> {
+    if (!active) {
+      return;
+    }
+    setLoading(true);
+    try {
+      await retryExtract(active.raw_id, true);
+      setMessage(locale === "zh" ? "已重试抽取并重跑摘要" : "Re-ran extraction and distill");
+      await refreshData();
+      await loadReader(active.raw_id);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleRetryDistill(): Promise<void> {
+    if (!active) {
+      return;
+    }
+    setLoading(true);
+    try {
+      await retryDistill(active.raw_id, true);
+      setMessage(locale === "zh" ? "已重跑摘要与标签" : "Re-ran distill");
+      await refreshData();
+      await loadReader(active.raw_id);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function handleCreateTheme(name: string, description: string): Promise<void> {
@@ -2200,6 +2272,17 @@ export default function KnowledgeWorkbench(): JSX.Element {
                     <span className="rounded bg-soft px-2 py-0.5 text-xs font-medium text-foreground">
                       {platformLabel(active.platform, locale)}
                     </span>
+                    {active.clip_source ? (
+                      <span className="rounded bg-soft px-2 py-0.5 text-xs font-medium text-foreground">
+                        {clipSourceLabel(active.clip_source, locale)}
+                        {active.clip_count ? ` · ${active.clip_count}` : ""}
+                      </span>
+                    ) : null}
+                    {active.extract_strategy ? (
+                      <span className="rounded bg-soft px-2 py-0.5 text-xs font-medium text-foreground">
+                        {extractStrategyLabel(active.extract_strategy, locale)}
+                      </span>
+                    ) : null}
                     {!isEconomistHotlist ? (
                       <a
                         href={active.url}
@@ -2221,11 +2304,25 @@ export default function KnowledgeWorkbench(): JSX.Element {
                         {ui("markUnread")}
                       </button>
                     ) : null}
+                    <button
+                      type="button"
+                      onClick={() => void handleRetryExtract()}
+                      className="text-xs text-muted underline-offset-2 hover:text-foreground hover:underline"
+                    >
+                      {locale === "zh" ? "重试抽取" : "Retry extract"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleRetryDistill()}
+                      className="text-xs text-muted underline-offset-2 hover:text-foreground hover:underline"
+                    >
+                      {locale === "zh" ? "重跑摘要" : "Retry distill"}
+                    </button>
                   </div>
                 </div>
               </div>
 
-              {!isHotlist || isEconomistHotlist ? (
+              {(!isHotlist || isEconomistHotlist) && !hideAiSummary ? (
                 <div className="border-b border-border px-4 py-3">
                   <p className="mb-2 text-xs font-medium uppercase tracking-wider text-muted">
                     {ui("summary")}
@@ -2254,6 +2351,17 @@ export default function KnowledgeWorkbench(): JSX.Element {
                   }
                 />
               </div>
+
+              {reader?.jina_markdown?.trim() ? (
+                <div className="border-b border-border px-4 py-3">
+                  <p className="mb-2 text-xs font-medium uppercase tracking-wider text-muted">
+                    {locale === "zh" ? "Jina Markdown" : "Jina Markdown"}
+                  </p>
+                  <div className="prose prose-sm max-w-none text-foreground prose-p:my-1 prose-p:text-foreground">
+                    <ReactMarkdown>{reader.jina_markdown}</ReactMarkdown>
+                  </div>
+                </div>
+              ) : null}
 
               {(!isHotlist || isEconomistHotlist) && active ? (
                 <div className="border-b border-border px-4 py-3">

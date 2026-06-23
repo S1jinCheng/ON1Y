@@ -75,6 +75,9 @@ export type KnowledgeItem = {
   is_read?: boolean;
   has_note?: boolean;
   importance?: number | null;
+  clip_source?: string | null;
+  clip_count?: number | null;
+  extract_strategy?: string | null;
   deleted_at?: string | null;
   search_rank?: number;
   search_snippet?: string;
@@ -98,6 +101,12 @@ export type ReaderContent = {
   cover_image: string;
   user_note_html: string;
   annotated_body_html: string;
+  clip_source?: string | null;
+  clip_title?: string | null;
+  clip_count?: number | null;
+  extract_strategy?: string | null;
+  jina_markdown?: string | null;
+  jina_markdown_length?: number | null;
   transcript_kind: TranscriptKind;
   translated_body_text: string | null;
   can_translate: boolean;

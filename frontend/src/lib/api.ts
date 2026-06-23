@@ -1088,6 +1088,66 @@ export function createManualItem(payload: {
   });
 }
 
+export function clipKnowledgeItem(payload: {
+  url: string;
+  title?: string;
+  selected_text?: string;
+  html_snapshot?: string;
+  auto_distill?: boolean;
+  clip_source?: "bookmarklet" | "extension" | "manual";
+}): Promise<{
+  raw_id: number;
+  url: string;
+  title?: string | null;
+  platform: string;
+  extract_status: string;
+  distilled_id: number | null;
+  auto_distill: boolean;
+  existing: boolean;
+  clip_source: string;
+  clip_count: number;
+  extract_strategy?: string;
+}> {
+  return request("/api/knowledge/clip", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function getClipStats(): Promise<{
+  clipped_items: number;
+  distilled_ok: number;
+  distilled_fail_or_pending: number;
+  clip_success_rate: number;
+  distill_fail_rate: number;
+  distill_latency_seconds_avg: number;
+}> {
+  return request("/api/knowledge/clip/stats");
+}
+
+export function retryExtract(rawId: number, autoDistill = true): Promise<{
+  raw_id: number;
+  url: string;
+  extract_status: string;
+  distilled_id: number | null;
+}> {
+  const query = autoDistill ? "true" : "false";
+  return request(`/api/knowledge/items/${rawId}/retry-extract?auto_distill=${query}`, {
+    method: "POST"
+  });
+}
+
+export function retryDistill(rawId: number, force = true): Promise<{
+  raw_id: number;
+  distilled_id: number;
+  elapsed_ms: number;
+}> {
+  const query = force ? "true" : "false";
+  return request(`/api/knowledge/items/${rawId}/retry-distill?force=${query}`, {
+    method: "POST"
+  });
+}
+
 export async function uploadDocument(file: File, autoDistill: boolean): Promise<{
   raw_id: number;
   distilled_id: number | null;
@@ -1111,6 +1171,7 @@ export type SubscriptionSettings = {
   bilibili_sync_since: string | null;
   youtube_sync_since: string | null;
   zhihu_sync_since: string | null;
+  twitter_sync_since: string | null;
   enabled_platforms?: string[];
   platforms?: string[];
   bilibili_up_sync_enabled?: boolean;
@@ -1124,6 +1185,7 @@ export function saveSubscriptionSettings(payload: {
   bilibili_sync_since?: string | null;
   youtube_sync_since?: string | null;
   zhihu_sync_since?: string | null;
+  twitter_sync_since?: string | null;
   enabled_platforms?: string[];
 }): Promise<SubscriptionSettings & { saved: boolean }> {
   return request("/api/subscriptions/settings", {
@@ -1361,7 +1423,7 @@ export function getFullSyncTiming(limit = 20): Promise<FullSyncTimingResponse> {
 
 export function runSubscriptionSync(payload?: {
   platform?: string;
-  platforms?: Array<"bilibili" | "youtube" | "zhihu">;
+  platforms?: Array<"bilibili" | "youtube" | "zhihu" | "twitter">;
   backfill?: boolean;
   ingest?: boolean;
   use_ai_summary?: boolean;

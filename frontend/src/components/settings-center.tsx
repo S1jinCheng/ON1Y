@@ -20,17 +20,16 @@ import {
 } from "lucide-react";
 import { FormEvent, useEffect, useRef, useState } from "react";
 
-import { openExternalUrl } from "@/lib/open-external";
-
 import {
+  clipKnowledgeItem,
   deleteCookieFile,
   buildUserArchiveExportUrl,
   exportUserArchive,
   fetchAuthStatus,
   fetchAuthUsers,
+  getClipStats,
   getCookieStatuses,
   verifyCookiePlatform,
-  getAppUpdateStatus,
   getDesktopAppStatus,
   getLlmSettings,
   getNetworkSettings,
@@ -64,7 +63,6 @@ import {
   type CookieAccountInfo,
   type CookiePlatform,
   type CookieStatus,
-  type AppUpdateStatus,
   type DesktopAppStatus,
   type LlmSettingsView,
   type NetworkSettingsView,
@@ -114,10 +112,11 @@ const COOKIE_PLATFORMS: { key: CookiePlatform; label: string }[] = [
   { key: "twitter", label: "X / Twitter" }
 ];
 
-const SUB_PLATFORMS: { key: "bilibili" | "youtube" | "zhihu"; label: string }[] = [
+const SUB_PLATFORMS: { key: "bilibili" | "youtube" | "zhihu" | "twitter"; label: string }[] = [
   { key: "bilibili", label: "哔哩哔哩" },
   { key: "youtube", label: "YouTube" },
-  { key: "zhihu", label: "知乎" }
+  { key: "zhihu", label: "知乎" },
+  { key: "twitter", label: "X / Twitter" }
 ];
 
 function L(locale: Locale, zh: string, en: string): string {
@@ -387,17 +386,29 @@ function GeneralTab(props: {
   const [alertEnabled, setAlertEnabled] = useState(true);
   const [alertCooldown, setAlertCooldown] = useState(300);
   const [alertWebhook, setAlertWebhook] = useState("");
+  const [clipUrl, setClipUrl] = useState("");
+  const [clipAutoDistill, setClipAutoDistill] = useState(true);
+  const [clipping, setClipping] = useState(false);
+  const [clipStats, setClipStats] = useState<{
+    clipped_items: number;
+    distilled_ok: number;
+    distilled_fail_or_pending: number;
+    clip_success_rate: number;
+    distill_fail_rate: number;
+    distill_latency_seconds_avg: number;
+  } | null>(null);
   const archiveImportRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       try {
-        const [profile, status, network, syncSettings] = await Promise.all([
+        const [profile, status, network, syncSettings, clip] = await Promise.all([
           getUserProfile(),
           getDesktopAppStatus(),
           getNetworkSettings(),
-          getSyncSettings()
+          getSyncSettings(),
+          getClipStats().catch(() => null)
         ]);
         if (cancelled) {
           return;
@@ -421,6 +432,7 @@ function GeneralTab(props: {
         setAlertEnabled(Boolean(syncSettings.alert_enabled));
         setAlertCooldown(syncSettings.alert_cooldown_seconds);
         setAlertWebhook(syncSettings.alert_webhook_url ?? "");
+        setClipStats(clip);
       } catch (err) {
         props.onMessage?.(err instanceof Error ? err.message : String(err));
       } finally {
@@ -602,6 +614,47 @@ function GeneralTab(props: {
     }
   }
 
+  function buildClipBookmarkletHref(): string {
+    const code =
+      "(async()=>{try{const base='http://127.0.0.1:8765';const selected=(window.getSelection&&window.getSelection()?.toString())||'';const payload={url:location.href,title:document.title||'',selected_text:selected,clip_source:'bookmarklet',auto_distill:true};const r=await fetch(base+'/api/knowledge/clip',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});if(!r.ok){throw new Error('HTTP '+r.status)}const data=await r.json();alert('Clipped to On1y #'+data.raw_id);}catch(e){alert('On1y clip failed: '+(e&&e.message?e.message:e));}})();";
+    return `javascript:${encodeURIComponent(code)}`;
+  }
+
+  async function onManualClipSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+    const url = clipUrl.trim();
+    if (!url) {
+      props.onMessage?.(L(locale, "请输入 URL", "Please enter a URL"));
+      return;
+    }
+    setClipping(true);
+    try {
+      const result = await clipKnowledgeItem({
+        url,
+        auto_distill: clipAutoDistill,
+        clip_source: "manual"
+      });
+      props.onMessage?.(
+        result.existing
+          ? L(
+              locale,
+              `已记录剪藏（已存在条目 #${result.raw_id}，次数 ${result.clip_count}）`,
+              `Clip recorded on existing item #${result.raw_id} (${result.clip_count} clips)`
+            )
+          : L(locale, `已剪藏到知识库 #${result.raw_id}`, `Clipped to library #${result.raw_id}`)
+      );
+      setClipUrl("");
+      const latest = await getClipStats().catch(() => null);
+      if (latest) {
+        setClipStats(latest);
+      }
+    } catch (err) {
+      props.onMessage?.(err instanceof Error ? err.message : String(err));
+    } finally {
+      setClipping(false);
+    }
+  }
+
   if (loading) {
     return <LoadingRow locale={locale} />;
   }
@@ -750,6 +803,72 @@ function GeneralTab(props: {
             </div>
           </div>
         ) : null}
+      </section>
+
+      <section className="space-y-3">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-neutral-400">
+          {L(locale, "网页剪藏", "Web clipping")}
+        </h3>
+        <p className="text-[11px] leading-relaxed text-neutral-500">
+          {L(
+            locale,
+            "把下面链接拖到浏览器书签栏。浏览网页时点击它，当前页面（含可选选中文本）会通过 Jina + On1y 管线入库并生成摘要标签。",
+            "Drag the link below to your bookmarks bar. While reading a page, click it to clip into On1y (Jina + distill pipeline)."
+          )}
+        </p>
+        <a
+          href={buildClipBookmarkletHref()}
+          className="inline-flex items-center rounded-lg border border-border bg-soft/60 px-3 py-2 text-sm font-medium text-foreground hover:bg-soft"
+        >
+          {L(locale, "On1y 剪藏", "On1y Clip")}
+        </a>
+        <div className="rounded-lg border border-border bg-panel/60 px-3 py-3">
+          <p className="text-sm font-medium text-foreground">
+            {L(locale, "手动剪藏 URL", "Manual clip by URL")}
+          </p>
+          <form className="mt-2 space-y-2" onSubmit={(e) => void onManualClipSubmit(e)}>
+            <input
+              className={inputClass}
+              value={clipUrl}
+              onChange={(e) => setClipUrl(e.target.value)}
+              placeholder="https://..."
+              disabled={clipping}
+            />
+            <label className="inline-flex items-center gap-2 text-xs text-muted">
+              <input
+                type="checkbox"
+                className="rounded border-border"
+                checked={clipAutoDistill}
+                onChange={(e) => setClipAutoDistill(e.target.checked)}
+                disabled={clipping}
+              />
+              {L(locale, "入库后自动摘要与标签", "Auto distill after ingest")}
+            </label>
+            <div className="flex justify-end">
+              <button type="submit" className={ghostBtn} disabled={clipping}>
+                {clipping ? L(locale, "剪藏中…", "Clipping…") : L(locale, "保存到信息流", "Save to feed")}
+              </button>
+            </div>
+          </form>
+          {clipStats ? (
+            <div className="mt-3 rounded border border-border bg-surface px-3 py-2 text-xs text-muted">
+              <div>
+                {L(locale, "累计剪藏", "Total clips")}: {clipStats.clipped_items}
+              </div>
+              <div>
+                {L(locale, "摘要成功率", "Distill success rate")}:{" "}
+                {(clipStats.clip_success_rate * 100).toFixed(1)}%
+              </div>
+              <div>
+                {L(locale, "摘要失败/待处理率", "Distill fail/pending rate")}:{" "}
+                {(clipStats.distill_fail_rate * 100).toFixed(1)}%
+              </div>
+              <div>
+                {L(locale, "平均摘要延迟", "Avg distill latency")}: {clipStats.distill_latency_seconds_avg}s
+              </div>
+            </div>
+          ) : null}
+        </div>
       </section>
 
       <section className="space-y-3">
@@ -953,38 +1072,6 @@ function GeneralTab(props: {
 
 function AboutTab(props: { locale: Locale }): JSX.Element {
   const { locale } = props;
-  const [desktop, setDesktop] = useState<DesktopAppStatus | null>(null);
-  const [update, setUpdate] = useState<AppUpdateStatus | null>(null);
-  const [checking, setChecking] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    void getDesktopAppStatus().then((status) => {
-      if (!cancelled) {
-        setDesktop(status);
-      }
-    });
-    void getAppUpdateStatus(false).then((status) => {
-      if (!cancelled) {
-        setUpdate(status);
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  async function handleCheckUpdate(): Promise<void> {
-    setChecking(true);
-    try {
-      const status = await getAppUpdateStatus(true);
-      setUpdate(status);
-    } finally {
-      setChecking(false);
-    }
-  }
-
-  const downloadUrl = update?.download_url || update?.release_url || "";
 
   return (
     <div className="space-y-6">
@@ -992,101 +1079,7 @@ function AboutTab(props: { locale: Locale }): JSX.Element {
         <img src="/on1y-logo.png" alt="On1y" className="h-12 w-12" />
         <h3 className="text-lg font-semibold text-neutral-900">On1y</h3>
         <p className="text-sm leading-relaxed text-neutral-600">
-          {L(
-            locale,
-            "个人知识库：采集 → 正文/字幕 → AI 摘要分类 → 全文检索 → 工作台浏览。",
-            "Personal knowledge base: ingest → extract → AI summaries → full-text search → workspace."
-          )}
-        </p>
-        <dl className="space-y-1 text-xs text-neutral-500">
-          <div>
-            <dt className="inline font-medium">{L(locale, "版本", "Version")}: </dt>
-            <dd className="inline">{desktop?.version ?? "—"}</dd>
-          </div>
-          <div>
-            <dt className="inline font-medium">{L(locale, "数据目录", "Data")}: </dt>
-            <dd className="inline break-all">{desktop?.data_dir ?? "—"}</dd>
-          </div>
-          <div>
-            <dt className="inline font-medium">{L(locale, "项目路径", "Project")}: </dt>
-            <dd className="inline break-all">{desktop?.project_root ?? "—"}</dd>
-          </div>
-        </dl>
-        {update?.check_enabled ? (
-          <div className="mt-3 space-y-2 rounded-lg border border-border bg-soft/60 px-3 py-2.5">
-            {update.has_update ? (
-              <p className="text-sm text-foreground">
-                {L(
-                  locale,
-                  `新版本 v${update.latest_version} 可用（当前 v${update.current_version}）`,
-                  `Update v${update.latest_version} available (current v${update.current_version})`
-                )}
-              </p>
-            ) : update.error ? (
-              <p className="text-sm text-muted">
-                {L(locale, "暂时无法检查更新，请稍后再试。", "Could not check for updates. Try again later.")}
-              </p>
-            ) : update.reason === "no_releases" ? (
-              <p className="text-sm text-muted">
-                {L(locale, "尚未发布正式版本。", "No official release published yet.")}
-              </p>
-            ) : (
-              <p className="text-sm text-muted">
-                {L(locale, "当前已是最新版本。", "You are on the latest version.")}
-              </p>
-            )}
-            {update.release_notes ? (
-              <p className="max-h-32 overflow-y-auto whitespace-pre-wrap text-xs leading-relaxed text-muted">
-                {update.release_notes}
-              </p>
-            ) : null}
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                className={ghostBtn}
-                disabled={checking}
-                onClick={() => void handleCheckUpdate()}
-              >
-                {checking ? (
-                  <Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <RefreshCw className="mr-1 inline h-3.5 w-3.5" />
-                )}
-                {L(locale, "检查更新", "Check for updates")}
-              </button>
-              {update.has_update && downloadUrl ? (
-                <button
-                  type="button"
-                  className={primaryBtn}
-                  onClick={() => void openExternalUrl(downloadUrl)}
-                >
-                  <Download className="mr-1 inline h-3.5 w-3.5" />
-                  {L(locale, "下载安装包", "Download installer")}
-                </button>
-              ) : null}
-            </div>
-          </div>
-        ) : (
-          <p className="mt-2 text-xs text-muted">
-            {L(
-              locale,
-              "开发版不检查在线更新；正式安装版会在启动时提示新版本。",
-              "Dev builds skip online update checks; installed releases are notified on startup."
-            )}
-          </p>
-        )}
-      </section>
-
-      <section className="rounded-xl border border-dashed border-neutral-200 bg-neutral-50/80 px-4 py-6">
-        <h4 className="text-sm font-medium text-neutral-800">
-          {L(locale, "README", "README")}
-        </h4>
-        <p className="mt-2 text-xs leading-relaxed text-neutral-500">
-          {L(
-            locale,
-            "完整说明文档将在此展示。",
-            "Full documentation will appear here."
-          )}
+          {L(locale, "欢迎加入。", "Welcome aboard.")}
         </p>
       </section>
 
@@ -1581,19 +1574,22 @@ function SubscriptionsTab(props: {
     bilibili_sync_since: string;
     youtube_sync_since: string;
     zhihu_sync_since: string;
+    twitter_sync_since: string;
   } {
     const value = since.trim();
     if (!value) {
       return {
         bilibili_sync_since: "",
         youtube_sync_since: "",
-        zhihu_sync_since: ""
+        zhihu_sync_since: "",
+        twitter_sync_since: ""
       };
     }
     return {
       bilibili_sync_since: enabled.includes("bilibili") ? value : "",
       youtube_sync_since: enabled.includes("youtube") ? value : "",
-      zhihu_sync_since: enabled.includes("zhihu") ? value : ""
+      zhihu_sync_since: enabled.includes("zhihu") ? value : "",
+      twitter_sync_since: enabled.includes("twitter") ? value : ""
     };
   }
 
@@ -1610,6 +1606,9 @@ function SubscriptionsTab(props: {
     }
     if (platforms.includes("zhihu") && settings.zhihu_sync_since) {
       dates.push(settings.zhihu_sync_since);
+    }
+    if (platforms.includes("twitter") && settings.twitter_sync_since) {
+      dates.push(settings.twitter_sync_since);
     }
     return dates[0] ?? "";
   }
@@ -1648,8 +1647,8 @@ function SubscriptionsTab(props: {
     setSyncing(true);
     try {
       const since = syncSince.trim();
-      const platforms = enabled.filter((p): p is "bilibili" | "youtube" | "zhihu" =>
-        ["bilibili", "youtube", "zhihu"].includes(p)
+      const platforms = enabled.filter((p): p is "bilibili" | "youtube" | "zhihu" | "twitter" =>
+        ["bilibili", "youtube", "zhihu", "twitter"].includes(p)
       );
       await Promise.all([
         saveSyncSettings(syncSettingsPayload()),

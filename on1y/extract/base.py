@@ -5,6 +5,7 @@ from __future__ import annotations
 import abc
 import logging
 import re
+from typing import Any
 
 from on1y.config import get_settings
 from on1y.exceptions import ExtractionError
@@ -53,6 +54,7 @@ class BaseExtractor(abc.ABC):
         author: str | None = None,
         author_avatar: str | None = None,
         author_url: str | None = None,
+        source_meta: dict[str, Any] | None = None,
     ) -> ExtractResult:
         return ExtractResult(
             platform=platform,
@@ -64,6 +66,7 @@ class BaseExtractor(abc.ABC):
             author=author,
             author_avatar=author_avatar,
             author_url=author_url,
+            source_meta=dict(source_meta or {}),
         )
 
     def _ok(
@@ -76,6 +79,7 @@ class BaseExtractor(abc.ABC):
         author: str | None = None,
         author_avatar: str | None = None,
         author_url: str | None = None,
+        source_meta: dict[str, Any] | None = None,
     ) -> ExtractResult:
         normalized = self._normalize_text(body_text)
         if not normalized.strip():
@@ -89,4 +93,5 @@ class BaseExtractor(abc.ABC):
             author=author,
             author_avatar=author_avatar,
             author_url=author_url,
+            source_meta=dict(source_meta or {}),
         )
