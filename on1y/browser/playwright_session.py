@@ -66,6 +66,14 @@ class PlaywrightSession:
             self._playwright.stop()
         logger.info("Playwright session closed")
 
+    def new_page(self) -> Any:
+        """Open a fresh page in this session (caller must close it)."""
+        if self._context is None:
+            raise ConfigurationError("PlaywrightSession is not started; use `with` block")
+        page = self._context.new_page()
+        page.set_default_timeout(get_settings().playwright_timeout_ms)
+        return page
+
     def fetch_page(
         self,
         url: str,

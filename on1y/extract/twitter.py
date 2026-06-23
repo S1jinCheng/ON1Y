@@ -48,5 +48,17 @@ class TwitterExtractor(PlaywrightExtractor):
             '[data-testid="tweetText"]',
         ]
 
+    def settle_ms(self) -> int | None:
+        return 3000
+
+    def author_selectors(self) -> list[str]:
+        return ['[data-testid="User-Name"]', '[data-testid="User-Names"]']
+
+    def avatar_selectors(self) -> list[str]:
+        return ['[data-testid="Tweet-User-Avatar"] img', 'img[src*="profile_images"]']
+
+    def author_url_selectors(self) -> list[str]:
+        return ['[data-testid="User-Name"] a', 'a[href^="/"][role="link"]']
+
     def min_body_chars(self) -> int:
         return 1

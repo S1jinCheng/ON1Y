@@ -139,6 +139,17 @@ def _extract_page_content(
             "Ensure system Chrome is used and cookies are fresh; see docs/COOKIES.md"
         )
 
+    from on1y.browser.twitter_playwright import is_twitter_host, is_twitter_login_wall
+
+    if is_twitter_host(final_url) and (
+        "/login" in final_url
+        or "/i/flow/login" in final_url
+        or is_twitter_login_wall((title or "") + body[:2000])
+    ):
+        raise ConfigurationError(
+            "X login wall. Re-export cookies from a logged-in x.com session."
+        )
+
     if _LOGIN_WALL_PATTERNS.search(body[:2000]) or (title and "进入知乎" in title):
         raise ConfigurationError(
             "Page shows login wall. Re-export cookies: "
@@ -154,6 +165,16 @@ def _extract_page_content(
     author = _first_inner_text(page, author_selectors or [])
     avatar = _first_image_src(page, avatar_selectors or [])
     author_url = _first_href(page, author_url_selectors or [])
+
+    if is_twitter_host(final_url):
+        from on1y.browser.twitter_playwright import extract_twitter_author_meta
+
+        meta = extract_twitter_author_meta(page)
+        author = meta.get("author") or author
+        avatar = meta.get("author_avatar") or avatar
+        author_url = meta.get("author_url") or author_url
+        if not title:
+            title = author
 
     return PageContent(
         url=page.url,

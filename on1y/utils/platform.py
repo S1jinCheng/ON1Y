@@ -16,7 +16,9 @@ PLATFORM_GENERIC = "generic"
 YTDLP_VIDEO_PLATFORMS = frozenset({PLATFORM_YOUTUBE, PLATFORM_BILIBILI})
 
 # Primary feed platforms shown in the workbench platform filter.
-KNOWLEDGE_MAIN_PLATFORMS = frozenset({PLATFORM_ZHIHU, PLATFORM_BILIBILI, PLATFORM_YOUTUBE})
+KNOWLEDGE_MAIN_PLATFORMS = frozenset(
+    {PLATFORM_ZHIHU, PLATFORM_BILIBILI, PLATFORM_YOUTUBE, PLATFORM_TWITTER}
+)
 PLATFORM_FILTER_OTHER = "other"
 
 
@@ -90,5 +92,10 @@ def pending_url_platform_clause(platform: str) -> tuple[str, tuple[str, ...]]:
         return (
             "(url LIKE ? OR url LIKE ?)",
             ("%bilibili.com%", "%b23.tv%"),
+        )
+    if platform == PLATFORM_TWITTER:
+        return (
+            "(url LIKE ? OR url LIKE ? OR url LIKE ?)",
+            ("%x.com%", "%twitter.com%", "%mobile.twitter.com%"),
         )
     return ("url LIKE ?", (f"%{platform}%",))

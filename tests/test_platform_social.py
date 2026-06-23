@@ -21,3 +21,14 @@ def test_xiaohongshu() -> None:
 def test_twitter() -> None:
     assert detect_platform("https://x.com/user/status/1") == PLATFORM_TWITTER
     assert detect_platform("https://twitter.com/user/status/1") == PLATFORM_TWITTER
+    assert detect_platform("https://x.com/i/web/status/123") == PLATFORM_TWITTER
+
+
+def test_twitter_pending_url_clause() -> None:
+    from on1y.utils.platform import pending_url_platform_clause
+
+    clause, params = pending_url_platform_clause(PLATFORM_TWITTER)
+    assert "%x.com%" in params
+    assert clause.count("LIKE") >= 3
+    sample = "https://x.com/i/web/status/99"
+    assert any(part.strip("%") in sample for part in params)
