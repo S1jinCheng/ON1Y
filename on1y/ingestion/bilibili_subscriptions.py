@@ -35,7 +35,7 @@ from on1y.utils.bilibili_url import bilibili_video_url, normalize_bilibili_url
 from on1y.utils.platform import normalize_url
 from on1y.utils.video_dedup import (
     find_youtube_duplicate,
-    remove_bilibili_duplicate_of_youtube,
+    remove_youtube_duplicate_by_id,
     youtube_title_index,
 )
 
@@ -242,7 +242,7 @@ def poll_bilibili_dynamic_updates(
         "videos_seen": 0,
         "enqueued": 0,
         "skipped_existing": 0,
-        "skipped_youtube_dup": 0,
+        "removed_youtube_dup": 0,
         "skipped_before_since": 0,
         "caught_up": False,
         "sync_since_ts": sync_since_ts,
@@ -384,7 +384,7 @@ def poll_bilibili_up_updates(
         "stop_reason": None,
         "enqueued": 0,
         "skipped_existing": 0,
-        "skipped_youtube_dup": 0,
+        "removed_youtube_dup": 0,
         "skipped_before_since": 0,
         "sync_since_ts": sync_since_ts,
         "errors": [],
@@ -586,9 +586,10 @@ def _enqueue_bilibili_video(
         title_index=title_index,
     )
     if dup_yt is not None:
-        if remove_bilibili_duplicate_of_youtube(storage, normalized):
-            report["skipped_youtube_dup"] += 1
-        return
+        from on1y.utils.video_dedup import remove_youtube_duplicate_by_id
+
+        if remove_youtube_duplicate_by_id(storage, int(dup_yt)):
+            report["removed_youtube_dup"] = int(report.get("removed_youtube_dup") or 0) + 1
 
     meta = {
         "feed_label": label,

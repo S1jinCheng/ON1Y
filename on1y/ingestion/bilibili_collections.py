@@ -24,7 +24,7 @@ from on1y.utils.bilibili_url import bilibili_video_url, normalize_bilibili_url
 from on1y.utils.platform import normalize_url
 from on1y.utils.video_dedup import (
     find_youtube_duplicate,
-    remove_bilibili_duplicate_of_youtube,
+    remove_youtube_duplicate_by_id,
 )
 
 logger = logging.getLogger(__name__)
@@ -173,10 +173,13 @@ def backfill_bilibili_collections(
                 if dup_yt is not None:
                     coll_stats["skipped_duplicate"] += 1
                     report["skipped_duplicate"] += 1
-                    if remove_bilibili_duplicate_of_youtube(storage, url, dry_run=dry_run):
-                        coll_stats["skipped_duplicate_deleted"] += 1
-                        report["skipped_duplicate_deleted"] += 1
-                    continue
+                    if remove_youtube_duplicate_by_id(storage, int(dup_yt), dry_run=dry_run):
+                        coll_stats["removed_youtube_dup"] = (
+                            int(coll_stats.get("removed_youtube_dup") or 0) + 1
+                        )
+                        report["removed_youtube_dup"] = (
+                            int(report.get("removed_youtube_dup") or 0) + 1
+                        )
 
                 title = str(media.get("title") or url).strip()
                 if _should_skip_url(storage, url):

@@ -15,13 +15,13 @@ from on1y.pipeline.video_meta import (
     with_subtitle_pending,
 )
 from on1y.ports.storage import StoragePort
-from on1y.exceptions import DuplicateVideoError, ExtractionError, SkippedVideoError
+from on1y.exceptions import ExtractionError, SkippedVideoError
 from on1y.utils.video_unavailable import is_bilibili_video_unavailable
 from on1y.pipeline.video_author import enrich_video_source_meta
 from on1y.utils.bilibili_url import normalize_bilibili_url
 from on1y.utils.platform import PLATFORM_BILIBILI, PLATFORM_YOUTUBE, YTDLP_VIDEO_PLATFORMS, detect_platform, normalize_url
 from on1y.utils.youtube_video_filter import should_skip_youtube_url, youtube_ingest_reject_reason
-from on1y.utils.video_dedup import find_youtube_duplicate, remove_bilibili_duplicate_of_youtube
+from on1y.utils.video_dedup import find_bilibili_duplicate, find_youtube_duplicate, remove_youtube_duplicate_by_id
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +72,19 @@ def process_video_fast(
                 reason=reject,
             )
 
+    if platform == PLATFORM_YOUTUBE:
+        dup_bili = find_bilibili_duplicate(
+            storage,
+            title=meta.title,
+            duration_sec=meta.duration_sec,
+        )
+        if dup_bili is not None:
+            raise SkippedVideoError(
+                f"skipped YouTube duplicate of Bilibili raw_id={dup_bili}: {normalized}",
+                url=normalized,
+                reason="youtube_duplicate_of_bilibili",
+            )
+
     if platform == PLATFORM_BILIBILI:
         dup_yt = find_youtube_duplicate(
             storage,
@@ -80,12 +93,7 @@ def process_video_fast(
             description=meta.description,
         )
         if dup_yt is not None:
-            remove_bilibili_duplicate_of_youtube(storage, normalized)
-            raise DuplicateVideoError(
-                f"Bilibili duplicate of YouTube raw_id={dup_yt}",
-                url=normalized,
-                preferred_raw_id=dup_yt,
-            )
+            remove_youtube_duplicate_by_id(storage, int(dup_yt))
 
     body, _reason = build_video_body(
         title=meta.title,
