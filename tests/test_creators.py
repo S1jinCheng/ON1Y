@@ -4,10 +4,13 @@ from on1y.knowledge.creators import (
     creator_filter_sql,
     creator_key_from_feed,
     creator_key_from_feed_label,
+    discover_twitter_author_groups,
     is_sidebar_creator_feed,
     is_subscription_feed,
     is_zhihu_collection_feed,
+    normalize_twitter_author_url,
     subscription_feed_groups,
+    twitter_author_key_from_url,
     zhihu_author_url,
 )
 
@@ -82,3 +85,42 @@ def test_merge_activities_answers_same_person_key():
     a = creator_key_from_feed_label("zhihu-activities-duo-qi-zuo-41")
     b = creator_key_from_feed_label("zhihu-answers-duo-qi-zuo-41")
     assert a == b == "zhihu-person:duo-qi-zuo-41"
+
+
+def test_normalize_twitter_author_url():
+    assert normalize_twitter_author_url("https://twitter.com/Alice/") == "https://x.com/Alice"
+    assert normalize_twitter_author_url("https://x.com/bob/status/1") == ""
+    assert twitter_author_key_from_url("https://twitter.com/bob") == "twitter:https://x.com/bob"
+
+
+def test_twitter_creator_filter_matches_url_variants():
+    clause, params = creator_filter_sql("twitter:https://x.com/elonmusk")
+    assert "author_url" in clause
+    assert "https://x.com/elonmusk" in params
+    assert "https://twitter.com/elonmusk" in params
+
+
+def test_discover_twitter_author_groups():
+    groups = discover_twitter_author_groups(
+        {
+            "https://x.com/alice": {"author": "Alice", "count": 3, "avatar": ""},
+        }
+    )
+    assert "twitter:https://x.com/alice" in groups
+    assert groups["twitter:https://x.com/alice"]["name_hint"] == "Alice"
+
+
+def test_finalize_creator_sidebar_rows_filters_and_sorts() -> None:
+    from on1y.knowledge.creators import finalize_creator_sidebar_rows
+
+    rows = finalize_creator_sidebar_rows(
+        [
+            {"key": "bili:1", "name": "影视飓风", "platform": "bilibili", "item_count": 5},
+            {"key": "feed:yt-a", "name": "影视飓风", "platform": "youtube", "item_count": 8},
+            {"key": "feed:yt-b", "name": "Alpha", "platform": "youtube", "item_count": 4},
+            {"key": "twitter:x", "name": "Bob", "platform": "twitter", "item_count": 2},
+        ]
+    )
+    names = [row["name"] for row in rows]
+    assert names == ["Alpha", "影视飓风"]
+    assert all(int(row["item_count"]) > 3 for row in rows)

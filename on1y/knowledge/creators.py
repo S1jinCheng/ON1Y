@@ -13,6 +13,23 @@ _ZHIHU_COLLECTION_FEED_RE = re.compile(r"^zhihu-collection-(\d+)$")
 _ZHIHU_PEOPLE_URL_RE = re.compile(r"/people/(?:activities|answers)/([^/?#]+)")
 _ZHIHU_COLLECTION_URL_RE = re.compile(r"/collection/(\d+)")
 _BILI_UP_FEED_URL_RE = re.compile(r"/bilibili/user/video/(\d+)")
+_TWITTER_PROFILE_RE = re.compile(
+    r"^https?://(?:www\.)?(?:x\.com|twitter\.com)/([^/?#]+)/?$",
+    re.IGNORECASE,
+)
+_TWITTER_RESERVED_HANDLES = frozenset(
+    {
+        "i",
+        "home",
+        "search",
+        "explore",
+        "notifications",
+        "messages",
+        "settings",
+        "compose",
+        "intent",
+    }
+)
 
 
 def is_subscription_feed(label: str) -> bool:
@@ -108,6 +125,69 @@ def _zhihu_feed_labels_for_token(token: str, feed_labels: list[str] | None = Non
     return list(dict.fromkeys(label for label in labels if label))
 
 
+def normalize_twitter_author_url(url: str | None) -> str:
+    """Canonical profile URL for sidebar grouping (https://x.com/handle)."""
+    value = str(url or "").strip().rstrip("/")
+    if not value:
+        return ""
+    if "/status/" in value or "/i/web/status/" in value:
+        return ""
+    if not value.startswith("http"):
+        value = f"https://{value.lstrip('/')}"
+    match = _TWITTER_PROFILE_RE.match(value)
+    if not match:
+        return value
+    handle = match.group(1).strip()
+    if not handle or handle.lower() in _TWITTER_RESERVED_HANDLES:
+        return ""
+    return f"https://x.com/{handle}"
+
+
+def twitter_author_url_variants(url: str) -> list[str]:
+    norm = normalize_twitter_author_url(url)
+    if not norm:
+        return []
+    handle = norm.rsplit("/", 1)[-1]
+    return list(
+        dict.fromkeys(
+            [
+                norm,
+                f"{norm}/",
+                f"https://twitter.com/{handle}",
+                f"https://twitter.com/{handle}/",
+            ]
+        )
+    )
+
+
+def twitter_author_key_from_url(author_url: str | None) -> str | None:
+    norm = normalize_twitter_author_url(author_url)
+    if not norm:
+        return None
+    return f"twitter:{norm}"
+
+
+def discover_twitter_author_groups(
+    twitter_by_url: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """X authors found in raw_items, keyed by twitter:https://x.com/handle."""
+    groups: dict[str, dict[str, Any]] = {}
+    for author_url, tw in twitter_by_url.items():
+        key = twitter_author_key_from_url(author_url)
+        if not key:
+            continue
+        norm = normalize_twitter_author_url(author_url)
+        groups[key] = {
+            "key": key,
+            "platform": "twitter",
+            "feed_labels": [],
+            "name_hint": str(tw.get("author") or "").strip()
+            or (norm.rsplit("/", 1)[-1] if norm else key),
+            "author_url": norm,
+        }
+    return groups
+
+
 def creator_filter_sql(creator_key: str) -> tuple[str, list[Any]]:
     """Return SQL fragment (no leading AND) + params for raw_items alias r."""
     if creator_key.startswith("zhihu-person:"):
@@ -133,6 +213,15 @@ def creator_filter_sql(creator_key: str) -> tuple[str, list[Any]]:
         )
     if creator_key.startswith("bili:"):
         return ("json_extract(r.source_meta, '$.author_url') = ?", [creator_key[5:]])
+    if creator_key.startswith("twitter:"):
+        urls = twitter_author_url_variants(creator_key[8:])
+        if not urls:
+            return ("0", [])
+        url_placeholders = ", ".join("?" for _ in urls)
+        return (
+            f"json_extract(r.source_meta, '$.author_url') IN ({url_placeholders})",
+            urls,
+        )
     if creator_key.startswith("feed:"):
         return ("json_extract(r.source_meta, '$.feed_label') = ?", [creator_key[5:]])
     return ("json_extract(r.source_meta, '$.feed_label') = ?", [creator_key])
@@ -145,6 +234,8 @@ def _platform_for_feed(label: str) -> str:
         return "youtube"
     if label.startswith("bili-"):
         return "bilibili"
+    if label.startswith("x-"):
+        return "twitter"
     return "generic"
 
 
@@ -232,3 +323,44 @@ def discover_zhihu_person_groups(
 
 def list_subscription_feeds() -> list[FeedConfig]:
     return [f for f in load_feeds() if f.enabled and is_subscription_feed(f.label)]
+
+
+CREATOR_SIDEBAR_MIN_ITEMS = 3
+
+
+def normalize_creator_name(name: str | None) -> str:
+    from on1y.utils.video_dedup import normalize_video_title
+
+    return normalize_video_title(name)
+
+
+def finalize_creator_sidebar_rows(
+    creators: list[dict[str, Any]],
+    *,
+    min_items: int = CREATOR_SIDEBAR_MIN_ITEMS,
+) -> list[dict[str, Any]]:
+    """
+    Sidebar rules: item_count > min_items, hide YouTube when same-name Bilibili exists,
+    sort alphabetically by display name.
+    """
+    bili_names = {
+        normalize_creator_name(str(row.get("name") or ""))
+        for row in creators
+        if str(row.get("platform") or "").lower() == "bilibili"
+    }
+    bili_names.discard("")
+
+    filtered: list[dict[str, Any]] = []
+    for row in creators:
+        count = int(row.get("item_count") or 0)
+        if count <= min_items:
+            continue
+        platform = str(row.get("platform") or "").lower()
+        if platform == "youtube":
+            name_key = normalize_creator_name(str(row.get("name") or ""))
+            if name_key and name_key in bili_names:
+                continue
+        filtered.append(row)
+
+    filtered.sort(key=lambda row: str(row.get("name") or "").lower())
+    return filtered
