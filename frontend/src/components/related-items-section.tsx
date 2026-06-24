@@ -11,9 +11,11 @@ type RelatedItemsSectionProps = {
   items: KnowledgeItem[];
   locale: Locale;
   titleLabel: string;
-  lessRelevantLabel: string;
+  lessRelevantLabel?: string;
+  actionLabel?: string;
   onSelect: (rawId: number) => void;
-  onLessRelevant: (toRawId: number) => void;
+  onLessRelevant?: (toRawId: number) => void;
+  onAction?: (toRawId: number) => void;
 };
 
 function tagsWithoutAuthor(item: KnowledgeItem): KnowledgeItem["tags"] {
@@ -25,7 +27,8 @@ function tagsWithoutAuthor(item: KnowledgeItem): KnowledgeItem["tags"] {
 }
 
 export function RelatedItemsSection(props: RelatedItemsSectionProps): JSX.Element | null {
-  const { items, locale, titleLabel, lessRelevantLabel, onSelect, onLessRelevant } = props;
+  const { items, locale, titleLabel, lessRelevantLabel, actionLabel, onSelect, onLessRelevant, onAction } =
+    props;
   if (items.length === 0) {
     return null;
   }
@@ -73,15 +76,30 @@ export function RelatedItemsSection(props: RelatedItemsSectionProps): JSX.Elemen
                 ))}
               </div>
             </button>
-            <button
-              type="button"
-              aria-label={lessRelevantLabel}
-              title={lessRelevantLabel}
-              onClick={() => onLessRelevant(item.raw_id)}
-              className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted opacity-0 transition-opacity hover:bg-soft hover:text-foreground group-hover:opacity-100 focus:opacity-100"
-            >
-              <ThumbsDown className="h-3.5 w-3.5" />
-            </button>
+            <div className="mt-0.5 flex shrink-0 items-center gap-1">
+              {onAction && actionLabel ? (
+                <button
+                  type="button"
+                  aria-label={actionLabel}
+                  title={actionLabel}
+                  onClick={() => onAction(item.raw_id)}
+                  className="rounded-md px-2 py-1 text-[11px] text-muted transition-colors hover:bg-soft hover:text-foreground"
+                >
+                  {actionLabel}
+                </button>
+              ) : null}
+              {onLessRelevant && lessRelevantLabel ? (
+                <button
+                  type="button"
+                  aria-label={lessRelevantLabel}
+                  title={lessRelevantLabel}
+                  onClick={() => onLessRelevant(item.raw_id)}
+                  className="flex h-7 w-7 items-center justify-center rounded-md text-muted opacity-0 transition-opacity hover:bg-soft hover:text-foreground group-hover:opacity-100 focus:opacity-100"
+                >
+                  <ThumbsDown className="h-3.5 w-3.5" />
+                </button>
+              ) : null}
+            </div>
           </li>
         ))}
       </ul>

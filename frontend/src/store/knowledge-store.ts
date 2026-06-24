@@ -12,7 +12,13 @@ import type { Locale } from "@/lib/types";
 
 export const ALL_FILTER = "all";
 
-export type KnowledgeCollection = "feed" | "favorites" | "trash" | "hotlist" | "notes" | "books";
+export type KnowledgeCollection =
+  | "feed"
+  | "favorites"
+  | "trash"
+  | "hotlist"
+  | "notes"
+  | "books";
 
 export type SidebarMode = "theme" | "creator";
 
