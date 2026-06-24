@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextvars
 import threading
 from collections.abc import Callable
 from typing import TypeVar
@@ -16,13 +17,17 @@ def run_playwright_isolated(fn: Callable[[], T]) -> T:
     FastAPI/uvicorn runs asyncio on the main thread; Playwright sync API uses
     greenlets and fails when ``loop.is_running()``. Background collection sync
     can hit the same failure on Windows — always use a clean worker thread.
+
+    Request-scoped context (e.g. current user for cookie paths) is copied into
+    the worker thread so callers can resolve per-user paths before Playwright runs.
     """
+    ctx = contextvars.copy_context()
     result: list[T] = []
     errors: list[BaseException] = []
 
     def worker() -> None:
         try:
-            result.append(fn())
+            result.append(ctx.run(fn))
         except BaseException as exc:
             errors.append(exc)
 

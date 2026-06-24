@@ -218,6 +218,30 @@ _TWITTER_ACCOUNT_META_JS = """
       }
     }
   }
+  if (!handle) {
+    for (const a of document.querySelectorAll('a[href^="/"]')) {
+      const href = (a.getAttribute('href') || '').split('?')[0];
+      const parts = href.split('/').filter(Boolean);
+      if (parts.length !== 1) continue;
+      const token = parts[0];
+      const reserved = new Set([
+        'home', 'explore', 'search', 'notifications', 'messages', 'i', 'settings',
+        'compose', 'login', 'signup', 'intent',
+      ]);
+      if (reserved.has(token.toLowerCase())) continue;
+      const label = (a.getAttribute('aria-label') || a.getAttribute('title') || '').toLowerCase();
+      if (
+        label.includes('profile') ||
+        label.includes('account') ||
+        label.includes('个人资料') ||
+        label.includes('账号') ||
+        label.includes('帐户')
+      ) {
+        handle = token;
+        break;
+      }
+    }
+  }
   return { handle, name, avatar };
 }
 """
@@ -357,6 +381,413 @@ _TWITTER_AUTHOR_META_JS = """
 """
 
 
+_CLICK_FOLLOWING_TAB_JS = """
+() => {
+  const followingRe = /^(Following|正在关注|订阅|关注)$/i;
+  const tabs = [...document.querySelectorAll('[role="tab"]')];
+  let followingTab = null;
+  for (const tab of tabs) {
+    const text = (tab.innerText || '').trim().split('\\n')[0].trim();
+    if (followingRe.test(text)) {
+      followingTab = tab;
+      break;
+    }
+  }
+  if (!followingTab) {
+    return { found: false, active: false, clicked: false };
+  }
+  const wasActive = followingTab.getAttribute('aria-selected') === 'true';
+  if (!wasActive) {
+    followingTab.click();
+  }
+  const active = followingTab.getAttribute('aria-selected') === 'true';
+  return { found: true, active, clicked: !wasActive };
+}
+"""
+
+_ACTIVE_HOME_TAB_JS = """
+() => {
+  const followingRe = /^(Following|正在关注|订阅|关注)$/i;
+  const forYouRe = /^(For you|For You|为你推荐|推荐)$/i;
+  const tabs = [...document.querySelectorAll('[role="tab"]')];
+  for (const tab of tabs) {
+    if (tab.getAttribute('aria-selected') !== 'true') continue;
+    const text = (tab.innerText || '').trim().split('\\n')[0].trim();
+    if (followingRe.test(text)) return 'following';
+    if (forYouRe.test(text)) return 'for_you';
+    return text || 'unknown';
+  }
+  return 'unknown';
+}
+"""
+
+
+def active_twitter_home_tab(page: Any) -> str:
+    try:
+        return str(page.evaluate(_ACTIVE_HOME_TAB_JS) or "unknown").strip() or "unknown"
+    except Exception:
+        return "unknown"
+
+
+def click_twitter_following_tab(page: Any) -> bool:
+    """Switch home timeline from For You to Following when the tab is present."""
+    try:
+        raw = page.evaluate(_CLICK_FOLLOWING_TAB_JS)
+    except Exception:
+        return False
+    if not isinstance(raw, dict):
+        return False
+    return bool(raw.get("found"))
+
+
+def ensure_twitter_following_tab(page: Any, *, settings: Settings) -> None:
+    """Require the Following tab before scraping home — never ingest For You."""
+    settle = max(settings.playwright_settle_ms, 2000)
+    last_active = "unknown"
+    for attempt in range(3):
+        click_twitter_following_tab(page)
+        page.wait_for_timeout(900 if attempt else settle)
+        last_active = active_twitter_home_tab(page)
+        if last_active == "following":
+            return
+        if attempt < 2:
+            page.wait_for_timeout(settle)
+    raise ConfigurationError(
+        "X home timeline is not on the Following tab "
+        f"(active={last_active!r}); refusing to ingest For You recommendations"
+    )
+
+
+_EXTRACT_STATUS_JS = """
+(statusId) => {
+  const normUrl = (href) => {
+    if (!href) return '';
+    if (href.startsWith('/')) return 'https://x.com' + href.split('?')[0];
+    return href.split('?')[0];
+  };
+
+  const isInside = (node, ancestor) => {
+    if (!node || !ancestor) return false;
+    let cur = node;
+    while (cur) {
+      if (cur === ancestor) return true;
+      cur = cur.parentElement;
+    }
+    return false;
+  };
+
+  const parseUser = (root) => {
+    const block = root.querySelector('[data-testid="User-Name"]');
+    if (!block) return { author: '', handle: '' };
+    const lines = (block.innerText || '').split('\\n').map((s) => s.trim()).filter(Boolean);
+    const handleLine = lines.find((l) => l.startsWith('@')) || '';
+    const handle = handleLine.replace(/^@/, '');
+    const author = lines[0] || '';
+    return { author, handle };
+  };
+
+  const statusLink = (root) => {
+    const timeParent = root.querySelector('a[href*="/status/"] time');
+    const link = timeParent && timeParent.parentElement
+      ? timeParent.parentElement
+      : root.querySelector('a[href*="/status/"]');
+    return link ? normUrl(link.getAttribute('href') || '') : '';
+  };
+
+  const tweetText = (root, exclude) => {
+    const parts = [];
+    for (const el of root.querySelectorAll('[data-testid="tweetText"]')) {
+      if (exclude && isInside(el, exclude)) continue;
+      const t = (el.innerText || '').trim();
+      if (t) parts.push(t);
+    }
+    return parts.join('\\n\\n');
+  };
+
+  const tweetTextOnly = (root) => {
+    const parts = [];
+    for (const el of root.querySelectorAll('[data-testid="tweetText"]')) {
+      const t = (el.innerText || '').trim();
+      if (t) parts.push(t);
+    }
+    return parts.join('\\n\\n');
+  };
+
+  const collectImages = (root, exclude) => {
+    const images = [];
+    const seen = new Set();
+    for (const img of root.querySelectorAll('[data-testid="tweetPhoto"] img')) {
+      if (exclude && isInside(img, exclude)) continue;
+      let src = img.getAttribute('src') || '';
+      if (!src || !src.includes('pbs.twimg.com')) continue;
+      if (src.startsWith('//')) src = 'https:' + src;
+      const url = src.split('?')[0] + '?format=jpg&name=large';
+      if (seen.has(url)) continue;
+      seen.add(url);
+      images.push({ type: 'image', url });
+    }
+    return images;
+  };
+
+  const videoCaption = (comp) => {
+    const parts = [];
+    const video = comp.querySelector('video');
+    if (video) {
+      const aria = (video.getAttribute('aria-label') || '').trim();
+      if (aria) parts.push(aria);
+    }
+    for (const sel of [
+      '[data-testid="videoDescription"]',
+      '[data-testid="altText"]',
+      '[data-testid="transcriptText"]',
+      '[data-testid="closedCaptions"]',
+    ]) {
+      for (const el of comp.querySelectorAll(sel)) {
+        const t = (el.innerText || '').trim();
+        if (t) parts.push(t);
+      }
+    }
+    return Array.from(new Set(parts)).join('\\n').trim();
+  };
+
+  const collectVideos = (root, exclude) => {
+    const videos = [];
+    const seen = new Set();
+    for (const comp of root.querySelectorAll('[data-testid="videoComponent"]')) {
+      if (exclude && isInside(comp, exclude)) continue;
+      let url = '';
+      for (const a of comp.querySelectorAll('a[href*="/status/"]')) {
+        const href = normUrl(a.getAttribute('href') || '');
+        if (href && (href.includes('/video/') || /\\/status\\/\\d+\\/video/.test(href))) {
+          url = href;
+          break;
+        }
+      }
+      if (!url) {
+        const a = comp.querySelector('a[href*="/video/"]');
+        if (a) url = normUrl(a.getAttribute('href') || '');
+      }
+      const caption = videoCaption(comp);
+      const key = (url || '') + '|' + caption;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      videos.push({ type: 'video', url: url || null, caption: caption || null });
+    }
+    return videos;
+  };
+
+  const buildBlock = (root, exclude) => {
+    const user = parseUser(root);
+    return {
+      author: user.author,
+      handle: user.handle,
+      text: exclude ? tweetText(root, exclude) : tweetTextOnly(root),
+      url: statusLink(root),
+      images: collectImages(root, exclude),
+      videos: collectVideos(root, exclude),
+    };
+  };
+
+  const parseReposter = (socialText) => {
+    const text = (socialText || '').trim();
+    if (!text) return '';
+    const patterns = [
+      /^(.+?)\\s+reposted$/i,
+      /^(.+?)\\s+retweeted$/i,
+      /^(.+?)\\s+转推了?$/,
+      /^(.+?)\\s+转发了$/,
+    ];
+    for (const re of patterns) {
+      const m = text.match(re);
+      if (m) return m[1].trim();
+    }
+    return text;
+  };
+
+  const articles = Array.from(document.querySelectorAll('article[data-testid="tweet"]'));
+  let article = null;
+  for (const candidate of articles) {
+    for (const aLink of candidate.querySelectorAll('a[href*="/status/"]')) {
+      const href = aLink.getAttribute('href') || '';
+      if (statusId && href.includes('/status/' + statusId)) {
+        article = candidate;
+        break;
+      }
+    }
+    if (article) break;
+  }
+  if (!article && articles.length) article = articles[0];
+  if (!article) {
+    const bodyText = (document.body.innerText || '').slice(0, 500);
+    if (/unavailable|不存在|已被删除|account is suspended/i.test(bodyText)) {
+      return { kind: 'unavailable', main: { text: '', images: [], videos: [] }, embedded: null };
+    }
+    return null;
+  }
+
+  const social = article.querySelector('[data-testid="socialContext"]');
+  const socialText = social ? (social.innerText || '').trim() : '';
+  const isRetweet = /reposted|retweeted|转推|转发了/i.test(socialText);
+
+  const card = article.querySelector('[data-testid="card.wrapper"]');
+  const postUrl = statusLink(article);
+
+  let kind = 'tweet';
+  let main = null;
+  let embedded = null;
+
+  if (card) {
+    kind = 'quote';
+    main = buildBlock(article, card);
+    embedded = buildBlock(card, null);
+  } else if (isRetweet) {
+    kind = 'retweet';
+    const body = buildBlock(article, null);
+    main = {
+      reposter: parseReposter(socialText),
+      author: '',
+      handle: '',
+      text: '',
+      url: postUrl,
+      images: [],
+      videos: [],
+    };
+    embedded = body;
+  } else {
+    main = buildBlock(article, null);
+  }
+
+  return {
+    kind,
+    author: main.author,
+    handle: main.handle,
+    text: main.text,
+    url: postUrl,
+    social_context: socialText || null,
+    quoted: embedded,
+    main,
+    embedded,
+    is_retweet: isRetweet,
+  };
+}
+"""
+
+
+@dataclass(frozen=True)
+class TwitterStatusExtract:
+    body_text: str
+    raw_title: str | None
+    author: str | None
+    author_avatar: str | None
+    author_url: str | None
+    kind: str
+    status_url: str | None
+
+
+def _extract_status_payload(page: Any, url: str) -> dict[str, Any]:
+    from on1y.extract.twitter_body import payload_has_content
+
+    status_id = parse_status_id(url) or ""
+    raw = page.evaluate(_EXTRACT_STATUS_JS, status_id)
+    if not isinstance(raw, dict):
+        page.wait_for_timeout(2500)
+        try:
+            page.wait_for_selector('article[data-testid="tweet"]', timeout=8000)
+        except Exception:
+            pass
+        raw = page.evaluate(_EXTRACT_STATUS_JS, status_id)
+    if not isinstance(raw, dict):
+        raise ConfigurationError("Could not locate tweet content on X status page")
+    if str(raw.get("kind") or "") == "unavailable":
+        raise ConfigurationError("Tweet unavailable or deleted on X")
+    if not payload_has_content(raw):
+        raise ConfigurationError("Tweet has no extractable text or media on X status page")
+    return raw
+
+
+def extract_twitter_status_from_page(page: Any, url: str) -> TwitterStatusExtract:
+    """Parse the focal status on the current page into Markdown."""
+    from on1y.extract.twitter_body import format_twitter_status_markdown, twitter_title_from_payload
+
+    check_twitter_page_health(page)
+    payload = _extract_status_payload(page, url)
+    body = format_twitter_status_markdown(payload)
+    if len(body.strip()) < 1:
+        raise ConfigurationError("Tweet body empty after structured extraction")
+
+    meta = extract_twitter_author_meta(page)
+    main = payload.get("main") if isinstance(payload.get("main"), dict) else {}
+    embedded = payload.get("embedded") if isinstance(payload.get("embedded"), dict) else {}
+    kind = str(payload.get("kind") or "tweet")
+    author = (
+        str(main.get("author") or payload.get("author") or meta.get("author") or "").strip()
+        or None
+    )
+    handle = str(main.get("handle") or payload.get("handle") or "").strip().removeprefix("@")
+    if kind == "retweet" and embedded:
+        author = str(embedded.get("author") or "").strip() or author
+        handle = str(embedded.get("handle") or "").strip().removeprefix("@") or handle
+    author_url = meta.get("author_url")
+    if handle and not author_url:
+        author_url = f"https://x.com/{handle}"
+    from on1y.knowledge.creators import normalize_twitter_author_url
+
+    author_url = normalize_twitter_author_url(author_url) or None
+
+    return TwitterStatusExtract(
+        body_text=body,
+        raw_title=twitter_title_from_payload(payload),
+        author=author,
+        author_avatar=meta.get("author_avatar"),
+        author_url=author_url,
+        kind=str(payload.get("kind") or "tweet"),
+        status_url=str(payload.get("url") or "").strip() or None,
+    )
+
+
+def fetch_twitter_status_markdown(
+    url: str,
+    *,
+    cookie_path: Path,
+    seed_domain: str = TWITTER_SEED_DOMAIN,
+    settle_ms: int | None = None,
+    session: Any | None = None,
+    settings: Settings | None = None,
+) -> TwitterStatusExtract:
+    """Navigate to a status URL and extract Markdown (reuses session when provided)."""
+    settings = settings or get_settings()
+    settle = settle_ms if settle_ms is not None else settings.playwright_settle_ms
+    normalized = normalize_twitter_status_url(url)
+
+    def _on_page(page: Any) -> TwitterStatusExtract:
+        page.goto(normalized, wait_until="domcontentloaded", timeout=settings.playwright_timeout_ms)
+        page.wait_for_timeout(max(settle, 2500))
+        return extract_twitter_status_from_page(page, normalized)
+
+    if session is not None:
+        page = session.new_page()
+        try:
+            return _on_page(page)
+        finally:
+            page.close()
+
+    from on1y.browser.playwright_isolated import run_playwright_isolated
+    from on1y.browser.playwright_session import PlaywrightSession
+
+    def _run() -> TwitterStatusExtract:
+        with PlaywrightSession(cookie_path=cookie_path, seed_domain=seed_domain) as sess:
+            return fetch_twitter_status_markdown(
+                normalized,
+                cookie_path=cookie_path,
+                seed_domain=seed_domain,
+                settle_ms=settle,
+                session=sess,
+                settings=settings,
+            )
+
+    return run_playwright_isolated(_run)
+
+
 def extract_twitter_author_meta(page: Any) -> dict[str, str | None]:
     try:
         raw = page.evaluate(_TWITTER_AUTHOR_META_JS)
@@ -378,6 +809,7 @@ def discover_twitter_status_refs(
     max_items: int,
     max_scrolls: int,
     exclude_retweets: bool = True,
+    following_tab: bool = False,
     settings: Settings | None = None,
 ) -> list[TwitterStatusRef]:
     """Open a timeline page and collect status links from the DOM."""
@@ -399,6 +831,8 @@ def discover_twitter_status_refs(
                 page.goto(start_url, wait_until="domcontentloaded")
                 page.wait_for_timeout(max(settings.playwright_settle_ms, 2500))
                 check_twitter_page_health(page)
+                if following_tab and start_url.rstrip("/").endswith("/home"):
+                    ensure_twitter_following_tab(page, settings=settings)
 
                 for round_idx in range(scrolls + 1):
                     raw_rows: list[dict[str, Any]] = page.evaluate(_COLLECT_STATUS_JS)

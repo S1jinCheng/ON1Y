@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from on1y.config import Settings
+from on1y.config import Settings, get_settings
 from on1y.extract.playwright_base import PlaywrightExtractor
+from on1y.models.extract import ExtractResult
 from on1y.utils.platform import PLATFORM_TWITTER, detect_platform
+
+if TYPE_CHECKING:
+    from on1y.browser.playwright_session import PlaywrightSession
 
 
 class TwitterExtractor(PlaywrightExtractor):
@@ -43,10 +48,7 @@ class TwitterExtractor(PlaywrightExtractor):
         ]
 
     def content_selectors(self) -> list[str]:
-        # Thread: collect all tweet bodies in order
-        return [
-            '[data-testid="tweetText"]',
-        ]
+        return ['[data-testid="tweetText"]']
 
     def settle_ms(self) -> int | None:
         return 3000
@@ -62,3 +64,30 @@ class TwitterExtractor(PlaywrightExtractor):
 
     def min_body_chars(self) -> int:
         return 1
+
+    def extract(self, url: str, *, session: PlaywrightSession | None = None) -> ExtractResult:
+        """Extract one status as Markdown: tweet text, quote/retweet blocks, media links only."""
+        from on1y.browser.twitter_playwright import fetch_twitter_status_markdown
+
+        settings = get_settings()
+        extracted = fetch_twitter_status_markdown(
+            url,
+            cookie_path=self.cookie_path(settings),
+            seed_domain=self.seed_domain(),
+            settle_ms=self.settle_ms(),
+            session=session,
+            settings=settings,
+        )
+        return self._ok(
+            platform=self.platform_id,
+            raw_title=extracted.raw_title,
+            body_text=extracted.body_text,
+            content_type=self.content_type(),
+            author=extracted.author,
+            author_avatar=extracted.author_avatar,
+            author_url=extracted.author_url,
+            source_meta={
+                "twitter_kind": extracted.kind,
+                "twitter_status_url": extracted.status_url,
+            },
+        )

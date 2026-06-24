@@ -240,6 +240,10 @@ class Settings(BaseSettings):
     twitter_bookmarks_max_scrolls: int = Field(default=4, ge=0, le=20)
     twitter_likes_max_scrolls: int = Field(default=6, ge=0, le=20)
     twitter_exclude_retweets: bool = Field(default=True)
+    twitter_home_following_only: bool = Field(
+        default=True,
+        description="Home poll uses only the Following tab; For You is never ingested.",
+    )
     twitter_min_interval_seconds: float = Field(default=3.0, ge=0.0)
     twitter_antibot_pause_seconds: float = Field(default=300.0, ge=60.0)
 

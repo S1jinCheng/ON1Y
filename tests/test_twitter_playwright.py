@@ -44,3 +44,14 @@ def test_normalize_twitter_image_url() -> None:
 def test_sync_platforms_include_twitter() -> None:
     assert "twitter" in SYNC_PLATFORMS
     assert "twitter" in PLATFORMS
+
+
+def test_click_following_tab_js_present() -> None:
+    from on1y.browser import twitter_playwright as tw
+
+    assert "Following" in tw._CLICK_FOLLOWING_TAB_JS
+    assert "正在关注" in tw._CLICK_FOLLOWING_TAB_JS
+    assert "for_you" in tw._ACTIVE_HOME_TAB_JS
+    assert callable(tw.click_twitter_following_tab)
+    assert callable(tw.ensure_twitter_following_tab)
+

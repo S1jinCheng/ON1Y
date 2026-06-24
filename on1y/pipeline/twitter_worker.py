@@ -82,13 +82,18 @@ def _run_twitter_worker_batch_impl(
                 result = extractor.extract(normalized, session=session)
                 result = result.truncated(settings.max_body_chars)
                 meta = dict(pending.source_meta or {})
-                meta.update(
-                    author_meta_patch(
-                        author=result.author,
-                        author_avatar=result.author_avatar,
-                        author_url=result.author_url,
-                    )
+                patch = author_meta_patch(
+                    author=result.author,
+                    author_avatar=result.author_avatar,
+                    author_url=result.author_url,
                 )
+                from on1y.knowledge.creators import normalize_twitter_author_url
+
+                if patch.get("author_url"):
+                    patch["author_url"] = normalize_twitter_author_url(patch["author_url"])
+                meta.update(patch)
+                if result.source_meta:
+                    meta.update(result.source_meta)
                 create = RawItemCreate(
                     url=normalized,
                     platform=PLATFORM_TWITTER,
@@ -100,9 +105,12 @@ def _run_twitter_worker_batch_impl(
                     extract_error=result.extract_error,
                     source_meta=meta,
                 )
+                from on1y.distill.processor import maybe_package_short_content
+
                 raw = storage.upsert_raw_item(create)
                 storage.mark_pending_done(pending.id)
                 processed += 1
+                maybe_package_short_content(storage, raw.id, raw.body_text)
                 logger.info(
                     "Twitter done id=%s raw_id=%s words=%s",
                     pending.id,
@@ -112,7 +120,7 @@ def _run_twitter_worker_batch_impl(
             except ExtractionError as exc:
                 msg = str(exc)
                 retry = pending.attempts < settings.worker_max_retries
-                if _is_twitter_antibot(msg):
+                if _is_twitter_antibot(msg) or _is_permanent_twitter_error(msg):
                     retry = False
                     antibot_stopped = True
                     emit_alert(
@@ -137,7 +145,7 @@ def _run_twitter_worker_batch_impl(
             except Exception as exc:
                 msg = f"unexpected: {exc}"
                 retry = pending.attempts < settings.worker_max_retries
-                if _is_twitter_antibot(msg):
+                if _is_twitter_antibot(msg) or _is_permanent_twitter_error(msg):
                     retry = False
                     antibot_stopped = True
                     emit_alert(
@@ -173,6 +181,19 @@ def _run_twitter_worker_batch_impl(
         "skipped": skipped,
         "antibot_stopped": antibot_stopped,
     }
+
+
+def _is_permanent_twitter_error(message: str) -> bool:
+    lowered = message.lower()
+    return any(
+        token in lowered
+        for token in (
+            "unavailable",
+            "deleted",
+            "not a twitter url",
+            "no extractable text or media",
+        )
+    )
 
 
 def _is_twitter_antibot(message: str) -> bool:

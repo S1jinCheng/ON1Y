@@ -86,7 +86,7 @@ def poll_twitter_home_timeline(
 
     report: dict[str, Any] = {
         "platform": "twitter",
-        "mode": "home_timeline",
+        "mode": "home_following" if settings.twitter_home_following_only else "home_timeline",
         "max_items": max_items,
         "seen": 0,
         "enqueued": 0,
@@ -99,14 +99,21 @@ def poll_twitter_home_timeline(
         "errors": [],
     }
 
-    refs = discover_twitter_status_refs(
-        path,
-        start_url=TWITTER_HOME_URL,
-        max_items=max_items,
-        max_scrolls=settings.twitter_poll_max_scrolls,
-        exclude_retweets=settings.twitter_exclude_retweets,
-        settings=settings,
-    )
+    try:
+        refs = discover_twitter_status_refs(
+            path,
+            start_url=TWITTER_HOME_URL,
+            max_items=max_items,
+            max_scrolls=settings.twitter_poll_max_scrolls,
+            exclude_retweets=settings.twitter_exclude_retweets,
+            following_tab=settings.twitter_home_following_only,
+            settings=settings,
+        )
+    except ConfigurationError as exc:
+        report["errors"].append(str(exc))
+        report["following_tab_failed"] = True
+        logger.warning("X home Following feed unavailable: %s", exc)
+        return report
     report["seen"] = len(refs)
 
     newest_id = last_id
@@ -175,7 +182,11 @@ def poll_twitter_home_timeline(
             newest_id = ref.status_id
 
     if newest_id and newest_id != last_id:
-        storage.set_rss_feed_state(cursor_key, newest_id, None)
+        storage.set_rss_feed_state(
+            cursor_key,
+            last_entry_id=newest_id,
+            last_published=None,
+        )
 
     return report
 
