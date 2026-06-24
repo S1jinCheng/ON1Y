@@ -78,6 +78,10 @@ export type KnowledgeItem = {
   clip_source?: string | null;
   clip_count?: number | null;
   extract_strategy?: string | null;
+  obsidian_uri?: string | null;
+  obsidian_source_url?: string | null;
+  obsidian_path?: string | null;
+  obsidian_writeback_status?: string | null;
   deleted_at?: string | null;
   search_rank?: number;
   search_snippet?: string;
@@ -111,6 +115,7 @@ export type ReaderContent = {
   obsidian_uri?: string | null;
   obsidian_source_url?: string | null;
   obsidian_path?: string | null;
+  obsidian_writeback_status?: string | null;
   transcript_kind: TranscriptKind;
   translated_body_text: string | null;
   can_translate: boolean;
@@ -141,6 +146,14 @@ export type ThemeCreateInput = {
   name_en?: string;
   description_zh?: string;
   description_en?: string;
+};
+
+export type ThemeUpdateInput = {
+  name_zh?: string;
+  name_en?: string;
+  description_zh?: string;
+  description_en?: string;
+  sort_order?: number;
 };
 
 export type ThemeSplitInput = {

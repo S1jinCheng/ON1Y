@@ -42,6 +42,10 @@ type FeedItemCardProps = {
   /** Preloaded note HTML for hover preview (active row). */
   notePreviewHtml?: string | null;
   notePreviewEmptyLabel?: string;
+  /** Candidate picker mode: hide right-side action rail. */
+  hideActions?: boolean;
+  /** Optional query term to highlight matched tags. */
+  highlightTerm?: string;
 };
 
 function SearchHtml(props: {
@@ -112,7 +116,9 @@ export function FeedItemCard(props: FeedItemCardProps): JSX.Element {
     onRestore,
     compact = false,
     notePreviewHtml,
-    notePreviewEmptyLabel = "No note"
+    notePreviewEmptyLabel = "No note",
+    hideActions = false,
+    highlightTerm
   } = props;
 
   const visibleTags = tagsWithoutAuthor(item);
@@ -268,7 +274,16 @@ export function FeedItemCard(props: FeedItemCardProps): JSX.Element {
                   </span>
                 ) : null}
                 {visibleTags.slice(0, 3).map((tg) => (
-                  <span key={tg.id} className={feedItemListTagClass}>
+                  <span
+                    key={tg.id}
+                    className={
+                      highlightTerm &&
+                      tg.name.toLowerCase().includes(highlightTerm.trim().toLowerCase()) &&
+                      highlightTerm.trim()
+                        ? "inline-flex items-center rounded bg-yellow-200/80 px-1.5 py-0.5 text-[10px] font-medium text-yellow-900 dark:bg-yellow-500/30 dark:text-yellow-100"
+                        : feedItemListTagClass
+                    }
+                  >
                     #{tg.name}
                   </span>
                 ))}
@@ -278,12 +293,18 @@ export function FeedItemCard(props: FeedItemCardProps): JSX.Element {
                     <ImportanceStars value={item.importance} readonly size="sm" />
                   </span>
                 ) : null}
+                {item.obsidian_writeback_status ? (
+                  <span className="rounded bg-soft px-1.5 py-0.5 text-[10px] text-muted">
+                    WB:{item.obsidian_writeback_status}
+                  </span>
+                ) : null}
               </div>
             </div>
           </div>
         )}
       </button>
 
+      {!hideActions ? (
       <div
         className={`flex shrink-0 flex-col items-center justify-center gap-0 border-l border-border bg-panel/80 ${
           selectionMode ? "w-10 py-2" : "py-1"
@@ -376,6 +397,7 @@ export function FeedItemCard(props: FeedItemCardProps): JSX.Element {
           </>
         ) : null}
       </div>
+      ) : null}
     </div>
   );
 }

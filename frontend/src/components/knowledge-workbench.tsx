@@ -47,11 +47,13 @@ import { ThemeSidebar } from "@/components/theme-sidebar";
 import { CreatorSidebar } from "@/components/creator-sidebar";
 import {
   absorbThemeFromOther,
+  absorbThemeFromTheme,
   createTheme,
   batchDeleteKnowledgeItems,
   deleteKnowledgeItem,
   deleteTheme,
   reorderThemes,
+  updateTheme,
   runHotlistSync,
   getCollectionCounts,
   getCookieStatuses,
@@ -976,7 +978,10 @@ export default function KnowledgeWorkbench(): JSX.Element {
     markdownText:
       active?.platform === "obsidian"
         ? (reader?.raw_body_text ?? reader?.body_text ?? "")
-        : undefined,
+        : (reader?.body_text ?? ""),
+    exportBaseName: active?.title || active?.url || "content",
+    exportMdLabel: ui("exportMarkdown"),
+    exportTxtLabel: ui("exportText"),
     locale,
     emptyLabel: ui("noReaderText"),
     expandLabel: ui("expandReader"),
@@ -1832,6 +1837,55 @@ export default function KnowledgeWorkbench(): JSX.Element {
     setThemes(result.themes);
   }
 
+  async function handleUpdateThemeDescription(
+    themeId: number,
+    description: string
+  ): Promise<void> {
+    try {
+      const result = await updateTheme(themeId, {
+        description_zh: description,
+        description_en: description
+      });
+      const row = result.theme;
+      setThemes((prev) =>
+        prev.map((theme) =>
+          theme.id === themeId
+            ? {
+                ...theme,
+                description_zh: row.description_zh ?? theme.description_zh,
+                description_en: row.description_en ?? theme.description_en
+              }
+            : theme
+        )
+      );
+      setMessage(ui("themeDescSaved"));
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "update theme failed");
+      throw error;
+    }
+  }
+
+  async function handleAbsorbFromTheme(
+    targetThemeId: number,
+    sourceThemeId: number
+  ): Promise<void> {
+    try {
+      const result = await absorbThemeFromTheme(targetThemeId, sourceThemeId, locale);
+      if (result.started) {
+        setMessage(ui("themeAbsorbFromResearchStarted"));
+      } else if (result.reason === "no_llm_key") {
+        setMessage(ui("themeAbsorbNoLlm"));
+      } else if (result.reason === "already_running") {
+        setMessage(ui("themeAbsorbFromResearchStarted"));
+      } else {
+        setMessage(ui("themeAbsorbFromResearchStarted"));
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "absorb failed");
+      throw error;
+    }
+  }
+
   const tagSuggestions = useMemo(
     () => dynamicTags.map((tag) => tag.name),
     [dynamicTags]
@@ -2041,12 +2095,30 @@ export default function KnowledgeWorkbench(): JSX.Element {
                     throw error;
                   }
                 }}
+                onUpdateThemeDescription={async (themeId, description) => {
+                  try {
+                    await handleUpdateThemeDescription(themeId, description);
+                  } catch (error) {
+                    throw error;
+                  }
+                }}
+                onAbsorbFromTheme={async (targetThemeId, sourceThemeId) => {
+                  try {
+                    await handleAbsorbFromTheme(targetThemeId, sourceThemeId);
+                  } catch (error) {
+                    throw error;
+                  }
+                }}
                 labels={{
                   themes: ui("themes"),
                   allThemes: ui("allThemes"),
                   addTheme: ui("addTheme"),
                   themeName: ui("themeName"),
                   themeDesc: ui("themeDesc"),
+                  editThemeDesc: ui("editThemeDesc"),
+                  themeDescSave: ui("themeDescSave"),
+                  themeDescCancel: ui("themeDescCancel"),
+                  themeAbsorbFromResearch: ui("themeAbsorbFromResearch"),
                   deleteTheme: ui("deleteTheme"),
                   confirmDeleteTheme: ui("confirmDeleteTheme"),
                   themeDeleted: ui("themeDeleted"),

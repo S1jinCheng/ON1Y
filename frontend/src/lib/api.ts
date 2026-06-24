@@ -8,7 +8,8 @@ import {
   type TaxonomyResponse,
   type ThemeCreateInput,
   type ThemeRow,
-  type ThemeSplitInput
+  type ThemeSplitInput,
+  type ThemeUpdateInput
 } from "@/lib/types";
 import type {
   EveningDigest,
@@ -1035,6 +1036,16 @@ export function createTheme(
   });
 }
 
+export function updateTheme(
+  themeId: number,
+  payload: ThemeUpdateInput
+): Promise<{ theme: ThemeRow }> {
+  return request(`/api/knowledge/themes/${themeId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload)
+  });
+}
+
 export function absorbThemeFromOther(
   themeId: number,
   locale: Locale = "zh"
@@ -1042,6 +1053,22 @@ export function absorbThemeFromOther(
   return request(`/api/knowledge/themes/${themeId}/absorb-from-other?locale=${locale}`, {
     method: "POST"
   });
+}
+
+export function absorbThemeFromTheme(
+  targetThemeId: number,
+  sourceThemeId: number,
+  locale: Locale = "zh"
+): Promise<{
+  started?: boolean;
+  reason?: string;
+  target_theme_id?: number;
+  source_theme_id?: number;
+}> {
+  return request(
+    `/api/knowledge/themes/${targetThemeId}/absorb-from-theme?source_theme_id=${sourceThemeId}&locale=${locale}`,
+    { method: "POST" }
+  );
 }
 
 export function deleteTheme(
@@ -1620,6 +1647,7 @@ export type SubscriptionSyncStatus = {
     bilibili?: PlatformSyncReport;
     youtube?: PlatformSyncReport;
     zhihu?: PlatformSyncReport;
+    twitter?: PlatformSyncReport;
     use_ai_summary?: boolean;
   } | null;
 };

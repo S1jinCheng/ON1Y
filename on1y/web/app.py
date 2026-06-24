@@ -1684,6 +1684,30 @@ def create_app() -> FastAPI:
         finally:
             storage.close()
 
+    @app.post("/api/knowledge/themes/{theme_id}/absorb-from-theme")
+    def knowledge_themes_absorb_from_theme(
+        theme_id: int,
+        source_theme_id: int = Query(..., ge=1),
+        locale: str = Query(default="zh"),
+    ) -> dict[str, Any]:
+        storage = get_storage()
+        try:
+            target = storage.get_theme_by_id(theme_id)
+            source = storage.get_theme_by_id(source_theme_id)
+            if target is None or source is None:
+                raise HTTPException(status_code=404, detail="theme not found")
+            if target.get("archived_at") or source.get("archived_at"):
+                raise HTTPException(status_code=400, detail="theme archived")
+            from on1y.taxonomy.absorb import schedule_absorb_from_theme
+
+            return schedule_absorb_from_theme(
+                target_theme_id=theme_id,
+                source_theme_id=source_theme_id,
+                locale=locale,
+            )
+        finally:
+            storage.close()
+
     @app.post("/api/knowledge/themes/reorder")
     def knowledge_themes_reorder(
         body: ThemeReorderRequest,

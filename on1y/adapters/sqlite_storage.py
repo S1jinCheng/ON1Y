@@ -28,7 +28,7 @@ from on1y.utils.json_util import dumps_json, dumps_meta, loads_json_list, loads_
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 18
+SCHEMA_VERSION = 19
 SCHEMA_PATH = PROJECT_ROOT / "sql" / "schema.sql"
 SCHEMA_V2_PATH = PROJECT_ROOT / "sql" / "schema_v2.sql"
 SCHEMA_V3_PATH = PROJECT_ROOT / "sql" / "schema_v3.sql"
@@ -45,6 +45,7 @@ SCHEMA_V15_PATH = PROJECT_ROOT / "sql" / "schema_v15.sql"
 SCHEMA_V16_PATH = PROJECT_ROOT / "sql" / "schema_v16.sql"
 SCHEMA_V17_PATH = PROJECT_ROOT / "sql" / "schema_v17.sql"
 SCHEMA_V18_PATH = PROJECT_ROOT / "sql" / "schema_v18.sql"
+SCHEMA_V19_PATH = PROJECT_ROOT / "sql" / "schema_v19.sql"
 
 
 def _as_int_or_none(value: Any) -> int | None:
@@ -323,6 +324,16 @@ class SqliteStorage:
                 (18,),
             )
             logger.info("Applied schema version 18 to %s", self._db_path)
+            current = 18
+        if current < 19:
+            if not SCHEMA_V19_PATH.is_file():
+                raise StorageError(f"Schema file not found: {SCHEMA_V19_PATH}")
+            conn.executescript(SCHEMA_V19_PATH.read_text(encoding="utf-8"))
+            conn.execute(
+                "INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)",
+                (19,),
+            )
+            logger.info("Applied schema version 19 to %s", self._db_path)
 
     def _table_exists(self, conn: sqlite3.Connection, name: str) -> bool:
         row = conn.execute(
@@ -713,6 +724,27 @@ class SqliteStorage:
                     theme.description_en,
                     1 if theme.is_builtin else 0,
                 ),
+            )
+        from on1y.taxonomy.constants import THEME_GUIDANCE_PATCHES
+
+        for slug, patch in THEME_GUIDANCE_PATCHES.items():
+            row = db.execute(
+                "SELECT id, description_zh FROM themes WHERE slug = ? AND archived_at IS NULL",
+                (slug,),
+            ).fetchone()
+            if row is None:
+                continue
+            if str(row["description_zh"] or "").strip():
+                continue
+            desc_zh = str(patch.get("description_zh") or "").strip()
+            desc_en = str(patch.get("description_en") or "").strip()
+            if not desc_zh:
+                continue
+            db.execute(
+                """
+                UPDATE themes SET description_zh = ?, description_en = ? WHERE id = ?
+                """,
+                (desc_zh, desc_en, int(row["id"])),
             )
 
     def enqueue(self, item: QueueEnqueue) -> int:
@@ -2054,6 +2086,17 @@ class SqliteStorage:
         ).fetchall()
         return [str(r["name"]) for r in rows]
 
+    def merge_extracted_tags(self, raw_id: int, tag_names: list[str]) -> None:
+        self.clear_item_tags_by_source(raw_id, "extract")
+        seen: set[str] = set()
+        for name in tag_names:
+            label = name.strip()
+            if not label or label in seen:
+                continue
+            seen.add(label)
+            tag_id = self.ensure_flat_tag(label)
+            self.link_item_tag(raw_id, tag_id, confidence=1.0, source="extract")
+
     def merge_llm_tags(self, raw_id: int, tag_names: list[str]) -> None:
         conn = self._connect()
         row = conn.execute(
@@ -2202,6 +2245,7 @@ class SqliteStorage:
             "obsidian_uri": str(meta.get("obsidian_uri") or "").strip() or None,
             "obsidian_source_url": str(meta.get("obsidian_source_url") or "").strip() or None,
             "obsidian_path": str(meta.get("obsidian_path") or "").strip() or None,
+            "obsidian_writeback_status": str(meta.get("obsidian_writeback_status") or "").strip() or None,
             "transcript_kind": transcript_kind,
             "translated_body_text": translated_body_text,
             "can_translate": transcript_kind == "en" and not translated_body_text,
@@ -2414,6 +2458,266 @@ class SqliteStorage:
                     confidence = excluded.confidence
                 """,
                 (from_raw_id, to_raw_id, relation_type, note, confidence, source),
+            )
+
+    def list_item_relations(self, raw_id: int) -> list[dict[str, Any]]:
+        conn = self._connect()
+        uid = self._write_user_id(conn)
+        scoped = " AND fr.user_id = ? AND tr.user_id = ?" if uid is not None else ""
+        rows = conn.execute(
+            f"""
+            SELECT
+                ir.id,
+                ir.from_raw_id,
+                ir.to_raw_id,
+                ir.relation_type,
+                ir.confidence,
+                ir.note,
+                ir.source,
+                ir.created_at,
+                fr.raw_title AS from_title,
+                fr.url AS from_url,
+                fr.platform AS from_platform,
+                tr.raw_title AS to_title,
+                tr.url AS to_url,
+                tr.platform AS to_platform
+            FROM item_relations ir
+            JOIN raw_items fr ON fr.id = ir.from_raw_id
+            JOIN raw_items tr ON tr.id = ir.to_raw_id
+            WHERE (ir.from_raw_id = ? OR ir.to_raw_id = ?)
+              AND fr.deleted_at IS NULL
+              AND tr.deleted_at IS NULL
+              {scoped}
+            ORDER BY ir.created_at DESC, ir.id DESC
+            """,
+            (raw_id, raw_id, uid, uid) if uid is not None else (raw_id, raw_id),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def delete_relation(self, relation_id: int, *, raw_id: int | None = None) -> bool:
+        with self.transaction() as conn:
+            uid = self._write_user_id(conn)
+            params: list[Any] = [relation_id]
+            raw_guard = ""
+            if raw_id is not None:
+                raw_guard = " AND (ir.from_raw_id = ? OR ir.to_raw_id = ?)"
+                params.extend([raw_id, raw_id])
+            user_guard = ""
+            if uid is not None:
+                user_guard = (
+                    " AND EXISTS (SELECT 1 FROM raw_items r WHERE r.id = ir.from_raw_id "
+                    "AND r.user_id = ?)"
+                )
+                params.append(uid)
+            row = conn.execute(
+                f"""
+                SELECT ir.id
+                FROM item_relations ir
+                WHERE ir.id = ?{raw_guard}{user_guard}
+                """,
+                params,
+            ).fetchone()
+            if row is None:
+                return False
+            conn.execute("DELETE FROM item_relations WHERE id = ?", (relation_id,))
+            return True
+
+    def upsert_obsidian_registry(
+        self,
+        *,
+        raw_id: int,
+        vault_path: str,
+        rel_path: str,
+        content_hash: str,
+        mtime: float | None,
+    ) -> int:
+        with self.transaction() as conn:
+            user_id = self._write_user_id(conn) or 1
+            conn.execute(
+                """
+                INSERT INTO obsidian_note_registry (
+                    user_id, vault_path, rel_path, content_hash, raw_id, mtime
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id, vault_path, rel_path) DO UPDATE SET
+                    content_hash = excluded.content_hash,
+                    raw_id = excluded.raw_id,
+                    mtime = excluded.mtime,
+                    updated_at = datetime('now')
+                """,
+                (user_id, vault_path, rel_path, content_hash, raw_id, mtime),
+            )
+            row = conn.execute(
+                """
+                SELECT id FROM obsidian_note_registry
+                WHERE user_id = ? AND vault_path = ? AND rel_path = ?
+                """,
+                (user_id, vault_path, rel_path),
+            ).fetchone()
+            if row is None:
+                raise StorageError("failed to upsert obsidian registry")
+            return int(row["id"])
+
+    def get_obsidian_registry_by_raw_id(self, raw_id: int) -> dict[str, Any] | None:
+        conn = self._connect()
+        uid = self._write_user_id(conn)
+        user_guard = " AND rr.user_id = ?" if uid is not None else ""
+        params: list[Any] = [raw_id]
+        if uid is not None:
+            params.append(uid)
+        row = conn.execute(
+            f"""
+            SELECT rr.*
+            FROM obsidian_note_registry rr
+            WHERE rr.raw_id = ?{user_guard}
+            ORDER BY rr.updated_at DESC, rr.id DESC
+            LIMIT 1
+            """,
+            params,
+        ).fetchone()
+        return dict(row) if row else None
+
+    def enqueue_obsidian_writeback(
+        self,
+        *,
+        target_rel_path: str,
+        content_md: str,
+        block_anchor: str | None = None,
+        link_raw_id: int | None = None,
+    ) -> dict[str, Any]:
+        with self.transaction() as conn:
+            user_id = self._write_user_id(conn) or 1
+            row = None
+            if link_raw_id is not None:
+                row = conn.execute(
+                    """
+                    SELECT id FROM obsidian_writeback_queue
+                    WHERE user_id = ? AND target_rel_path = ? AND link_raw_id = ?
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """,
+                    (user_id, target_rel_path, link_raw_id),
+                ).fetchone()
+            if row is not None:
+                queue_id = int(row["id"])
+                conn.execute(
+                    """
+                    UPDATE obsidian_writeback_queue
+                    SET block_anchor = ?,
+                        content_md = ?,
+                        status = 'pending',
+                        last_error = NULL,
+                        updated_at = datetime('now')
+                    WHERE id = ?
+                    """,
+                    (block_anchor, content_md, queue_id),
+                )
+                row = conn.execute(
+                    "SELECT * FROM obsidian_writeback_queue WHERE id = ?",
+                    (queue_id,),
+                ).fetchone()
+            else:
+                cur = conn.execute(
+                    """
+                    INSERT INTO obsidian_writeback_queue (
+                        user_id, target_rel_path, block_anchor, content_md, link_raw_id, status
+                    ) VALUES (?, ?, ?, ?, ?, 'pending')
+                    """,
+                    (user_id, target_rel_path, block_anchor, content_md, link_raw_id),
+                )
+                row = conn.execute(
+                    "SELECT * FROM obsidian_writeback_queue WHERE id = ?",
+                    (int(cur.lastrowid),),
+                ).fetchone()
+            if row is None:
+                raise StorageError("failed to enqueue obsidian writeback")
+            return dict(row)
+
+    def list_obsidian_writeback_queue(
+        self, *, status: str | None = None, limit: int = 200
+    ) -> list[dict[str, Any]]:
+        conn = self._connect()
+        uid = self._write_user_id(conn)
+        where = ["1=1"]
+        params: list[Any] = []
+        if status:
+            where.append("q.status = ?")
+            params.append(status.strip().lower())
+        if uid is not None:
+            where.append("q.user_id = ?")
+            params.append(uid)
+        rows = conn.execute(
+            f"""
+            SELECT q.*
+            FROM obsidian_writeback_queue q
+            WHERE {' AND '.join(where)}
+            ORDER BY q.created_at DESC, q.id DESC
+            LIMIT ?
+            """,
+            (*params, max(1, int(limit))),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def claim_pending_obsidian_writeback(self, *, limit: int = 20) -> list[dict[str, Any]]:
+        with self.transaction() as conn:
+            uid = self._write_user_id(conn)
+            where = ["q.status = 'pending'"]
+            params: list[Any] = []
+            if uid is not None:
+                where.append("q.user_id = ?")
+                params.append(uid)
+            rows = conn.execute(
+                f"""
+                SELECT q.*
+                FROM obsidian_writeback_queue q
+                WHERE {' AND '.join(where)}
+                ORDER BY q.created_at ASC, q.id ASC
+                LIMIT ?
+                """,
+                (*params, max(1, int(limit))),
+            ).fetchall()
+            ids = [int(r["id"]) for r in rows]
+            if ids:
+                placeholders = ",".join("?" for _ in ids)
+                conn.execute(
+                    f"""
+                    UPDATE obsidian_writeback_queue
+                    SET status = 'processing', last_error = NULL
+                    WHERE id IN ({placeholders})
+                    """,
+                    ids,
+                )
+                rows = conn.execute(
+                    f"""
+                    SELECT * FROM obsidian_writeback_queue
+                    WHERE id IN ({placeholders})
+                    ORDER BY created_at ASC, id ASC
+                    """,
+                    ids,
+                ).fetchall()
+            return [dict(r) for r in rows]
+
+    def mark_obsidian_writeback_status(
+        self,
+        queue_id: int,
+        *,
+        status: str,
+        last_error: str | None = None,
+        applied_at: str | None = None,
+    ) -> None:
+        normalized = (status or "").strip().lower()
+        if normalized not in {"pending", "processing", "applied", "failed", "skipped"}:
+            normalized = "failed"
+        with self.transaction() as conn:
+            conn.execute(
+                """
+                UPDATE obsidian_writeback_queue
+                SET status = ?,
+                    last_error = ?,
+                    applied_at = COALESCE(?, applied_at),
+                    updated_at = datetime('now')
+                WHERE id = ?
+                """,
+                (normalized, (last_error or "").strip() or None, applied_at, queue_id),
             )
 
     def list_distilled_summary(
@@ -2656,7 +2960,10 @@ class SqliteStorage:
         """Creators from subscription feeds + Bilibili follows in the library."""
         from on1y.knowledge.creators import (
             bilibili_following_groups,
+            discover_twitter_author_groups,
             discover_zhihu_person_groups,
+            finalize_creator_sidebar_rows,
+            normalize_twitter_author_url,
             normalize_zhihu_author_url,
             subscription_feed_groups,
             zhihu_author_url,
@@ -2668,7 +2975,6 @@ class SqliteStorage:
         conn = self._connect()
         groups = subscription_feed_groups()
         bili_follow_groups = bilibili_following_groups()
-        bili_subscribed_keys = set(bili_follow_groups)
         for key, meta in bili_follow_groups.items():
             if key in groups:
                 row = groups[key]
@@ -2870,6 +3176,83 @@ class SqliteStorage:
                 continue
             groups[key] = meta
 
+        twitter_rows = conn.execute(
+            f"""
+            SELECT
+                json_extract(r.source_meta, '$.author_url') AS author_url,
+                json_extract(r.source_meta, '$.author') AS author,
+                json_extract(r.source_meta, '$.author_avatar') AS author_avatar,
+                COUNT(*) AS item_count
+            FROM raw_items r
+            WHERE r.platform = 'twitter'
+              AND ({trash_filter})
+              AND COALESCE(json_extract(r.source_meta, '$.author_url'), '') != ''
+              {user_filter}
+            GROUP BY author_url, author, author_avatar
+            ORDER BY item_count DESC
+            """,
+            user_params,
+        ).fetchall()
+        twitter_by_url: dict[str, dict[str, Any]] = {}
+        for row in twitter_rows:
+            author_url = normalize_twitter_author_url(str(row["author_url"] or ""))
+            if not author_url:
+                continue
+            count = int(row["item_count"])
+            prev = twitter_by_url.get(author_url)
+            if prev:
+                prev["count"] += count
+                if not prev.get("author") and row["author"]:
+                    prev["author"] = str(row["author"]).strip()
+                prev["avatar"] = pick_better_avatar(
+                    prev.get("avatar"), str(row["author_avatar"] or "")
+                )
+            else:
+                twitter_by_url[author_url] = {
+                    "count": count,
+                    "author": str(row["author"] or "").strip(),
+                    "avatar": str(row["author_avatar"] or "").strip(),
+                }
+            key = f"twitter:{author_url}"
+            if key not in groups:
+                groups[key] = {
+                    "key": key,
+                    "platform": "twitter",
+                    "feed_labels": [],
+                    "name_hint": twitter_by_url[author_url]["author"] or author_url,
+                    "author_url": author_url,
+                }
+
+        twitter_latest_meta: dict[str, dict[str, Any]] = {}
+        if twitter_by_url:
+            latest_twitter = conn.execute(
+                f"""
+                WITH ranked AS (
+                    SELECT
+                        json_extract(r.source_meta, '$.author_url') AS author_url,
+                        r.source_meta,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY json_extract(r.source_meta, '$.author_url')
+                            ORDER BY r.ingested_at DESC
+                        ) AS rn
+                    FROM raw_items r
+                    WHERE r.platform = 'twitter'
+                      AND {scope_where}
+                      AND COALESCE(json_extract(r.source_meta, '$.author_url'), '') != ''
+                )
+                SELECT author_url, source_meta FROM ranked WHERE rn = 1
+                """,
+                user_params,
+            ).fetchall()
+            for row in latest_twitter:
+                author_url = normalize_twitter_author_url(str(row["author_url"] or ""))
+                if author_url:
+                    twitter_latest_meta[author_url] = loads_meta(row["source_meta"])
+
+        for key, meta in discover_twitter_author_groups(twitter_by_url).items():
+            if key not in groups:
+                groups[key] = meta
+
         creators: list[dict[str, Any]] = []
         for key, meta in groups.items():
             if key.startswith("zhihu-collection:"):
@@ -2905,6 +3288,16 @@ class SqliteStorage:
                     latest_meta or {"author_avatar": zh.get("avatar")}
                 )
                 author_url = people_url
+            elif key.startswith("twitter:"):
+                url = key[8:]
+                tw = twitter_by_url.get(url, {})
+                item_count = int(tw.get("count", 0))
+                latest_meta = twitter_latest_meta.get(url) or {}
+                name = str(tw.get("author") or latest_meta.get("author") or name).strip() or name
+                avatar = resolve_author_avatar(
+                    latest_meta or {"author_avatar": tw.get("avatar")}
+                )
+                author_url = url
             else:
                 labels = meta.get("feed_labels") or []
                 item_count = sum(feed_counts.get(label, 0) for label in labels)
@@ -2963,12 +3356,7 @@ class SqliteStorage:
                     "feed_labels": meta.get("feed_labels") or [],
                 }
             )
-        creators.sort(key=lambda row: (-int(row["item_count"]), str(row["name"]).lower()))
-        return [
-            row
-            for row in creators
-            if int(row["item_count"]) > 0 or row["key"] in bili_subscribed_keys
-        ]
+        return finalize_creator_sidebar_rows(creators)
 
     def _collection_clause_for_conn(
         self, conn: sqlite3.Connection, collection: str | None
@@ -3339,6 +3727,13 @@ class SqliteStorage:
                     "clip_source": str(meta.get("clip_source") or "").strip() or None,
                     "clip_count": _as_int_or_none(meta.get("clip_count")),
                     "extract_strategy": str(meta.get("extract_strategy") or "").strip() or None,
+                    "obsidian_uri": str(meta.get("obsidian_uri") or "").strip() or None,
+                    "obsidian_source_url": str(meta.get("obsidian_source_url") or "").strip() or None,
+                    "obsidian_path": str(meta.get("obsidian_path") or "").strip() or None,
+                    "obsidian_writeback_status": str(
+                        meta.get("obsidian_writeback_status") or ""
+                    ).strip()
+                    or None,
                     "deleted_at": row["deleted_at"]
                     if "deleted_at" in row.keys()
                     else None,
