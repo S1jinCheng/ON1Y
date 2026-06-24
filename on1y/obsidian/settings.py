@@ -23,9 +23,11 @@ class ObsidianSettings(BaseModel):
     vault_path: str = ""
     inbox_relpath: str = "Inbox/Clippings"
     archive_relpath: str = "Inbox/Imported"
+    outbox_relpath: str = "Inbox/On1y"
     interval_seconds: int = Field(default=60, ge=15, le=3600)
     import_mode: ImportMode = "keep"
     auto_distill: bool = True
+    writeback_enabled: bool = False
 
 
 def settings_file_path(*, user_id: int | None = None) -> Path:
@@ -63,6 +65,8 @@ def save_settings(*, user_id: int | None = None, **fields: Any) -> ObsidianSetti
         update["inbox_relpath"] = str(fields["inbox_relpath"]).strip() or "Inbox/Clippings"
     if "archive_relpath" in fields and fields["archive_relpath"] is not None:
         update["archive_relpath"] = str(fields["archive_relpath"]).strip() or "Inbox/Imported"
+    if "outbox_relpath" in fields and fields["outbox_relpath"] is not None:
+        update["outbox_relpath"] = str(fields["outbox_relpath"]).strip() or "Inbox/On1y"
     if "interval_seconds" in fields and fields["interval_seconds"] is not None:
         interval = int(fields["interval_seconds"])
         update["interval_seconds"] = max(15, min(3600, interval))
@@ -70,6 +74,8 @@ def save_settings(*, user_id: int | None = None, **fields: Any) -> ObsidianSetti
     update["import_mode"] = "keep"
     if "auto_distill" in fields and fields["auto_distill"] is not None:
         update["auto_distill"] = bool(fields["auto_distill"])
+    if "writeback_enabled" in fields and fields["writeback_enabled"] is not None:
+        update["writeback_enabled"] = bool(fields["writeback_enabled"])
 
     merged = current.model_copy(update=update)
     path = settings_file_path(user_id=uid)

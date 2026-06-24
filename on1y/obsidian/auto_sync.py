@@ -71,12 +71,13 @@ def _run_user_tick(user_id: int) -> dict[str, Any]:
         cfg = load_settings(user_id=user_id)
         if not cfg.enabled:
             return {"enabled": False, "reason": "disabled", "scanned": 0, "imported": 0, "failed": 0, "skipped": 0}
-        return import_obsidian_batch(
+        report = import_obsidian_batch(
             storage,
             user_id=user_id,
             limit=100,
             auto_distill=cfg.auto_distill,
         )
+        return report
     finally:
         storage.close()
 

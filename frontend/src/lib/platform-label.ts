@@ -5,6 +5,7 @@ const LABELS: Record<string, { zh: string; en: string }> = {
   zhihu: { zh: "知乎", en: "Zhihu" },
   bilibili: { zh: "哔哩哔哩", en: "Bilibili" },
   twitter: { zh: "X", en: "X" },
+  obsidian: { zh: "Obsidian", en: "Obsidian" },
   economist: { zh: "经济学人", en: "The Economist" },
   upload: { zh: "上传", en: "Upload" },
   manual: { zh: "手动录入", en: "Manual" }
