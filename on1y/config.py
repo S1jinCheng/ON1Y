@@ -268,6 +268,10 @@ class Settings(BaseSettings):
     # Comma-separated extra CORS origins for the Next.js dev server (e.g. http://localhost:3001)
     cors_origins: str = Field(default="")
 
+    absorb_max_candidates_per_source: int = Field(default=200, ge=10, le=2000)
+    absorb_peer_confidence_threshold: float = Field(default=0.6, ge=0.0, le=1.0)
+    absorb_debounce_seconds: float = Field(default=5.0, ge=0.0, le=60.0)
+
     llm_base_url: str = Field(default="https://api.deepseek.com")
     llm_api_key: str | None = Field(default=None)
     llm_model: str = Field(default="deepseek-v4-flash")

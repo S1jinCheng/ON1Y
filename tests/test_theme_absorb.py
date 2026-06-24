@@ -1,4 +1,4 @@
-"""Absorb from「其他」when creating a new theme."""
+"""Absorb from「其他」and related themes when creating a new theme."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import pytest
 from on1y.adapters.sqlite_storage import SqliteStorage
 from on1y.models.enums import ContentType, ExtractStatus, SourceType
 from on1y.models.raw import RawItemCreate
-from on1y.taxonomy.absorb import absorb_from_other_theme
+from on1y.taxonomy.absorb import absorb_from_other_theme, orchestrate_theme_absorb
 from on1y.taxonomy.constants import OTHER_THEME_SLUG
 
 
@@ -20,6 +20,14 @@ def storage(tmp_path):
     s.initialize()
     yield s
     s.close()
+
+
+def _discovery_stub(*, keywords: list[str] | None = None) -> dict:
+    return {
+        "keywords": keywords or ["音乐", "爵士"],
+        "scan_sources": [],
+        "disambiguation": [],
+    }
 
 
 def _seed_in_other(storage: SqliteStorage, *, url: str, title: str, body: str) -> int:
@@ -42,13 +50,16 @@ def _seed_in_other(storage: SqliteStorage, *, url: str, title: str, body: str) -
 
 
 @patch("on1y.llm.settings.resolve_llm_settings")
+@patch("on1y.taxonomy.absorb.discover_related_themes")
 @patch("on1y.taxonomy.absorb.get_llm_client")
 def test_absorb_moves_matching_items_only(
     mock_client_factory,
+    mock_discover,
     mock_llm_settings,
     storage: SqliteStorage,
 ) -> None:
     mock_llm_settings.return_value.api_key_set = True
+    mock_discover.return_value = _discovery_stub()
     music = storage.create_theme(
         slug="music",
         name_zh="音乐",
@@ -103,6 +114,6 @@ def test_absorb_moves_matching_items_only(
 def test_absorb_skips_without_llm(mock_llm_settings, storage: SqliteStorage) -> None:
     mock_llm_settings.return_value.api_key_set = False
     theme = storage.create_theme(slug="music", name_zh="音乐", name_en="Music")
-    report = absorb_from_other_theme(storage, theme_id=int(theme["id"]))
+    report = orchestrate_theme_absorb(storage, theme_id=int(theme["id"]))
     assert report["reason"] == "no_llm_key"
     assert report["absorbed"] == 0

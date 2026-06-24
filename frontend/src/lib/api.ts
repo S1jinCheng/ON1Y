@@ -1038,9 +1038,13 @@ export function createTheme(
 
 export function updateTheme(
   themeId: number,
-  payload: ThemeUpdateInput
-): Promise<{ theme: ThemeRow }> {
-  return request(`/api/knowledge/themes/${themeId}`, {
+  payload: ThemeUpdateInput,
+  locale: Locale = "zh"
+): Promise<{
+  theme: ThemeRow;
+  absorb?: { started?: boolean; debounced?: boolean; reason?: string };
+}> {
+  return request(`/api/knowledge/themes/${themeId}?locale=${locale}`, {
     method: "PATCH",
     body: JSON.stringify(payload)
   });

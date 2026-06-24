@@ -128,6 +128,54 @@ DEFAULT_THEMES: tuple[ThemeDefinition, ...] = (
 
 OTHER_THEME_SLUG = "other"
 
+ABSORB_RELATION_CATCH_ALL = "catch_all"
+ABSORB_RELATION_DISAMBIGUATION_PEER = "disambiguation_peer"
+ABSORB_RELATION_SUBSET_SOURCE = "subset_source"
+ABSORB_RELATION_SUPERSET_SOURCE = "superset_source"
+
+PEER_PREFILTER_MIN_SCORE = 1
+DEFAULT_PREFILTER_MIN_SCORE = 2
+
+
+@dataclass(frozen=True, slots=True)
+class KnownThemePair:
+    peer_slug: str
+    relation: str = ABSORB_RELATION_DISAMBIGUATION_PEER
+    confidence: float = 0.95
+    new_theme_when: str = ""
+    peer_when: str = ""
+
+
+# Keys match theme slug or name_zh; peer_slug is the other theme's slug in DB.
+KNOWN_THEME_PAIRS: dict[str, tuple[KnownThemePair, ...]] = {
+    "科技": (
+        KnownThemePair(
+            peer_slug="research",
+            new_theme_when="数码硬件、软件应用、互联网、AI 产品/行业动态、编程实战、消费电子与产业资讯",
+            peer_when="学术论文、科研项目、实验与方法论、理工科基础研究、实验室工作",
+        ),
+    ),
+    "technology": (
+        KnownThemePair(
+            peer_slug="research",
+            new_theme_when="gadgets, software, internet, AI products, industry news, engineering practice",
+            peer_when="academic papers, lab research, experiments, grant projects, scientific methods",
+        ),
+    ),
+    "research": (
+        KnownThemePair(
+            peer_slug="科技",
+            new_theme_when="数码硬件、软件应用、互联网、AI 产品/行业动态、编程实战、消费电子与产业资讯",
+            peer_when="学术论文、科研项目、实验与方法论、理工科基础研究、实验室工作",
+        ),
+        KnownThemePair(
+            peer_slug="technology",
+            new_theme_when="gadgets, software, internet, AI products, industry news, engineering practice",
+            peer_when="academic papers, lab research, experiments, grant projects, scientific methods",
+        ),
+    ),
+}
+
 # User-created themes that share a slug with name_zh (e.g. 科技) — fill guidance if empty.
 THEME_GUIDANCE_PATCHES: dict[str, dict[str, str]] = {
     "科技": {

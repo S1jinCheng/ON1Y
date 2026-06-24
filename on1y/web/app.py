@@ -1656,11 +1656,13 @@ def create_app() -> FastAPI:
             absorb: dict[str, Any] = {"started": False}
             theme_id = row.get("id")
             if body.absorb_from_other and theme_id is not None:
-                from on1y.taxonomy.absorb import schedule_absorb_from_other
+                from on1y.taxonomy.absorb import schedule_orchestrate_absorb
 
-                absorb = schedule_absorb_from_other(
+                absorb = schedule_orchestrate_absorb(
                     theme_id=int(theme_id),
                     locale=locale,
+                    rediscover=True,
+                    debounce=False,
                 )
             return {"theme": row, "absorb": absorb}
         finally:
@@ -1678,9 +1680,14 @@ def create_app() -> FastAPI:
                 raise HTTPException(status_code=404, detail="theme not found")
             if theme.get("archived_at"):
                 raise HTTPException(status_code=400, detail="theme archived")
-            from on1y.taxonomy.absorb import schedule_absorb_from_other
+            from on1y.taxonomy.absorb import schedule_orchestrate_absorb
 
-            return schedule_absorb_from_other(theme_id=theme_id, locale=locale)
+            return schedule_orchestrate_absorb(
+                theme_id=theme_id,
+                locale=locale,
+                rediscover=True,
+                debounce=False,
+            )
         finally:
             storage.close()
 
@@ -1741,9 +1748,16 @@ def create_app() -> FastAPI:
             storage.close()
 
     @app.patch("/api/knowledge/themes/{theme_id}")
-    def knowledge_themes_update(theme_id: int, body: ThemeUpdateRequest) -> dict[str, Any]:
+    def knowledge_themes_update(
+        theme_id: int,
+        body: ThemeUpdateRequest,
+        locale: str = Query(default="zh"),
+    ) -> dict[str, Any]:
         storage = get_storage()
         try:
+            before = storage.get_theme_by_id(theme_id)
+            if before is None:
+                raise HTTPException(status_code=404, detail="theme not found")
             row = storage.update_theme(
                 theme_id,
                 name_zh=body.name_zh,
@@ -1754,7 +1768,46 @@ def create_app() -> FastAPI:
             )
             if row is None:
                 raise HTTPException(status_code=404, detail="theme not found")
-            return {"theme": row}
+
+            absorb: dict[str, Any] = {"started": False}
+            desc_changed = False
+            if body.description_zh is not None:
+                desc_changed = (
+                    str(before.get("description_zh") or "").strip()
+                    != str(body.description_zh or "").strip()
+                )
+            if not desc_changed and body.description_en is not None:
+                desc_changed = (
+                    str(before.get("description_en") or "").strip()
+                    != str(body.description_en or "").strip()
+                )
+            if desc_changed:
+                from on1y.taxonomy.absorb import schedule_orchestrate_absorb
+
+                absorb = schedule_orchestrate_absorb(
+                    theme_id=theme_id,
+                    locale=locale,
+                    rediscover=True,
+                    debounce=True,
+                )
+            return {"theme": row, "absorb": absorb}
+        finally:
+            storage.close()
+
+    @app.get("/api/knowledge/themes/{theme_id}/absorb-status")
+    def knowledge_themes_absorb_status(theme_id: int) -> dict[str, Any]:
+        storage = get_storage()
+        try:
+            theme = storage.get_theme_by_id(theme_id)
+            if theme is None:
+                raise HTTPException(status_code=404, detail="theme not found")
+            latest = storage.get_latest_absorb_operation(theme_id)
+            discovery = storage.get_theme_discovery_json(theme_id)
+            return {
+                "theme_id": theme_id,
+                "discovery": discovery,
+                "latest_operation": latest,
+            }
         finally:
             storage.close()
 

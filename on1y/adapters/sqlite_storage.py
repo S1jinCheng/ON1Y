@@ -28,7 +28,7 @@ from on1y.utils.json_util import dumps_json, dumps_meta, loads_json_list, loads_
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 19
+SCHEMA_VERSION = 20
 SCHEMA_PATH = PROJECT_ROOT / "sql" / "schema.sql"
 SCHEMA_V2_PATH = PROJECT_ROOT / "sql" / "schema_v2.sql"
 SCHEMA_V3_PATH = PROJECT_ROOT / "sql" / "schema_v3.sql"
@@ -46,6 +46,7 @@ SCHEMA_V16_PATH = PROJECT_ROOT / "sql" / "schema_v16.sql"
 SCHEMA_V17_PATH = PROJECT_ROOT / "sql" / "schema_v17.sql"
 SCHEMA_V18_PATH = PROJECT_ROOT / "sql" / "schema_v18.sql"
 SCHEMA_V19_PATH = PROJECT_ROOT / "sql" / "schema_v19.sql"
+SCHEMA_V20_PATH = PROJECT_ROOT / "sql" / "schema_v20.sql"
 
 
 def _as_int_or_none(value: Any) -> int | None:
@@ -334,6 +335,16 @@ class SqliteStorage:
                 (19,),
             )
             logger.info("Applied schema version 19 to %s", self._db_path)
+            current = 19
+        if current < 20:
+            if not SCHEMA_V20_PATH.is_file():
+                raise StorageError(f"Schema file not found: {SCHEMA_V20_PATH}")
+            conn.executescript(SCHEMA_V20_PATH.read_text(encoding="utf-8"))
+            conn.execute(
+                "INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)",
+                (20,),
+            )
+            logger.info("Applied schema version 20 to %s", self._db_path)
 
     def _table_exists(self, conn: sqlite3.Connection, name: str) -> bool:
         row = conn.execute(
@@ -1959,6 +1970,24 @@ class SqliteStorage:
             )
         return self.get_theme_by_id(theme_id)
 
+    def set_theme_discovery_json(self, theme_id: int, discovery: dict[str, Any]) -> None:
+        with self.transaction() as conn:
+            conn.execute(
+                "UPDATE themes SET discovery_json = ?, updated_at = datetime('now') WHERE id = ?",
+                (dumps_json(discovery), theme_id),
+            )
+
+    def get_theme_discovery_json(self, theme_id: int) -> dict[str, Any]:
+        if not self._column_exists(self._connect(), "themes", "discovery_json"):
+            return {}
+        row = self._connect().execute(
+            "SELECT discovery_json FROM themes WHERE id = ?",
+            (theme_id,),
+        ).fetchone()
+        if row is None:
+            return {}
+        return loads_meta(row["discovery_json"])
+
     def archive_theme(self, theme_id: int, *, reassign_to_other: bool = True) -> int:
         """Archive a theme; optionally move its items to「其他」. Returns items remapped."""
         theme = self.get_theme_by_id(theme_id)
@@ -2030,9 +2059,17 @@ class SqliteStorage:
         theme_id: int,
         *,
         exclude_theme_sources: tuple[str, ...] | None = None,
+        feed_only: bool = False,
+        exclude_deleted: bool = False,
     ) -> list[int]:
+        from on1y.hotlist.sql import is_feed_row_sql
+
         sql = "SELECT id FROM raw_items WHERE theme_id = ?"
         params: list[Any] = [theme_id]
+        if exclude_deleted:
+            sql += " AND deleted_at IS NULL"
+        if feed_only:
+            sql += f" AND {is_feed_row_sql('raw_items')}"
         if exclude_theme_sources:
             placeholders = ", ".join("?" * len(exclude_theme_sources))
             sql += f" AND theme_source NOT IN ({placeholders})"
@@ -2166,25 +2203,47 @@ class SqliteStorage:
         target_theme_ids: list[int],
         total_items: int,
         processed_items: int,
+        metadata: dict[str, Any] | None = None,
     ) -> int:
         with self.transaction() as conn:
             conn.execute(
                 """
                 INSERT INTO theme_operations (
-                    op_type, source_theme_id, target_theme_ids,
+                    op_type, source_theme_id, target_theme_ids, metadata_json,
                     status, total_items, processed_items, completed_at
-                ) VALUES (?, ?, ?, 'done', ?, ?, datetime('now'))
+                ) VALUES (?, ?, ?, ?, 'done', ?, ?, datetime('now'))
                 """,
                 (
                     op_type,
                     source_theme_id,
                     dumps_json(target_theme_ids),
+                    dumps_json(metadata or {}),
                     total_items,
                     processed_items,
                 ),
             )
             row = conn.execute("SELECT last_insert_rowid() AS id").fetchone()
             return int(row["id"]) if row else 0
+
+    def get_latest_absorb_operation(self, theme_id: int) -> dict[str, Any] | None:
+        if not self._table_exists(self._connect(), "theme_operations"):
+            return None
+        row = self._connect().execute(
+            """
+            SELECT id, op_type, source_theme_id, target_theme_ids, metadata_json,
+                   status, total_items, processed_items, created_at, completed_at
+            FROM theme_operations
+            WHERE op_type = 'absorb' AND source_theme_id = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (theme_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        data = dict(row)
+        data["metadata"] = loads_meta(data.get("metadata_json"))
+        return data
 
     def get_reader_content(self, raw_id: int) -> dict[str, Any] | None:
         conn = self._connect()

@@ -41,7 +41,6 @@ type ThemeSidebarProps = {
   onDeleteTheme: (themeId: number) => Promise<{ remapped: number }>;
   onReorderThemes: (themeIds: number[]) => Promise<void>;
   onUpdateThemeDescription: (themeId: number, description: string) => Promise<void>;
-  onAbsorbFromTheme?: (targetThemeId: number, sourceThemeId: number) => Promise<void>;
   labels: {
     themes: string;
     allThemes: string;
@@ -51,7 +50,6 @@ type ThemeSidebarProps = {
     editThemeDesc: string;
     themeDescSave: string;
     themeDescCancel: string;
-    themeAbsorbFromResearch: string;
     deleteTheme: string;
     confirmDeleteTheme: string;
     themeDeleted: string;
@@ -208,7 +206,6 @@ export function ThemeSidebar(props: ThemeSidebarProps): JSX.Element {
     onDeleteTheme,
     onReorderThemes,
     onUpdateThemeDescription,
-    onAbsorbFromTheme,
     labels
   } = props;
 
@@ -262,34 +259,14 @@ export function ThemeSidebar(props: ThemeSidebarProps): JSX.Element {
     setDescText(themeDescription(theme, locale));
   }
 
-  function researchThemeId(): number | undefined {
-    return themes.find((row) => row.slug === "research")?.id;
-  }
-
-  function canAbsorbFromResearch(theme: ThemeRow): boolean {
-    return theme.slug === "科技" && researchThemeId() !== undefined && onAbsorbFromTheme !== undefined;
-  }
-
-  async function triggerAbsorbFromResearch(theme: ThemeRow): Promise<void> {
-    const sourceId = researchThemeId();
-    if (!sourceId || !onAbsorbFromTheme) {
-      return;
-    }
-    await onAbsorbFromTheme(theme.id, sourceId);
-  }
-
   async function handleSaveDescription(): Promise<void> {
     if (!descDialog || savingDesc) {
       return;
     }
-    const saved = descDialog;
     setSavingDesc(true);
     try {
-      await onUpdateThemeDescription(saved.id, descText.trim());
+      await onUpdateThemeDescription(descDialog.id, descText.trim());
       setDescDialog(null);
-      if (canAbsorbFromResearch(saved)) {
-        await triggerAbsorbFromResearch(saved);
-      }
     } finally {
       setSavingDesc(false);
     }
@@ -616,16 +593,6 @@ export function ThemeSidebar(props: ThemeSidebarProps): JSX.Element {
               className="mb-3 w-full resize-none rounded border border-border bg-panel px-2 py-1.5 text-sm text-foreground disabled:opacity-60"
             />
             <div className="flex flex-wrap justify-end gap-2">
-              {descDialog && canAbsorbFromResearch(descDialog) ? (
-                <button
-                  type="button"
-                  disabled={savingDesc}
-                  onClick={() => void triggerAbsorbFromResearch(descDialog)}
-                  className="mr-auto rounded border border-border px-3 py-1.5 text-xs hover:bg-soft disabled:opacity-50"
-                >
-                  {labels.themeAbsorbFromResearch}
-                </button>
-              ) : null}
               <button
                 type="button"
                 disabled={savingDesc}

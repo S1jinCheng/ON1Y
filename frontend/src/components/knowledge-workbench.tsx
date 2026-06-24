@@ -47,7 +47,6 @@ import { ThemeSidebar } from "@/components/theme-sidebar";
 import { CreatorSidebar } from "@/components/creator-sidebar";
 import {
   absorbThemeFromOther,
-  absorbThemeFromTheme,
   createTheme,
   batchDeleteKnowledgeItems,
   deleteKnowledgeItem,
@@ -1842,10 +1841,14 @@ export default function KnowledgeWorkbench(): JSX.Element {
     description: string
   ): Promise<void> {
     try {
-      const result = await updateTheme(themeId, {
-        description_zh: description,
-        description_en: description
-      });
+      const result = await updateTheme(
+        themeId,
+        {
+          description_zh: description,
+          description_en: description
+        },
+        locale
+      );
       const row = result.theme;
       setThemes((prev) =>
         prev.map((theme) =>
@@ -1858,30 +1861,16 @@ export default function KnowledgeWorkbench(): JSX.Element {
             : theme
         )
       );
-      setMessage(ui("themeDescSaved"));
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "update theme failed");
-      throw error;
-    }
-  }
-
-  async function handleAbsorbFromTheme(
-    targetThemeId: number,
-    sourceThemeId: number
-  ): Promise<void> {
-    try {
-      const result = await absorbThemeFromTheme(targetThemeId, sourceThemeId, locale);
-      if (result.started) {
-        setMessage(ui("themeAbsorbFromResearchStarted"));
-      } else if (result.reason === "no_llm_key") {
+      const absorb = result.absorb;
+      if (absorb?.started) {
+        setMessage(ui("themeAbsorbOnDescSaved"));
+      } else if (absorb?.reason === "no_llm_key") {
         setMessage(ui("themeAbsorbNoLlm"));
-      } else if (result.reason === "already_running") {
-        setMessage(ui("themeAbsorbFromResearchStarted"));
       } else {
-        setMessage(ui("themeAbsorbFromResearchStarted"));
+        setMessage(ui("themeDescSaved"));
       }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "absorb failed");
+      setMessage(error instanceof Error ? error.message : "update theme failed");
       throw error;
     }
   }
@@ -2102,13 +2091,6 @@ export default function KnowledgeWorkbench(): JSX.Element {
                     throw error;
                   }
                 }}
-                onAbsorbFromTheme={async (targetThemeId, sourceThemeId) => {
-                  try {
-                    await handleAbsorbFromTheme(targetThemeId, sourceThemeId);
-                  } catch (error) {
-                    throw error;
-                  }
-                }}
                 labels={{
                   themes: ui("themes"),
                   allThemes: ui("allThemes"),
@@ -2118,7 +2100,6 @@ export default function KnowledgeWorkbench(): JSX.Element {
                   editThemeDesc: ui("editThemeDesc"),
                   themeDescSave: ui("themeDescSave"),
                   themeDescCancel: ui("themeDescCancel"),
-                  themeAbsorbFromResearch: ui("themeAbsorbFromResearch"),
                   deleteTheme: ui("deleteTheme"),
                   confirmDeleteTheme: ui("confirmDeleteTheme"),
                   themeDeleted: ui("themeDeleted"),

@@ -84,7 +84,7 @@ def test_move_item_theme(storage) -> None:
 
 def test_create_theme(storage) -> None:
     client = TestClient(create_app())
-    with patch("on1y.taxonomy.absorb.schedule_absorb_from_other") as mock_absorb:
+    with patch("on1y.taxonomy.absorb.schedule_orchestrate_absorb") as mock_absorb:
         mock_absorb.return_value = {"started": True, "theme_id": 99}
         response = client.post(
             "/api/knowledge/themes",
@@ -93,6 +93,27 @@ def test_create_theme(storage) -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["theme"]["slug"] == "ai"
+    assert payload["absorb"]["started"] is True
+    mock_absorb.assert_called_once()
+
+
+def test_update_theme_description_triggers_absorb(storage) -> None:
+    client = TestClient(create_app())
+    theme = storage.create_theme(
+        slug="tech-notes",
+        name_zh="科技笔记",
+        name_en="Tech Notes",
+        description_zh="旧描述",
+    )
+    theme_id = int(theme["id"])
+    with patch("on1y.taxonomy.absorb.schedule_orchestrate_absorb") as mock_absorb:
+        mock_absorb.return_value = {"started": True, "debounced": True, "theme_id": theme_id}
+        response = client.patch(
+            f"/api/knowledge/themes/{theme_id}?locale=zh",
+            json={"description_zh": "新边界：AI 产品与行业资讯"},
+        )
+    assert response.status_code == 200
+    payload = response.json()
     assert payload["absorb"]["started"] is True
     mock_absorb.assert_called_once()
 
