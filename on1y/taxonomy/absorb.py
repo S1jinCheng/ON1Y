@@ -14,7 +14,7 @@ from on1y.taxonomy.remap import build_remap_user_prompt
 logger = logging.getLogger(__name__)
 
 _absorb_guard = threading.Lock()
-_absorb_running: set[int] = set()
+_absorb_running: set[int | tuple[int, int]] = set()
 
 
 def build_absorb_system_prompt(*, locale: str, new_theme: dict[str, Any]) -> str:
@@ -134,6 +134,192 @@ def absorb_from_other_theme(
         "skipped": skipped,
         "failed": failed,
         "candidates": candidates,
+    }
+
+
+def build_absorb_from_source_prompt(
+    *,
+    locale: str,
+    target_theme: dict[str, Any],
+    source_theme: dict[str, Any],
+) -> str:
+    lang = "English" if locale.lower().startswith("en") else "Chinese"
+    target_slug = str(target_theme["slug"])
+    source_slug = str(source_theme["slug"])
+    if locale.lower().startswith("en"):
+        target_name = str(target_theme.get("name_en") or target_slug)
+        target_desc = str(target_theme.get("description_en") or "")
+        source_name = str(source_theme.get("name_en") or source_slug)
+        source_desc = str(source_theme.get("description_en") or "")
+    else:
+        target_name = str(target_theme.get("name_zh") or target_slug)
+        target_desc = str(target_theme.get("description_zh") or "")
+        source_name = str(source_theme.get("name_zh") or source_slug)
+        source_desc = str(source_theme.get("description_zh") or "")
+    return f"""You decide whether content was misclassified. Respond in {lang} only.
+
+Return ONE JSON object:
+{{"belongs_in_target": true}} or {{"belongs_in_target": false}}
+
+- Target theme "{target_slug}" ({target_name}): {target_desc}
+- Current theme "{source_slug}" ({source_name}): {source_desc}
+
+Rules:
+- true only when the content PRIMARILY fits the target theme, not the current one.
+- For research vs 科技: product/industry/AI-tool news → 科技; papers/lab science → research.
+- If uncertain, return false (keep current classification)."""
+
+
+def absorb_from_theme(
+    storage: SqliteStorage,
+    *,
+    target_theme_id: int,
+    source_theme_id: int,
+    locale: str | None = None,
+) -> dict[str, Any]:
+    """Move items from source_theme into target when LLM agrees (skips user-pinned themes)."""
+    from on1y.config import get_settings
+    from on1y.llm.settings import resolve_llm_settings
+
+    if not resolve_llm_settings().api_key_set:
+        return {
+            "absorbed": 0,
+            "skipped": 0,
+            "failed": 0,
+            "candidates": 0,
+            "reason": "no_llm_key",
+        }
+
+    target = storage.get_theme_by_id(target_theme_id)
+    source = storage.get_theme_by_id(source_theme_id)
+    if target is None or source is None:
+        raise ValueError("theme not found")
+    if target.get("archived_at") or source.get("archived_at"):
+        raise ValueError("theme archived")
+
+    settings = get_settings()
+    lang = locale or settings.llm_locale
+    raw_ids = storage.list_raw_ids_by_theme(source_theme_id, exclude_theme_sources=("user",))
+    candidates = len(raw_ids)
+    if not raw_ids:
+        return {"absorbed": 0, "skipped": 0, "failed": 0, "candidates": 0}
+
+    client = get_llm_client()
+    max_in = settings.llm_distill_max_input_chars
+    absorbed = 0
+    skipped = 0
+    failed = 0
+
+    for raw_id in raw_ids:
+        raw = storage.get_raw_by_id(raw_id)
+        if raw is None:
+            continue
+        detail_tags = storage.get_item_tag_names(raw_id)
+        body = (raw.body_text or "").strip()
+        if len(body) > max_in:
+            body = body[:max_in] + "\n[...truncated...]"
+        distilled = storage.get_distilled_by_raw_id(raw_id)
+        summary = distilled.summary if distilled else None
+
+        try:
+            parsed = client.chat_json(
+                build_absorb_from_source_prompt(
+                    locale=lang,
+                    target_theme=target,
+                    source_theme=source,
+                ),
+                build_remap_user_prompt(
+                    title=raw.raw_title,
+                    url=raw.url,
+                    summary=summary,
+                    existing_tags=detail_tags,
+                    body_excerpt=body or "(no body)",
+                ),
+            )
+            if bool(parsed.get("belongs_in_target")):
+                storage.set_item_theme(raw_id, target_theme_id, source="remap")
+                absorbed += 1
+            else:
+                skipped += 1
+        except Exception as exc:
+            logger.warning("Absorb-from-theme failed raw_id=%s: %s", raw_id, exc)
+            failed += 1
+            skipped += 1
+
+    logger.info(
+        "Absorb %s -> %s: %s moved, %s kept, %s failed / %s candidates",
+        source_theme_id,
+        target_theme_id,
+        absorbed,
+        skipped,
+        failed,
+        candidates,
+    )
+    return {
+        "target_theme_id": target_theme_id,
+        "source_theme_id": source_theme_id,
+        "absorbed": absorbed,
+        "skipped": skipped,
+        "failed": failed,
+        "candidates": candidates,
+    }
+
+
+def schedule_absorb_from_theme(
+    *,
+    target_theme_id: int,
+    source_theme_id: int,
+    locale: str | None = None,
+    user_id: int | None = None,
+) -> dict[str, Any]:
+    from on1y.auth.context import get_current_user_id, user_context
+    from on1y.llm.settings import resolve_llm_settings
+
+    uid = user_id if user_id is not None else get_current_user_id()
+    if uid is None:
+        uid = 1
+
+    if not resolve_llm_settings(user_id=uid).api_key_set:
+        return {"started": False, "reason": "no_llm_key"}
+
+    job_key = (target_theme_id, source_theme_id)
+    with _absorb_guard:
+        if job_key in _absorb_running:
+            return {"started": False, "reason": "already_running", "target_theme_id": target_theme_id}
+        _absorb_running.add(job_key)
+
+    def _runner() -> None:
+        from on1y.adapters.sqlite_storage import get_storage
+
+        storage = get_storage()
+        try:
+            with user_context(uid):
+                absorb_from_theme(
+                    storage,
+                    target_theme_id=target_theme_id,
+                    source_theme_id=source_theme_id,
+                    locale=locale,
+                )
+        except Exception:
+            logger.exception(
+                "Background absorb-from-theme failed target=%s source=%s",
+                target_theme_id,
+                source_theme_id,
+            )
+        finally:
+            storage.close()
+            with _absorb_guard:
+                _absorb_running.discard(job_key)
+
+    threading.Thread(
+        target=_runner,
+        name=f"on1y-absorb-{source_theme_id}-to-{target_theme_id}",
+        daemon=True,
+    ).start()
+    return {
+        "started": True,
+        "target_theme_id": target_theme_id,
+        "source_theme_id": source_theme_id,
     }
 
 

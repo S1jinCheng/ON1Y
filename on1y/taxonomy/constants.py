@@ -30,8 +30,10 @@ DEFAULT_THEMES: tuple[ThemeDefinition, ...] = (
         "科研",
         "Research",
         10,
-        "自然科学、工程、AI、算法等技术研究与实践内容。",
-        "Science, engineering, AI, algorithms, and technical research.",
+        "学术论文、科研项目、实验设计与方法论、理工科基础研究；"
+        "不含消费电子、产品发布、行业资讯或编程实战。",
+        "Academic papers, research projects, experiments, and basic science; "
+        "not consumer tech, product launches, or industry news.",
     ),
     ThemeDefinition(
         "cooking",
@@ -125,6 +127,20 @@ DEFAULT_THEMES: tuple[ThemeDefinition, ...] = (
 )
 
 OTHER_THEME_SLUG = "other"
+
+# User-created themes that share a slug with name_zh (e.g. 科技) — fill guidance if empty.
+THEME_GUIDANCE_PATCHES: dict[str, dict[str, str]] = {
+    "科技": {
+        "description_zh": (
+            "科技产业、数码硬件、软件应用、互联网、人工智能落地与行业动态；"
+            "非学术论文或实验室科研。"
+        ),
+        "description_en": (
+            "Tech industry, gadgets, software, internet, AI products, and industry news; "
+            "not academic papers or lab research."
+        ),
+    },
+}
 
 
 def theme_label(row: dict[str, object], locale: str) -> str:

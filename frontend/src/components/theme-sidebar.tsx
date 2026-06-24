@@ -40,12 +40,18 @@ type ThemeSidebarProps = {
   onCreateTheme: (name: string, description: string) => Promise<void>;
   onDeleteTheme: (themeId: number) => Promise<{ remapped: number }>;
   onReorderThemes: (themeIds: number[]) => Promise<void>;
+  onUpdateThemeDescription: (themeId: number, description: string) => Promise<void>;
+  onAbsorbFromTheme?: (targetThemeId: number, sourceThemeId: number) => Promise<void>;
   labels: {
     themes: string;
     allThemes: string;
     addTheme: string;
     themeName: string;
     themeDesc: string;
+    editThemeDesc: string;
+    themeDescSave: string;
+    themeDescCancel: string;
+    themeAbsorbFromResearch: string;
     deleteTheme: string;
     confirmDeleteTheme: string;
     themeDeleted: string;
@@ -78,6 +84,13 @@ const themeListCollision: CollisionDetection = (args) => {
   }
   return closestCorners(args);
 };
+
+function themeDescription(theme: ThemeRow, locale: Locale): string {
+  if (locale === "en") {
+    return theme.description_en?.trim() || theme.description_zh?.trim() || "";
+  }
+  return theme.description_zh?.trim() || theme.description_en?.trim() || "";
+}
 
 type ThemeEditCardProps = {
   locale: Locale;
@@ -115,6 +128,7 @@ type SortableThemeItemProps = {
   deleteLabel: string;
   deletingLabel: string;
   onDelete: (theme: ThemeRow, event: React.MouseEvent) => void;
+  onEditDescription: (theme: ThemeRow) => void;
 };
 
 function SortableThemeItem(props: SortableThemeItemProps): JSX.Element {
@@ -126,7 +140,8 @@ function SortableThemeItem(props: SortableThemeItemProps): JSX.Element {
     deleting,
     deleteLabel,
     deletingLabel,
-    onDelete
+    onDelete,
+    onEditDescription
   } = props;
 
   const sortableId = themeIdKey(theme.id);
@@ -167,7 +182,10 @@ function SortableThemeItem(props: SortableThemeItemProps): JSX.Element {
       >
         <Minus className="h-2 w-2" strokeWidth={4.5} absoluteStrokeWidth />
       </button>
-      <div className={`theme-card-jitter min-w-0 ${sorting ? "theme-edit-sorting" : ""}`}>
+      <div
+        className={`theme-card-jitter min-w-0 ${sorting ? "theme-edit-sorting" : ""}`}
+        onDoubleClick={() => onEditDescription(theme)}
+      >
         <ThemeEditCard
           locale={locale}
           theme={theme}
@@ -189,6 +207,8 @@ export function ThemeSidebar(props: ThemeSidebarProps): JSX.Element {
     onCreateTheme,
     onDeleteTheme,
     onReorderThemes,
+    onUpdateThemeDescription,
+    onAbsorbFromTheme,
     labels
   } = props;
 
@@ -200,6 +220,9 @@ export function ThemeSidebar(props: ThemeSidebarProps): JSX.Element {
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [activeTheme, setActiveTheme] = useState<ThemeRow | null>(null);
   const [savingOrder, setSavingOrder] = useState(false);
+  const [descDialog, setDescDialog] = useState<ThemeRow | null>(null);
+  const [descText, setDescText] = useState("");
+  const [savingDesc, setSavingDesc] = useState(false);
   const orderedRef = useRef(orderedThemes);
   const dragStartThemesRef = useRef<ThemeRow[] | null>(null);
   const lastOverIdRef = useRef<UniqueIdentifier | null>(null);
@@ -220,6 +243,57 @@ export function ThemeSidebar(props: ThemeSidebarProps): JSX.Element {
       setOrderedThemes(next);
     }
   }, [themes, editMode, activeTheme, savingOrder]);
+
+  useEffect(() => {
+    if (!descDialog) {
+      return;
+    }
+    function onKey(event: KeyboardEvent): void {
+      if (event.key === "Escape" && !savingDesc) {
+        setDescDialog(null);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [descDialog, savingDesc]);
+
+  function openDescDialog(theme: ThemeRow): void {
+    setDescDialog(theme);
+    setDescText(themeDescription(theme, locale));
+  }
+
+  function researchThemeId(): number | undefined {
+    return themes.find((row) => row.slug === "research")?.id;
+  }
+
+  function canAbsorbFromResearch(theme: ThemeRow): boolean {
+    return theme.slug === "科技" && researchThemeId() !== undefined && onAbsorbFromTheme !== undefined;
+  }
+
+  async function triggerAbsorbFromResearch(theme: ThemeRow): Promise<void> {
+    const sourceId = researchThemeId();
+    if (!sourceId || !onAbsorbFromTheme) {
+      return;
+    }
+    await onAbsorbFromTheme(theme.id, sourceId);
+  }
+
+  async function handleSaveDescription(): Promise<void> {
+    if (!descDialog || savingDesc) {
+      return;
+    }
+    const saved = descDialog;
+    setSavingDesc(true);
+    try {
+      await onUpdateThemeDescription(saved.id, descText.trim());
+      setDescDialog(null);
+      if (canAbsorbFromResearch(saved)) {
+        await triggerAbsorbFromResearch(saved);
+      }
+    } finally {
+      setSavingDesc(false);
+    }
+  }
 
   async function handleDelete(theme: ThemeRow, event: React.MouseEvent): Promise<void> {
     event.stopPropagation();
@@ -408,6 +482,7 @@ export function ThemeSidebar(props: ThemeSidebarProps): JSX.Element {
                     deleteLabel={labels.deleteTheme}
                     deletingLabel={labels.deletingTheme}
                     onDelete={(t, e) => void handleDelete(t, e)}
+                    onEditDescription={openDescDialog}
                   />
                 ))}
               </SortableContext>
@@ -490,6 +565,7 @@ export function ThemeSidebar(props: ThemeSidebarProps): JSX.Element {
               key={theme.id}
               type="button"
               onClick={() => onSelectTheme(theme.id)}
+              onDoubleClick={() => openDescDialog(theme)}
               className={`flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-sm transition-colors ${glassNavClass(
                 selectedThemeId === theme.id && collection === "feed"
               )}`}
@@ -508,6 +584,68 @@ export function ThemeSidebar(props: ThemeSidebarProps): JSX.Element {
           ))}
         </div>
       )}
+
+      {descDialog ? (
+        <div
+          className="fixed inset-0 z-[110] flex items-center justify-center bg-black/40 p-4"
+          onClick={() => {
+            if (!savingDesc) {
+              setDescDialog(null);
+            }
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            className="w-full max-w-sm rounded-lg border border-border bg-surface p-4 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="mb-1 text-sm font-medium text-foreground">
+              {labels.editThemeDesc}
+            </h3>
+            <p className="mb-3 truncate text-xs text-muted">
+              {themeDisplayName(descDialog, locale)}
+            </p>
+            <textarea
+              value={descText}
+              onChange={(e) => setDescText(e.target.value)}
+              placeholder={labels.themeDesc}
+              rows={4}
+              autoFocus
+              disabled={savingDesc}
+              className="mb-3 w-full resize-none rounded border border-border bg-panel px-2 py-1.5 text-sm text-foreground disabled:opacity-60"
+            />
+            <div className="flex flex-wrap justify-end gap-2">
+              {descDialog && canAbsorbFromResearch(descDialog) ? (
+                <button
+                  type="button"
+                  disabled={savingDesc}
+                  onClick={() => void triggerAbsorbFromResearch(descDialog)}
+                  className="mr-auto rounded border border-border px-3 py-1.5 text-xs hover:bg-soft disabled:opacity-50"
+                >
+                  {labels.themeAbsorbFromResearch}
+                </button>
+              ) : null}
+              <button
+                type="button"
+                disabled={savingDesc}
+                onClick={() => setDescDialog(null)}
+                className="rounded border border-border px-3 py-1.5 text-xs hover:bg-soft disabled:opacity-50"
+              >
+                {labels.themeDescCancel}
+              </button>
+              <button
+                type="button"
+                disabled={savingDesc}
+                onClick={() => void handleSaveDescription()}
+                className="rounded border border-foreground bg-inverse px-3 py-1.5 text-xs text-inverse-foreground disabled:opacity-50"
+              >
+                {labels.themeDescSave}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
