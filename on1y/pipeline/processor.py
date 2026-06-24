@@ -56,6 +56,9 @@ def process_url(
         )
         raw = storage.upsert_raw_item(create)
         logger.info("Stored preferred-text raw_item id=%s url=%s", raw.id, normalized)
+        from on1y.distill.processor import maybe_package_short_content
+
+        maybe_package_short_content(storage, raw.id, raw.body_text)
         return raw
 
     from on1y.utils.platform import is_ytdlp_video_platform
@@ -113,4 +116,7 @@ def process_url(
         raw.extract_status.value,
         raw.word_count,
     )
+    from on1y.distill.processor import maybe_package_short_content
+
+    maybe_package_short_content(storage, raw.id, raw.body_text)
     return raw

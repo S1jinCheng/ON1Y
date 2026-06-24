@@ -109,6 +109,9 @@ def _run_zhihu_worker_batch_impl(
                 raw = storage.upsert_raw_item(create)
                 storage.mark_pending_done(pending.id)
                 processed += 1
+                from on1y.distill.processor import maybe_package_short_content
+
+                maybe_package_short_content(storage, raw.id, raw.body_text)
                 logger.info(
                     "Zhihu done id=%s raw_id=%s words=%s",
                     pending.id,

@@ -144,6 +144,16 @@ def distill_raw_item(
     return distilled_id
 
 
+def maybe_package_short_content(storage: SqliteStorage, raw_id: int, body_text: str | None) -> None:
+    """Apply zero-LLM summary + extracted tags for bodies under the short threshold."""
+    if not is_short_content_for_distill(body_text or ""):
+        return
+    try:
+        distill_raw_item(storage, raw_id)
+    except Exception as exc:
+        logger.warning("Short content packaging failed raw_id=%s: %s", raw_id, exc)
+
+
 def run_distill_batch(
     storage: SqliteStorage,
     limit: int,
@@ -151,28 +161,46 @@ def run_distill_batch(
     platform: str | None = None,
     force: bool = False,
 ) -> dict[str, int]:
-    """Run LLM distill on up to `limit` eligible raw items."""
+    """Run distill on up to `limit` eligible raw items (short content needs no LLM)."""
     from on1y.llm.settings import get_resolved_llm_settings
 
-    if not get_resolved_llm_settings().api_key_set:
-        logger.warning("Skip distill batch: no LLM API key configured")
-        return {"distilled": 0, "failed": 0, "skipped": limit}
-
+    api_key_set = get_resolved_llm_settings().api_key_set
     ids = list_distill_candidate_ids(storage, limit=limit, platform=platform, force=force)
     distilled = 0
     failed = 0
+    skipped = 0
     for raw_id in ids:
+        raw = storage.get_raw_by_id(raw_id)
+        body = (raw.body_text or "").strip() if raw else ""
+        if not body:
+            skipped += 1
+            continue
+        if not is_short_content_for_distill(body) and not api_key_set:
+            skipped += 1
+            logger.debug("Skip long-content distill raw_id=%s: no LLM API key", raw_id)
+            continue
         try:
             distill_raw_item(storage, raw_id, force=force)
             distilled += 1
         except Exception as exc:
             failed += 1
             logger.warning("Distill failed raw_id=%s: %s", raw_id, exc)
-    return {"distilled": distilled, "failed": failed}
+    return {"distilled": distilled, "failed": failed, "skipped": skipped}
 
 
 def _distill_short_content(storage: SqliteStorage, raw_id: int, body: str) -> int:
-    """Persist original body as summary — no LLM call for posts under the threshold."""
+    """Persist original body as summary and apply zero-LLM extracted tags."""
+    from on1y.tags.extract import collect_short_content_tags
+
+    raw = storage.get_raw_by_id(raw_id)
+    meta = (raw.source_meta if raw else None) or {}
+    tags = collect_short_content_tags(
+        body=body,
+        platform=raw.platform if raw else None,
+        url=raw.url if raw else None,
+        source_meta=meta,
+        author=str(meta.get("author") or "").strip() or None,
+    )
     distilled_id = storage.upsert_distilled(
         raw_id=raw_id,
         summary=body,
@@ -186,7 +214,13 @@ def _distill_short_content(storage: SqliteStorage, raw_id: int, body: str) -> in
     )
     if storage.get_raw_theme_source(raw_id) != "user":
         storage.set_item_theme_by_slug(raw_id, OTHER_THEME_SLUG, source="llm")
-    logger.info("Short content raw_id=%s: skipped LLM, using body as summary", raw_id)
+    if tags:
+        storage.merge_extracted_tags(raw_id, tags)
+    logger.info(
+        "Short content raw_id=%s: skipped LLM, tags=%s",
+        raw_id,
+        len(tags),
+    )
     return distilled_id
 
 
