@@ -10,6 +10,7 @@ class SourceType(StrEnum):
     MANUAL = "manual"
     CHROME = "chrome"
     API = "api"
+    TELEGRAM = "telegram"
 
 
 class PendingStatus(StrEnum):

@@ -685,6 +685,10 @@ class SqliteStorage:
             from on1y.knowledge.notes import notes_collection_clause
 
             return notes_collection_clause("r")
+        if key == "chats":
+            from on1y.knowledge.chats import chats_collection_clause
+
+            return chats_collection_clause("r")
         if key == "continue":
             return (
                 f"r.deleted_at IS NULL AND {is_feed_row_sql('r')} AND "
@@ -2467,6 +2471,40 @@ class SqliteStorage:
         ).fetchone()
         return int(row["n"]) if row else 0
 
+    def list_telegram_chats(self) -> list[dict[str, Any]]:
+        conn = self._connect()
+        user_clause, user_params = self._user_scope_parts(conn)
+        user_filter = f" AND {user_clause}" if user_clause else ""
+        rows = conn.execute(
+            f"""
+            SELECT
+                json_extract(r.source_meta, '$.telegram_chat_id') AS chat_id,
+                json_extract(r.source_meta, '$.telegram_chat') AS chat_name,
+                json_extract(r.source_meta, '$.telegram_chat_type') AS chat_type,
+                COUNT(*) AS session_count,
+                MAX(CAST(json_extract(r.source_meta, '$.telegram_end_ts') AS REAL)) AS last_ts
+            FROM raw_items r
+            WHERE r.deleted_at IS NULL
+              AND LOWER(r.platform) = 'telegram'
+              {user_filter}
+            GROUP BY chat_id, chat_name, chat_type
+            ORDER BY last_ts DESC
+            """,
+            user_params,
+        ).fetchall()
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            out.append(
+                {
+                    "chat_id": str(row["chat_id"] or ""),
+                    "chat_name": str(row["chat_name"] or ""),
+                    "chat_type": str(row["chat_type"] or ""),
+                    "session_count": int(row["session_count"] or 0),
+                    "last_ts": float(row["last_ts"] or 0),
+                }
+            )
+        return out
+
     def list_dynamic_tags_with_counts(self, *, limit: int = 200) -> list[dict[str, Any]]:
         conn = self._connect()
         user_clause, user_params = self._user_scope_parts(conn)
@@ -3638,6 +3676,8 @@ class SqliteStorage:
             order_sql = "r.ingested_at DESC"
         elif coll == "notes":
             order_sql = "r.updated_at DESC"
+        elif coll == "chats":
+            order_sql = "CAST(json_extract(r.source_meta, '$.telegram_end_ts') AS REAL) DESC, r.ingested_at DESC"
         else:
             order_sql = "COALESCE(d.distilled_at, r.ingested_at) DESC"
         snapshot_select = (

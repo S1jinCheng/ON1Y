@@ -41,6 +41,7 @@ dependencies = [
     "bcrypt>=4.1",
     "PyJWT>=2.8",
     "tzdata>=2024.1; sys_platform == 'win32'",
+    "telethon>=1.36",
 ]
 
 [project.optional-dependencies]
