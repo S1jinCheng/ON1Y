@@ -4,11 +4,17 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections import defaultdict
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime, time
 from pathlib import Path
 from typing import Any
 
+from on1y.distill.prompts import (
+    EVENING_DIGEST_PROMPT_VERSION,
+    build_evening_digest_system_prompt,
+    build_evening_digest_user_prompt,
+)
 from on1y.hotlist.sql import is_feed_row_sql
 from on1y.knowledge.notes import has_user_note
 from on1y.knowledge.read_state import is_read_meta, utc_now_iso
@@ -21,6 +27,38 @@ from on1y.utils.json_util import loads_meta
 logger = logging.getLogger(__name__)
 
 _STATS_TZ = stats_timezone()
+_FOCUS_DOMAIN_ALIAS: dict[str, str] = {
+    "economy": "economics",
+    "economics": "economics",
+    "经济": "economics",
+    "finance": "economics",
+    "fintech": "economics",
+    "politics": "news",
+    "policy": "news",
+    "public-affairs": "news",
+    "public_affairs": "news",
+    "时政": "news",
+    "news": "news",
+    "technology": "technology",
+    "tech": "technology",
+    "科技": "technology",
+    "ai": "technology",
+}
+_THEME_WEIGHT: dict[str, int] = {
+    "news": 24,
+    "economics": 22,
+    "technology": 22,
+    "research": 14,
+    "other": 6,
+}
+_PLATFORM_WEIGHT: dict[str, int] = {
+    "twitter": 20,
+    "x": 20,
+    "zhihu": 18,
+    "economist": 18,
+    "youtube": 12,
+    "bilibili": 10,
+}
 
 
 def today_digest_date() -> str:
@@ -87,7 +125,7 @@ def _meta_dt_local(meta_key: str, meta: dict[str, Any]) -> date | None:
     except ValueError:
         return None
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
+        parsed = parsed.replace(tzinfo=UTC)
     return parsed.astimezone(_STATS_TZ).date()
 
 
@@ -96,6 +134,111 @@ def _updated_local(updated_at: str | None) -> date | None:
     if dt is None:
         return None
     return dt.astimezone(_STATS_TZ).date()
+
+
+def _meta_datetime_local(meta: dict[str, Any]) -> datetime | None:
+    for key in ("published", "published_at", "upload_date", "updated_at", "created_at"):
+        raw = meta.get(key)
+        if raw is None or str(raw).strip() == "":
+            continue
+        try:
+            parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(_STATS_TZ)
+    return None
+
+
+def _normalize_focus_token(value: str) -> str:
+    token = re.sub(r"[\s\-_]+", "", value.strip().casefold())
+    return token
+
+
+def _resolve_focus_slug(token: str) -> str:
+    if not token:
+        return ""
+    return _FOCUS_DOMAIN_ALIAS.get(token, token)
+
+
+def _focus_slugs_from_settings() -> set[str]:
+    from on1y.config import get_settings
+
+    raw = str(get_settings().evening_digest_focus_domains or "")
+    tokens = [_normalize_focus_token(part) for part in raw.split(",")]
+    slugs = {_resolve_focus_slug(token) for token in tokens if token}
+    return {slug for slug in slugs if slug}
+
+
+def _item_focus_slug(row: dict[str, Any]) -> str:
+    candidates = [
+        _normalize_focus_token(str(row.get("theme_slug") or "")),
+        _normalize_focus_token(str(row.get("theme_name_zh") or "")),
+        _normalize_focus_token(str(row.get("theme_name_en") or "")),
+    ]
+    for token in candidates:
+        resolved = _resolve_focus_slug(token)
+        if resolved:
+            return resolved
+    return "other"
+
+
+def _title_fingerprint(title: str) -> str:
+    base = re.sub(r"\W+", "", title.casefold(), flags=re.UNICODE)
+    return base[:48]
+
+
+def _timeliness_score(
+    *,
+    target: date,
+    meta: dict[str, Any],
+    ingested_at: str | None,
+) -> int:
+    score = 50
+    published_local = _meta_datetime_local(meta)
+    if published_local is not None:
+        target_end = datetime.combine(target, time.max, tzinfo=_STATS_TZ)
+        age_hours = max(0.0, (target_end - published_local).total_seconds() / 3600.0)
+        score += max(8, 36 - int(age_hours * 1.2))
+    else:
+        ingested_dt = _parse_ingested_dt(ingested_at)
+        if ingested_dt is not None and ingested_dt.astimezone(_STATS_TZ).date() == target:
+            score += 20
+        else:
+            score += 10
+    return score
+
+
+def _impact_score(*, row: dict[str, Any], title_platform_count: int) -> int:
+    theme_weight = _THEME_WEIGHT.get(_item_focus_slug(row), 10)
+    platform_weight = _PLATFORM_WEIGHT.get(str(row.get("platform") or "").lower(), 8)
+    spread_bonus = 12 if title_platform_count >= 2 else 0
+    return theme_weight + platform_weight + spread_bonus
+
+
+def _pick_image_url(meta: dict[str, Any]) -> str:
+    candidates: list[Any] = [
+        meta.get("image_url"),
+        meta.get("cover_url"),
+        meta.get("thumbnail"),
+        meta.get("thumbnail_url"),
+        meta.get("poster"),
+        meta.get("image"),
+    ]
+    media = meta.get("media")
+    if isinstance(media, list):
+        for item in media[:5]:
+            if isinstance(item, dict):
+                candidates.append(item.get("url"))
+                candidates.append(item.get("image_url"))
+    for value in candidates:
+        if not value:
+            continue
+        url = str(value).strip()
+        if url.startswith("http://") or url.startswith("https://"):
+            return url
+    return ""
 
 
 def _parse_day(day: str) -> date:
@@ -163,6 +306,7 @@ def _fetch_rows_for_digest(storage: Any) -> list[dict[str, Any]]:
             {
                 "raw_id": int(row["id"]),
                 "title": str(row["raw_title"] or row["url"] or "").strip(),
+                "url": str(row["url"] or "").strip(),
                 "platform": str(row["platform"] or "unknown"),
                 "content_kind": _content_kind(row["content_type"]),
                 "meta": meta,
@@ -179,13 +323,17 @@ def _fetch_rows_for_digest(storage: Any) -> list[dict[str, Any]]:
 
 
 def aggregate_evening_stats(storage: Any, *, day: str) -> dict[str, Any]:
+    from on1y.config import get_settings
+
     target = _parse_day(day)
+    settings = get_settings()
     published_total = 0
     marked_read = 0
     notes_saved = 0
     by_platform: dict[str, int] = defaultdict(int)
     by_theme: dict[str, dict[str, Any]] = {}
-    highlights: list[dict[str, Any]] = []
+    highlight_candidates: list[dict[str, Any]] = []
+    focus_slugs = _focus_slugs_from_settings()
 
     for row in _fetch_rows_for_digest(storage):
         meta = row["meta"]
@@ -202,13 +350,20 @@ def aggregate_evening_stats(storage: Any, *, day: str) -> dict[str, Any]:
                     "count": 0,
                 }
             by_theme[slug]["count"] += 1
-            highlights.append(
+            highlight_candidates.append(
                 {
                     "raw_id": row["raw_id"],
                     "title": row["title"],
+                    "url": row.get("url") or "",
                     "platform": row["platform"],
                     "summary": row["summary"][:280] if row["summary"] else "",
                     "is_read": row["is_read"],
+                    "theme_slug": row["theme_slug"],
+                    "theme_name_zh": row["theme_name_zh"],
+                    "theme_name_en": row["theme_name_en"],
+                    "image_url": _pick_image_url(meta),
+                    "meta": meta,
+                    "ingested_at": row["ingested_at"],
                 }
             )
 
@@ -221,8 +376,62 @@ def aggregate_evening_stats(storage: Any, *, day: str) -> dict[str, Any]:
             if note_day == target:
                 notes_saved += 1
 
-    highlights.sort(key=lambda x: (x["is_read"], -len(x.get("summary") or "")))
-    highlights = highlights[:8]
+    title_platforms: dict[str, set[str]] = defaultdict(set)
+    for item in highlight_candidates:
+        key = _title_fingerprint(item.get("title") or "")
+        if key:
+            title_platforms[key].add(str(item.get("platform") or "unknown"))
+
+    for item in highlight_candidates:
+        fingerprint = _title_fingerprint(item.get("title") or "")
+        spread = len(title_platforms.get(fingerprint) or ())
+        timeliness = _timeliness_score(
+            target=target,
+            meta=item.get("meta") or {},
+            ingested_at=item.get("ingested_at"),
+        )
+        impact = _impact_score(row=item, title_platform_count=spread)
+        summary_bonus = min(6, len(item.get("summary") or "") // 60)
+        unread_bonus = 8 if not item.get("is_read") else 0
+        item["timeliness_score"] = timeliness
+        item["impact_score"] = impact
+        item["score"] = timeliness + impact + summary_bonus + unread_bonus
+        item["focus_slug"] = _item_focus_slug(item)
+        item["is_focus"] = item["focus_slug"] in focus_slugs
+
+    highlight_candidates.sort(
+        key=lambda x: (-int(x.get("score") or 0), x["is_read"], x.get("title") or "")
+    )
+
+    max_crux = int(settings.evening_digest_max_crux)
+    focus_quota = max(1, round(max_crux * 0.6))
+    focus_rows = [row for row in highlight_candidates if row.get("is_focus")]
+    non_focus_rows = [row for row in highlight_candidates if not row.get("is_focus")]
+    selected: list[dict[str, Any]] = focus_rows[:focus_quota]
+    if len(selected) < max_crux:
+        selected.extend(non_focus_rows[: max_crux - len(selected)])
+    if len(selected) < max_crux:
+        selected.extend(
+            row for row in highlight_candidates if row not in selected
+        )
+        selected = selected[:max_crux]
+
+    highlights = [
+        {
+            "raw_id": item["raw_id"],
+            "title": item["title"],
+            "url": item.get("url") or "",
+            "platform": item["platform"],
+            "summary": item["summary"],
+            "is_read": item["is_read"],
+            "theme_slug": item["theme_slug"],
+            "score": int(item.get("score") or 0),
+            "timeliness_score": int(item.get("timeliness_score") or 0),
+            "impact_score": int(item.get("impact_score") or 0),
+            "image_url": item.get("image_url") or "",
+        }
+        for item in selected
+    ]
 
     return {
         "digest_date": target.isoformat(),
@@ -236,46 +445,19 @@ def aggregate_evening_stats(storage: Any, *, day: str) -> dict[str, Any]:
         ),
         "by_theme": sorted(by_theme.values(), key=lambda x: (-x["count"], x["slug"]))[:10],
         "highlights": highlights,
+        "selection_meta": {
+            "prompt_version": EVENING_DIGEST_PROMPT_VERSION,
+            "focus_slugs": sorted(focus_slugs),
+            "candidate_count": len(highlight_candidates),
+            "focus_candidate_count": len(focus_rows),
+            "selected_count": len(highlights),
+            "focus_quota": focus_quota,
+            "focus_selected_count": sum(
+                1 for item in highlights if item["theme_slug"] in focus_slugs
+            ),
+            "focus_backfill": len(focus_rows) < focus_quota,
+        },
     }
-
-
-def _evening_system_prompt(locale: str) -> str:
-    if locale == "en":
-        return (
-            "You are the editor of a personal knowledge evening digest. "
-            "Write a concise, warm briefing (2–4 short paragraphs) in English. "
-            "Cover what arrived today, reading progress, notes, themes, and what is still unread. "
-            "No markdown headings; plain paragraphs only."
-        )
-    return (
-        "你是个人知识库的晚报编辑。"
-        "用中文写一段简洁、有温度的晚间简报（2–4 个短段）。"
-        "涵盖今日新内容、阅读进度、笔记、主题分布，以及仍未读的内容。"
-        "不要用 Markdown 标题，只用纯文本段落。"
-    )
-
-
-def _evening_user_prompt(stats: dict[str, Any], locale: str) -> str:
-    lines = [
-        f"date: {stats['digest_date']}",
-        f"published_today: {stats['published_total']}",
-        f"marked_read_today: {stats['marked_read']}",
-        f"notes_saved_today: {stats['notes_saved']}",
-        f"unread_in_library: {stats['unread_total']}",
-        f"by_platform: {stats['by_platform']}",
-        f"by_theme: {stats['by_theme']}",
-        "highlights:",
-    ]
-    for item in stats.get("highlights") or []:
-        lines.append(
-            f"- [{item['platform']}] {item['title']} "
-            f"(read={item['is_read']}) {item.get('summary') or ''}"
-        )
-    if locale == "en":
-        lines.insert(0, "Summarize the following stats for the user's evening digest:")
-    else:
-        lines.insert(0, "请根据以下统计数据撰写晚报正文：")
-    return "\n".join(lines)
 
 
 def generate_evening_llm_summary(
@@ -295,14 +477,37 @@ def generate_evening_llm_summary(
     settings = get_settings()
     try:
         client = get_llm_client()
+        max_tokens = max(int(settings.llm_max_output_tokens), 900)
         text = client.chat(
-            _evening_system_prompt(locale),
-            _evening_user_prompt(stats, locale),
-            max_tokens=min(settings.llm_max_output_tokens, 900),
+            build_evening_digest_system_prompt(
+                locale=locale,
+                max_crux=int(settings.evening_digest_max_crux),
+                max_chars=int(settings.evening_digest_max_chars),
+            ),
+            build_evening_digest_user_prompt(stats=stats, locale=locale),
+            max_tokens=max_tokens,
         )
         summary = (text or "").strip()
         return summary or None, None
     except Exception as exc:
+        if "empty content" in str(exc).lower():
+            try:
+                # Retry once with a higher token budget for longer markdown output.
+                retry_text = client.chat(
+                    build_evening_digest_system_prompt(
+                        locale=locale,
+                        max_crux=int(settings.evening_digest_max_crux),
+                        max_chars=int(settings.evening_digest_max_chars),
+                    ),
+                    build_evening_digest_user_prompt(stats=stats, locale=locale),
+                    max_tokens=max(max_tokens, 1400),
+                )
+                retry_summary = (retry_text or "").strip()
+                if retry_summary:
+                    return retry_summary, None
+            except Exception as retry_exc:
+                logger.warning("Evening digest LLM retry failed: %s", retry_exc)
+                return None, str(retry_exc)
         logger.warning("Evening digest LLM failed: %s", exc)
         return None, str(exc)
 
@@ -336,6 +541,7 @@ def build_evening_digest(
         "generated_at": utc_now_iso(),
         "locale": locale,
         "timezone": "Asia/Shanghai",
+        "prompt_version": EVENING_DIGEST_PROMPT_VERSION,
         "stats": stats,
         "llm_summary": llm_summary,
         "llm_error": llm_error,
@@ -388,6 +594,7 @@ def public_evening_digest_view(doc: dict[str, Any]) -> dict[str, Any]:
     return {
         "digest_date": doc.get("digest_date"),
         "generated_at": doc.get("generated_at"),
+        "prompt_version": doc.get("prompt_version"),
         "locale": doc.get("locale"),
         "timezone": doc.get("timezone"),
         "read_at": doc.get("read_at"),

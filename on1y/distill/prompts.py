@@ -7,6 +7,7 @@ from typing import Any
 from on1y.taxonomy.constants import KNOWN_THEME_PAIRS, theme_label
 
 PROMPT_VERSION = "v4-exclusive"
+EVENING_DIGEST_PROMPT_VERSION = "v1-news-md"
 
 
 def themes_block_for_prompt(themes: list[dict[str, Any]], *, locale: str) -> str:
@@ -170,3 +171,124 @@ def build_reader_system_prompt(*, locale: str) -> str:
     return f"""Rewrite video subtitle/caption text as clean readable prose in {lang}.
 Preserve meaning; remove timestamps and duplicate lines; use paragraphs.
 Return plain text only (no JSON, no markdown fences). Max ~1200 words."""
+
+
+def build_conversation_reader_prompt(*, locale: str) -> str:
+    """Write up a 1-on-1 chat transcript as connected, de-noised prose."""
+    if locale.lower().startswith("en"):
+        return (
+            "Rewrite the following 1-on-1 chat transcript as a clean, connected "
+            "written account in English.\n"
+            "Goals:\n"
+            "- Preserve who said what, both sides' viewpoints, their reasoning, "
+            "and any conclusions reached.\n"
+            "- Merge fragmented bursts into coherent paragraphs; remove greetings, "
+            "filler, stickers, and entertainment noise.\n"
+            "- Keep it faithful: do NOT invent facts or opinions.\n"
+            "- Use the speaker's name or 'I' to attribute key points where it matters.\n"
+            "Return plain text only (no JSON, no markdown fences). Max ~1200 words."
+        )
+    return (
+        "把下面这段一对一聊天记录改写成连贯、书面化的交流纪要（用中文）。\n"
+        "要求：\n"
+        "- 保留谁说了什么、双方的观点、论证过程，以及最终达成或未达成的结论。\n"
+        "- 把零碎的对话合并成连贯段落；去掉寒暄、口头禅、表情、贴纸等娱乐噪声。\n"
+        "- 必须忠实，不得编造事实或观点。\n"
+        "- 在关键观点处用说话人姓名或「我」标明归属。\n"
+        "只返回纯文本（不要 JSON，不要 markdown 代码块）。不超过约 1200 字。"
+    )
+
+
+def build_evening_digest_system_prompt(
+    *,
+    locale: str,
+    max_crux: int,
+    max_chars: int,
+) -> str:
+    if locale.lower().startswith("en"):
+        return (
+            "You are the editor of a top-tier daily intelligence brief.\n"
+            "Return Markdown only.\n"
+            "This is a rapid briefing, not a long-form report.\n"
+            "Use a human article style with clear rhythm, line breaks, and strong readability.\n"
+            "Do NOT force fixed sections like domestic/international/technology.\n"
+            "Instead, infer 3-5 meaningful modules from today's signals, "
+            "and title each module clearly.\n"
+            "Recommended structure:\n"
+            "# Evening Brief | YYYY-MM-DD\n"
+            "> Optional one-line quote as opening hook\n"
+            "— quote attribution (small text style by UI)\n"
+            "**Lead summary (40-80 words).**\n"
+            "## Module title A\n"
+            "- bullets\n"
+            "---\n"
+            "## Module title B\n"
+            "- bullets\n"
+            "Bullet constraints:\n"
+            "- Each bullet must follow: Subject + Action + Core result.\n"
+            "- Bold key numbers/time windows/amounts, e.g. **30%**, **200 bn**, **4-6 weeks**.\n"
+            "- Keep each bullet concise and factual.\n"
+            "- Do NOT write dashboard-style lines about totals/read counts/"
+            "unread pool/theme shares.\n"
+            "- After a core bullet, you may add one 'Details:' line with fuller context.\n"
+            "- Format details line exactly as: Details: ...\n"
+            "- End each core bullet with one compact source token: [ref](URL).\n"
+            "- Do NOT add words like 'Source' or 'original link'.\n"
+            "- If a relevant image URL exists, append one markdown image line "
+            "right below that bullet.\n"
+            f"Hard limit: <= {max_chars} characters total."
+        )
+    return (
+        "你是顶级新闻编辑部的晚报主编。\n"
+        "仅输出 Markdown。\n"
+        "这是资讯速递，不是深度报道。\n"
+        "使用人类写作风格：有标题、有简短引子，节奏清晰，换行自然。\n"
+        "不要强行使用“国内/国际/科技”等固定分区。\n"
+        "应根据当天信息自行归纳 3-5 个模块，并用二级标题命名模块。\n"
+        "建议结构：\n"
+        "# 今日晚报 | YYYY-MM-DD\n"
+        "> 可选一句名言/引言（1行）\n"
+        "— 引言署名（前端会显示为小字号）\n"
+        "**开场总结（40-80字）**\n"
+        "## 模块A（模型自行命名）\n"
+        "- 若干条资讯\n"
+        "---\n"
+        "## 模块B（模型自行命名）\n"
+        "- 若干条资讯\n"
+        "每条资讯硬约束：\n"
+        "- 必须严格符合“主语 + 动作 + 核心结果”。\n"
+        "- 关键数字、比例、金额、时间窗必须加粗，如 **30%**、**2000亿元**、**4-6周**。\n"
+        "- 不展开背景科普，不写长段解释。\n"
+        "- 禁止写“今日X篇、已读X篇、未读X篇、主题占比”等仪表盘统计句。\n"
+        "- 在核心事件后可追加一行“细节：...”，补充完整详情。\n"
+        "- 细节行格式必须是：细节：...\n"
+        "- 每条核心资讯末尾都要放一个精简链接标记：[ref](URL)。\n"
+        "- 不要写“原文”“链接”“来源”等文字说明。\n"
+        "- 模块之间要有空行，并优先用 `---` 分割。\n"
+        "- 引言署名若为外国人，请附原名（例如：马斯克 Elon Musk）。\n"
+        "- 如果有合适的配图链接（image_url），可在该条下方附一行 Markdown 图片。\n"
+        f"总字数不超过 {max_chars} 字。"
+    )
+
+
+def build_evening_digest_user_prompt(*, stats: dict[str, Any], locale: str) -> str:
+    lines = [
+        f"prompt_version: {EVENING_DIGEST_PROMPT_VERSION}",
+        f"date: {stats['digest_date']}",
+        f"selection_meta: {stats.get('selection_meta')}",
+        "highlights:",
+    ]
+    for item in stats.get("highlights") or []:
+        lines.append(
+            f"- [{item['platform']}] [{item.get('theme_slug', 'other')}] {item['title']} "
+            f"(read={item['is_read']}, score={item.get('score', 0)}) {item.get('summary') or ''}"
+        )
+        if item.get("url"):
+            lines.append(f"  source_url: {item['url']}")
+        if item.get("image_url"):
+            lines.append(f"  image_url: {item['image_url']}")
+    if locale.lower().startswith("en"):
+        lines.insert(0, "Write today's evening brief using the following structured data:")
+    else:
+        lines.insert(0, "请根据以下结构化数据撰写今天的晚报：")
+    return "\n".join(lines)

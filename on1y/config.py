@@ -196,6 +196,11 @@ class Settings(BaseSettings):
     # Evening digest (stats + LLM summary) generated daily while serve runs
     evening_digest_enabled: bool = Field(default=True)
     evening_digest_hour: int = Field(default=22, ge=0, le=23)
+    evening_digest_max_crux: int = Field(default=5, ge=3, le=8)
+    evening_digest_focus_domains: str = Field(
+        default="technology,economics,news,科技,经济,时政,politics"
+    )
+    evening_digest_max_chars: int = Field(default=700, ge=240, le=2000)
     # Favorites / playlists polling while serve is running (B站/知乎收藏夹, YouTube WL/Liked)
     collections_sync_enabled: bool = Field(default=True)
     collections_sync_interval_seconds: int = Field(default=120, ge=30, le=3600)

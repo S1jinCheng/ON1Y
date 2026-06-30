@@ -8,6 +8,7 @@ import re
 from on1y.adapters.sqlite_storage import SqliteStorage
 from on1y.distill.prompts import (
     PROMPT_VERSION,
+    build_conversation_reader_prompt,
     build_reader_system_prompt,
     build_system_prompt,
 )
@@ -252,6 +253,10 @@ def _maybe_generate_reader_text(
     body: str,
     settings,
 ) -> str | None:
+    if platform.lower() == "telegram":
+        return _generate_conversation_reader_text(
+            client, locale=locale, body=body, settings=settings
+        )
     if not _looks_like_subtitle(body, platform):
         return None
     excerpt = body[: min(len(body), 12_000)]
@@ -263,6 +268,28 @@ def _maybe_generate_reader_text(
         )
     except Exception as exc:
         logger.warning("Reader text generation skipped: %s", exc)
+        return None
+    cleaned = (text or "").strip()
+    return cleaned or None
+
+
+def _generate_conversation_reader_text(
+    client,
+    *,
+    locale: str,
+    body: str,
+    settings,
+) -> str | None:
+    """Write up a 1-on-1 chat transcript into connected prose."""
+    excerpt = body[: min(len(body), 16_000)]
+    try:
+        text = client.chat(
+            build_conversation_reader_prompt(locale=locale),
+            f"Chat transcript:\n{excerpt}",
+            max_tokens=min(settings.llm_max_output_tokens * 4, 2048),
+        )
+    except Exception as exc:
+        logger.warning("Conversation write-up skipped: %s", exc)
         return None
     cleaned = (text or "").strip()
     return cleaned or None

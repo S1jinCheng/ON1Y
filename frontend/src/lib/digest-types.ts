@@ -1,9 +1,15 @@
 export type EveningDigestHighlight = {
   raw_id: number;
   title: string;
+  url?: string;
   platform: string;
   summary: string;
   is_read: boolean;
+  image_url?: string;
+  theme_slug?: string;
+  score?: number;
+  timeliness_score?: number;
+  impact_score?: number;
 };
 
 export type EveningDigestStats = {
@@ -15,11 +21,22 @@ export type EveningDigestStats = {
   by_platform: Array<{ platform: string; count: number }>;
   by_theme: Array<{ slug: string; name_zh: string; name_en: string; count: number }>;
   highlights: EveningDigestHighlight[];
+  selection_meta?: {
+    prompt_version?: string;
+    focus_slugs?: string[];
+    candidate_count?: number;
+    focus_candidate_count?: number;
+    selected_count?: number;
+    focus_quota?: number;
+    focus_selected_count?: number;
+    focus_backfill?: boolean;
+  };
 };
 
 export type EveningDigest = {
   digest_date: string;
   generated_at: string;
+  prompt_version?: string | null;
   locale: string;
   timezone: string;
   read_at: string | null;

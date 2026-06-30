@@ -1,9 +1,9 @@
 "use client";
 
-import { Bell, ChevronLeft, X } from "lucide-react";
-import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Bell, ChevronLeft, ExternalLink, X } from "lucide-react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
+import ReactMarkdown, { type Components } from "react-markdown";
 
 import {
   getEveningDigest,
@@ -14,11 +14,102 @@ import {
 import { formatCalendarDate } from "@/lib/format-published-at";
 import type { EveningDigest, EveningDigestStatus } from "@/lib/digest-types";
 import { isEveningDigestPending } from "@/lib/digest-types";
-import { platformLabel } from "@/lib/platform-label";
-import { themeDisplayName, t, type UiKey } from "@/lib/i18n";
+import { t, type UiKey } from "@/lib/i18n";
 import type { Locale } from "@/lib/types";
 
 const PANEL_ID = "evening-digest-portal";
+
+export function looksLikeMarkdownDigest(text: string): boolean {
+  return /(^|\n)\s{0,3}(#|##|###)\s+|(\*\*[^*]+\*\*)|(^|\n)\s*-\s+/m.test(text);
+}
+
+function isQuoteAttribution(children: React.ReactNode): boolean {
+  if (!Array.isArray(children) || children.length !== 1) {
+    return false;
+  }
+  const first = children[0];
+  if (typeof first !== "string") {
+    return false;
+  }
+  const trimmed = first.trimStart();
+  return trimmed.startsWith("—") || trimmed.startsWith("-");
+}
+
+function textFromChildren(children: React.ReactNode): string {
+  if (typeof children === "string") {
+    return children;
+  }
+  if (Array.isArray(children)) {
+    return children
+      .map((node) => (typeof node === "string" ? node : ""))
+      .join("")
+      .trim();
+  }
+  return "";
+}
+
+function isDetailLine(children: React.ReactNode): boolean {
+  const text = textFromChildren(children);
+  return text.startsWith("细节：") || text.startsWith("Details:");
+}
+
+function isSourceTokenLink(children: React.ReactNode): boolean {
+  const text = textFromChildren(children).toLowerCase();
+  return text === "ref" || text === "source" || text === "🔍";
+}
+
+const digestMarkdownComponents: Components = {
+  h1: ({ children }) => (
+    <h1 className="mb-3 text-2xl font-semibold leading-snug tracking-tight text-foreground">
+      {children}
+    </h1>
+  ),
+  h2: ({ children }) => (
+    <h2 className="mt-5 mb-2 text-lg font-semibold leading-snug text-foreground">{children}</h2>
+  ),
+  h3: ({ children }) => (
+    <h3 className="mt-4 mb-2 text-base font-semibold leading-snug text-foreground">{children}</h3>
+  ),
+  p: ({ children }) =>
+    isQuoteAttribution(children) ? (
+      <p className="my-1 text-[11px] leading-relaxed text-muted">{children}</p>
+    ) : isDetailLine(children) ? (
+      <p className="my-1 text-[13px] leading-6 text-muted">{children}</p>
+    ) : (
+      <p className="my-2 text-[15px] leading-7 text-foreground">{children}</p>
+    ),
+  blockquote: ({ children }) => (
+    <blockquote className="my-2 border-l-2 border-border pl-3 italic text-muted">{children}</blockquote>
+  ),
+  strong: ({ children }) => <strong className="font-semibold text-foreground">{children}</strong>,
+  ul: ({ children }) => <ul className="my-2 list-disc space-y-1 pl-5 text-[15px]">{children}</ul>,
+  li: ({ children }) =>
+    isDetailLine(children) ? (
+      <li className="text-[13px] leading-6 text-muted">{children}</li>
+    ) : (
+      <li className="leading-7">{children}</li>
+    ),
+  hr: () => <hr className="my-4 border-border" />,
+  a: ({ href, children }) => (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      className={
+        isSourceTokenLink(children)
+          ? "ml-1 inline-flex items-center align-baseline no-underline opacity-70 hover:opacity-100"
+          : "text-blue-500 underline underline-offset-2 hover:text-blue-600"
+      }
+      aria-label={isSourceTokenLink(children) ? "Open source" : undefined}
+    >
+      {isSourceTokenLink(children) ? <ExternalLink className="h-3 w-3" /> : children}
+    </a>
+  ),
+  img: ({ src, alt }) => (
+    // Allow optional image embeds when digest sources provide media URLs.
+    <img src={src || ""} alt={alt || "digest-image"} loading="lazy" className="my-3 max-h-72 w-full rounded-md border border-border object-cover" />
+  ),
+};
 
 export function EveningDigestButton(props: { locale: Locale }): JSX.Element {
   const { locale } = props;
@@ -204,7 +295,7 @@ export function EveningDigestButton(props: { locale: Locale }): JSX.Element {
                   ) : error ? (
                     <p className="text-sm text-muted">{ui("eveningDigestLoadFailed")}</p>
                   ) : digest ? (
-                    <DigestBody digest={digest} locale={locale} ui={ui} onClose={() => setOpen(false)} />
+                    <DigestBody digest={digest} ui={ui} />
                   ) : null}
                 </div>
               </div>
@@ -216,83 +307,31 @@ export function EveningDigestButton(props: { locale: Locale }): JSX.Element {
   );
 }
 
-function DigestBody(props: {
+export function DigestBody(props: {
   digest: EveningDigest;
-  locale: Locale;
   ui: (key: UiKey) => string;
-  onClose: () => void;
 }): JSX.Element {
-  const { digest, locale, ui, onClose } = props;
+  const { digest, ui } = props;
   return (
     <>
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <Stat label={ui("eveningDigestPublished")} value={digest.stats.published_total} />
-        <Stat label={ui("eveningDigestRead")} value={digest.stats.marked_read} />
-        <Stat label={ui("eveningDigestNotes")} value={digest.stats.notes_saved} />
-        <Stat label={ui("eveningDigestUnread")} value={digest.stats.unread_total} />
-      </div>
-
       {digest.llm_summary ? (
-        <section className="rounded-md border border-border bg-soft/50 px-3 py-3">
-          <p className="mb-2 text-xs font-medium text-muted">{ui("eveningDigestSummary")}</p>
-          <div className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">
-            {digest.llm_summary}
-          </div>
+        <section className="rounded-md border border-border bg-soft/50 px-3 py-3 sm:px-4">
+          {looksLikeMarkdownDigest(digest.llm_summary) ? (
+            <div
+              className="max-w-none whitespace-normal break-words text-foreground"
+              style={{ fontFamily: "\"Times New Roman\", \"Songti SC\", \"SimSun\", serif" }}
+            >
+              <ReactMarkdown components={digestMarkdownComponents}>{digest.llm_summary}</ReactMarkdown>
+            </div>
+          ) : (
+            <div className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">
+              {digest.llm_summary}
+            </div>
+          )}
         </section>
       ) : digest.llm_error === "llm_not_configured" ? (
         <p className="text-xs text-muted">{ui("eveningDigestNoLlm")}</p>
       ) : null}
-
-      {digest.stats.highlights.length > 0 ? (
-        <section>
-          <p className="mb-2 text-xs font-medium text-muted">{ui("eveningDigestHighlights")}</p>
-          <ul className="space-y-2">
-            {digest.stats.highlights.map((item) => (
-              <li key={item.raw_id} className="rounded-md border border-border px-3 py-2">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <Link
-                    href={`/?raw=${item.raw_id}`}
-                    className="text-sm font-medium hover:underline"
-                    onClick={onClose}
-                  >
-                    {item.title || `#${item.raw_id}`}
-                  </Link>
-                  <span className="text-[10px] text-muted">
-                    {platformLabel(item.platform, locale)}
-                    {item.is_read ? ` · ${ui("eveningDigestReadBadge")}` : ""}
-                  </span>
-                </div>
-                {item.summary ? (
-                  <p className="mt-1 line-clamp-2 text-xs text-muted">{item.summary}</p>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
-
-      {digest.stats.by_theme.length > 0 ? (
-        <section>
-          <p className="mb-2 text-xs font-medium text-muted">{ui("weeklyByTheme")}</p>
-          <ul className="space-y-1 text-sm">
-            {digest.stats.by_theme.map((row) => (
-              <li key={row.slug} className="flex justify-between gap-2">
-                <span className="truncate">{themeDisplayName(row, locale)}</span>
-                <span className="tabular-nums text-muted">{row.count}</span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
     </>
-  );
-}
-
-function Stat(props: { label: string; value: number }): JSX.Element {
-  return (
-    <div className="rounded-md border border-border px-2 py-2 text-center">
-      <p className="text-[10px] text-muted">{props.label}</p>
-      <p className="text-lg font-semibold tabular-nums">{props.value}</p>
-    </div>
   );
 }
