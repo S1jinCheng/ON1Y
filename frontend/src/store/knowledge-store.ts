@@ -18,6 +18,7 @@ export type KnowledgeCollection =
   | "trash"
   | "hotlist"
   | "notes"
+  | "chats"
   | "books";
 
 export type SidebarMode = "theme" | "creator";

@@ -729,6 +729,7 @@ export function getCollectionCounts(params?: {
   unread: number;
   notes: number;
   books: number;
+  chats: number;
 }> {
   const query = new URLSearchParams();
   if (params?.hotlistDate) {
@@ -745,6 +746,7 @@ export function getCollectionCounts(params?: {
     unread: number;
     notes: number;
     books: number;
+    chats: number;
   }>(`/api/knowledge/collections${suffix}`);
 }
 
@@ -842,7 +844,7 @@ export function getKnowledgeItems(params: {
   q?: string;
   platform?: string;
   source?: string;
-  collection?: "feed" | "favorites" | "trash" | "hotlist" | "notes";
+  collection?: "feed" | "favorites" | "trash" | "hotlist" | "notes" | "chats" | "books";
   hotlistDate?: string;
   hotlistSource?: HotlistSource;
   feedDate?: string;
@@ -1322,6 +1324,99 @@ export function getObsidianSyncStatus(): Promise<{
   return request("/api/obsidian/sync/status");
 }
 
+export type TelegramSettingsView = {
+  enabled: boolean;
+  sync_mode: "export" | "client";
+  export_dir: string;
+  api_id: number | null;
+  api_hash: string;
+  sync_chat_ids: string[];
+  interval_seconds: number;
+  auto_distill: boolean;
+  session_gap_minutes: number;
+  min_session_chars: number;
+  min_msg_count: number;
+  min_substantive_ratio: number;
+  prefer_local_llm: boolean;
+  session_authorized?: boolean;
+  client_ready?: boolean;
+};
+
+export function getTelegramSettings(): Promise<TelegramSettingsView> {
+  return request<TelegramSettingsView>("/api/telegram/settings");
+}
+
+export function saveTelegramSettings(
+  payload: Partial<TelegramSettingsView>
+): Promise<TelegramSettingsView & { saved: boolean }> {
+  return request("/api/telegram/settings", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function runTelegramSync(payload?: {
+  limit?: number;
+  auto_distill?: boolean;
+}): Promise<{
+  enabled: boolean;
+  reason: string;
+  scanned: number;
+  sessions: number;
+  imported: number;
+  skipped: number;
+  failed: number;
+  distilled?: number;
+  error_count?: number;
+  errors?: string[];
+}> {
+  return request("/api/telegram/sync", {
+    method: "POST",
+    body: JSON.stringify(payload ?? {})
+  });
+}
+
+export function getTelegramSyncStatus(): Promise<{
+  running: boolean;
+  started_at?: string | null;
+  finished_at?: string | null;
+  last_report?: Record<string, unknown> | null;
+  last_error?: string | null;
+  user_id?: number | null;
+}> {
+  return request("/api/telegram/sync/status");
+}
+
+export type TelegramDialog = {
+  chat_id: string;
+  title: string;
+  chat_type: string;
+  unread_count: number;
+};
+
+export function sendTelegramAuthCode(phone: string): Promise<{ phone: string; sent: boolean }> {
+  return request("/api/telegram/auth/send-code", {
+    method: "POST",
+    body: JSON.stringify({ phone })
+  });
+}
+
+export function signInTelegramAuth(payload: {
+  phone: string;
+  code: string;
+  password?: string;
+}): Promise<{ ok: boolean; authorized?: boolean; needs_password?: boolean }> {
+  return request("/api/telegram/auth/sign-in", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function getTelegramDialogs(limit = 100): Promise<{ dialogs: TelegramDialog[]; count: number }> {
+  const query = new URLSearchParams({ limit: String(limit) });
+  return request(`/api/telegram/dialogs?${query.toString()}`);
+}
+
 export type ItemRelation = {
   id: number;
   from_raw_id: number;
@@ -1376,7 +1471,7 @@ export function retrieveKnowledge(payload: {
   offset?: number;
   theme_id?: number;
   tag_ids?: number[];
-  collection?: "feed" | "favorites" | "trash" | "hotlist" | "notes";
+  collection?: "feed" | "favorites" | "trash" | "hotlist" | "notes" | "chats" | "books";
   platform?: string;
   source?: string;
 }): Promise<{ mode: string; engine: string; total: number; hits: RetrieveHit[] }> {

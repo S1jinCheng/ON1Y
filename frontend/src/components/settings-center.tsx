@@ -76,6 +76,7 @@ import {
 import { getRecentAuthUsernames } from "@/lib/auth";
 import { notifyAppearanceChange } from "@/components/appearance-provider";
 import { InitialSyncSection } from "@/components/initial-sync-section";
+import { TelegramSettingsPanel } from "@/components/telegram-settings-panel";
 import { CookieQrLoginDialog } from "@/components/cookie-qr-login-dialog";
 import { type AppearanceMode, persistStoredAppearance } from "@/lib/appearance";
 import type { Locale } from "@/lib/i18n";
@@ -926,6 +927,8 @@ function GeneralTab(props: {
           </button>
         </div>
       </section>
+
+      <TelegramSettingsPanel locale={locale} onMessage={props.onMessage} />
 
       <section className="space-y-3">
         <h3 className="text-xs font-semibold uppercase tracking-wide text-neutral-400">
@@ -2243,12 +2246,13 @@ function BooksTab(props: { locale: Locale; onMessage?: (message: string) => void
     let cancelled = false;
     void (async () => {
       try {
-        const [bookSettings, sourcesFile, obsidianSettings, obsidianSyncStatus] = await Promise.all([
-          fetchBookSettings(),
-          fetchBookSources(),
-          getObsidianSettings().catch(() => null),
-          getObsidianSyncStatus().catch(() => null)
-        ]);
+        const [bookSettings, sourcesFile, obsidianSettings, obsidianSyncStatus] =
+          await Promise.all([
+            fetchBookSettings(),
+            fetchBookSources(),
+            getObsidianSettings().catch(() => null),
+            getObsidianSyncStatus().catch(() => null)
+          ]);
         if (cancelled) {
           return;
         }

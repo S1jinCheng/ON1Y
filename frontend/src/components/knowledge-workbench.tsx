@@ -11,6 +11,7 @@ import {
   Forward,
   Inbox,
   Network,
+  MessageCircle,
   NotebookPen,
   RefreshCw,
   RotateCcw,
@@ -391,8 +392,9 @@ export default function KnowledgeWorkbench(): JSX.Element {
   const isFavorites = collection === "favorites";
   const isHotlist = collection === "hotlist";
   const isNotes = collection === "notes";
+  const isChats = collection === "chats";
   const isBooks = collection === "books";
-  const isFeedBrowse = !isTrash && !isFavorites && !isHotlist && !isNotes && !isBooks;
+  const isFeedBrowse = !isTrash && !isFavorites && !isHotlist && !isNotes && !isChats && !isBooks;
   const [unreadOnly, setUnreadOnly] = useState(false);
   const [minImportance, setMinImportance] = useState<number | null>(null);
 
@@ -440,6 +442,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
     hotlist: number;
     unread: number;
     notes: number;
+    chats: number;
     books: number;
   }>({
     favorites: 0,
@@ -447,6 +450,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
     hotlist: 0,
     unread: 0,
     notes: 0,
+    chats: 0,
     books: 0
   });
   const [activeBook, setActiveBook] = useState<BookShelfItem | null>(null);
@@ -469,6 +473,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
       { label: "YouTube", value: "youtube" },
       { label: platformLabel("twitter", locale), value: "twitter" },
       { label: platformLabel("obsidian", locale), value: "obsidian" },
+      { label: platformLabel("telegram", locale), value: "telegram" },
       { label: locale === "zh" ? "其他" : "Other", value: "other" }
     ],
     [locale]
@@ -1013,7 +1018,8 @@ export default function KnowledgeWorkbench(): JSX.Element {
         | "favorites"
         | "trash"
         | "hotlist"
-        | "notes",
+        | "notes"
+        | "chats",
       hotlistDate: isHotlist ? hotlistDate : undefined,
       hotlistSource: isHotlist ? hotlistSource : undefined,
       feedDate: isFeedBrowse && feedDate ? feedDate : undefined,
@@ -2151,6 +2157,21 @@ export default function KnowledgeWorkbench(): JSX.Element {
                   </button>
                   <button
                     type="button"
+                    onClick={() => switchCollection("chats")}
+                    className={`flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-sm transition-colors ${glassNavClass(
+                      isChats
+                    )}`}
+                  >
+                    <span className="inline-flex items-center gap-1.5">
+                      <MessageCircle className="h-3.5 w-3.5" />
+                      {ui("collectionChats")}
+                    </span>
+                    <span className={`text-xs ${isChats ? GLASS_MUTED : "text-muted"}`}>
+                      {collectionCounts.chats}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => switchCollection("books")}
                     className={`flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-sm transition-colors ${glassNavClass(
                       isBooks
@@ -2286,6 +2307,8 @@ export default function KnowledgeWorkbench(): JSX.Element {
                       ? ui("collectionFavorites")
                       : isNotes
                         ? ui("collectionNotes")
+                      : isChats
+                        ? ui("collectionChats")
                       : isTrash
                         ? ui("collectionTrash")
                         : isHotlist
@@ -2605,6 +2628,8 @@ export default function KnowledgeWorkbench(): JSX.Element {
                             ? ui("unreadEmpty")
                           : isNotes
                             ? ui("notesEmpty")
+                          : isChats
+                            ? ui("chatsEmpty")
                           : isHotlist
                             ? hotlistSource === "economist"
                               ? ui("hotlistEmptyEconomist")

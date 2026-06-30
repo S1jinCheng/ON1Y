@@ -6,6 +6,7 @@ const LABELS: Record<string, { zh: string; en: string }> = {
   bilibili: { zh: "哔哩哔哩", en: "Bilibili" },
   twitter: { zh: "X", en: "X" },
   obsidian: { zh: "Obsidian", en: "Obsidian" },
+  telegram: { zh: "Telegram", en: "Telegram" },
   economist: { zh: "经济学人", en: "The Economist" },
   upload: { zh: "上传", en: "Upload" },
   manual: { zh: "手动录入", en: "Manual" }

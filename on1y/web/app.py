@@ -186,6 +186,37 @@ class ObsidianSyncRequest(BaseModel):
     auto_distill: bool | None = None
 
 
+class TelegramSettingsRequest(BaseModel):
+    enabled: bool | None = None
+    sync_mode: str | None = None
+    export_dir: str | None = None
+    api_id: int | None = None
+    api_hash: str | None = None
+    sync_chat_ids: list[str] | None = None
+    interval_seconds: int | None = Field(default=None, ge=15, le=3600)
+    auto_distill: bool | None = None
+    session_gap_minutes: int | None = Field(default=None, ge=1, le=720)
+    min_session_chars: int | None = Field(default=None, ge=0, le=100_000)
+    min_msg_count: int | None = Field(default=None, ge=1, le=1000)
+    min_substantive_ratio: float | None = Field(default=None, ge=0.0, le=1.0)
+    prefer_local_llm: bool | None = None
+
+
+class TelegramAuthSendCodeRequest(BaseModel):
+    phone: str = Field(min_length=3, max_length=32)
+
+
+class TelegramAuthSignInRequest(BaseModel):
+    phone: str = Field(min_length=3, max_length=32)
+    code: str = Field(min_length=3, max_length=16)
+    password: str | None = Field(default=None, max_length=128)
+
+
+class TelegramSyncRequest(BaseModel):
+    limit: int = Field(default=200, ge=1, le=2000)
+    auto_distill: bool | None = None
+
+
 class RelationUpsertRequest(BaseModel):
     from_raw_id: int
     to_raw_id: int
@@ -836,6 +867,75 @@ def create_app() -> FastAPI:
         from on1y.obsidian.auto_sync import obsidian_sync_status
 
         return obsidian_sync_status()
+
+    @app.get("/api/telegram/settings")
+    def telegram_settings_get() -> dict[str, Any]:
+        from on1y.telegram.settings import public_settings_view
+
+        return public_settings_view()
+
+    @app.post("/api/telegram/settings")
+    def telegram_settings_save(body: TelegramSettingsRequest) -> dict[str, Any]:
+        from on1y.telegram.settings import public_settings_view, save_settings
+
+        save_settings(**body.model_dump(exclude_none=True))
+        return {"saved": True, **public_settings_view()}
+
+    @app.post("/api/telegram/sync")
+    def telegram_sync_run(body: TelegramSyncRequest) -> dict[str, Any]:
+        from on1y.telegram.auto_sync import run_telegram_sync_once
+
+        return run_telegram_sync_once(limit=body.limit, auto_distill=body.auto_distill)
+
+    @app.get("/api/telegram/sync/status")
+    def telegram_sync_status_route() -> dict[str, Any]:
+        from on1y.telegram.auto_sync import telegram_sync_status
+
+        return telegram_sync_status()
+
+    @app.get("/api/telegram/chats")
+    def telegram_chats_route() -> dict[str, Any]:
+        storage = get_storage()
+        try:
+            rows = storage.list_telegram_chats()
+            return {"chats": rows, "count": len(rows)}
+        finally:
+            storage.close()
+
+    @app.post("/api/telegram/auth/send-code")
+    def telegram_auth_send_code(body: TelegramAuthSendCodeRequest) -> dict[str, Any]:
+        from on1y.telegram.client import TelegramClientError, send_login_code
+
+        try:
+            return send_login_code(phone=body.phone)
+        except TelegramClientError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/telegram/auth/sign-in")
+    def telegram_auth_sign_in(body: TelegramAuthSignInRequest) -> dict[str, Any]:
+        from on1y.telegram.client import TelegramClientError, sign_in
+
+        try:
+            result = sign_in(phone=body.phone, code=body.code, password=body.password)
+            if result.get("needs_password"):
+                raise HTTPException(status_code=400, detail="2FA password required")
+            return result
+        except HTTPException:
+            raise
+        except TelegramClientError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/telegram/dialogs")
+    def telegram_dialogs_route(limit: int = Query(default=100, ge=1, le=300)) -> dict[str, Any]:
+        from on1y.telegram.client import TelegramAuthRequired, TelegramClientError, list_dialogs
+
+        try:
+            rows = list_dialogs(limit=limit)
+            return {"dialogs": rows, "count": len(rows)}
+        except TelegramAuthRequired as exc:
+            raise HTTPException(status_code=401, detail=str(exc)) from exc
+        except TelegramClientError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/api/obsidian/writeback/queue")
     def obsidian_writeback_queue(
@@ -1897,6 +1997,7 @@ def create_app() -> FastAPI:
                 "unread": storage.count_collection_items("unread"),
                 "notes": storage.count_collection_items("notes"),
                 "books": count_shelf_items(storage, uid),
+                "chats": storage.count_collection_items("chats"),
             }
         finally:
             storage.close()
@@ -3415,6 +3516,7 @@ def run_server(*, host: str | None = None, port: int | None = None) -> None:
     from on1y.obsidian.auto_sync import start_obsidian_sync_loop
     from on1y.subscriptions.auto_sync import start_auto_sync_loop
     from on1y.subscriptions.collections_auto_sync import start_collections_sync_loop
+    from on1y.telegram.auto_sync import start_telegram_sync_loop
 
     settings = get_settings()
     settings.ensure_data_dir()
@@ -3422,6 +3524,7 @@ def run_server(*, host: str | None = None, port: int | None = None) -> None:
     start_auto_sync_loop()
     start_collections_sync_loop()
     start_obsidian_sync_loop()
+    start_telegram_sync_loop()
     start_economist_auto_loop()
     start_evening_digest_loop()
     uvicorn.run(
