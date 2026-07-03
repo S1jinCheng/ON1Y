@@ -420,7 +420,9 @@ def _multipart_installed() -> bool:
 
 def create_app() -> FastAPI:
     settings = get_settings()
-    app = FastAPI(title="On1y", version="0.1.0", description="Phase 1 dashboard")
+    from on1y import __version__
+
+    app = FastAPI(title="On1y", version=__version__, description="Phase 1 dashboard")
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_allow_origins(),

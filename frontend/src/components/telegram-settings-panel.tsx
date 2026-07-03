@@ -346,25 +346,6 @@ export function TelegramSettingsPanel(props: Props): JSX.Element {
   }
 
   async function openLogin(method: LoginMethod): Promise<void> {
-    // #region agent log
-    fetch("http://127.0.0.1:7651/ingest/9914abac-1aa5-422c-92cf-5c3feb176a32", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "3ec0ad" },
-      body: JSON.stringify({
-        sessionId: "3ec0ad",
-        hypothesisId: "C",
-        location: "telegram-settings-panel:openLogin",
-        message: "openLogin called",
-        data: {
-          method,
-          sessionAuthorized: settings?.session_authorized ?? false,
-          accountLoading,
-          accountBusy
-        },
-        timestamp: Date.now()
-      })
-    }).catch(() => {});
-    // #endregion
     if (!settings?.api_configured) {
       props.onMessage?.(
         L(

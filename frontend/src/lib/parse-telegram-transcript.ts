@@ -27,27 +27,27 @@ export function parseTelegramTranscript(
   structured?: RawTelegramMessage[] | null
 ): ChatTranscriptMessage[] {
   if (structured?.length) {
-    return structured
-      .map((row) => {
-        const text = (row.text ?? "").trim();
-        if (!text) {
-          return null;
-        }
-        const sender = (row.sender ?? "").trim() || "—";
-        const timestamp = typeof row.timestamp === "number" ? row.timestamp : undefined;
-        const time =
-          (row.time ?? "").trim() ||
-          (timestamp ? formatTimestamp(timestamp) : "");
-        return {
-          sender,
-          time,
-          text,
-          isSelf: Boolean(row.is_self),
-          timestamp,
-          kind: row.kind
-        };
-      })
-      .filter((row): row is ChatTranscriptMessage => row !== null);
+    const rows: ChatTranscriptMessage[] = [];
+    for (const row of structured) {
+      const text = (row.text ?? "").trim();
+      if (!text) {
+        continue;
+      }
+      const sender = (row.sender ?? "").trim() || "—";
+      const timestamp = typeof row.timestamp === "number" ? row.timestamp : undefined;
+      const time =
+        (row.time ?? "").trim() ||
+        (timestamp ? formatTimestamp(timestamp) : "");
+      rows.push({
+        sender,
+        time,
+        text,
+        isSelf: Boolean(row.is_self),
+        timestamp,
+        kind: row.kind
+      });
+    }
+    return rows;
   }
 
   const messages: ChatTranscriptMessage[] = [];

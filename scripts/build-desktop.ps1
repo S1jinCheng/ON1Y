@@ -46,10 +46,8 @@ try {
     if ($stopped -gt 0) {
         Write-Host "Closed $stopped On1y process(es) so the build can replace locked files."
     }
-    $setupExe = Join-Path $desktop "src-tauri\target\release\bundle\nsis\On1y_0.1.0_x64-setup.exe"
-    if (Test-Path $setupExe) {
-        Remove-Item -Force $setupExe -ErrorAction SilentlyContinue
-    }
+    Get-ChildItem -Path (Join-Path $desktop "src-tauri\target\release\bundle\nsis") -Filter "On1y_*-setup.exe" -ErrorAction SilentlyContinue |
+        ForEach-Object { Remove-Item -Force $_.FullName -ErrorAction SilentlyContinue }
     Write-Host "Building On1y desktop (first run may take several minutes)..."
     & $npm run build
     if ($LASTEXITCODE -ne 0) {

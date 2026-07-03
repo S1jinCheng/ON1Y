@@ -133,30 +133,14 @@ export function TelegramLoginDialog(props: Props): JSX.Element | null {
       setQrGenerating(false);
       return;
     }
+    const qrUrl = session.url;
     let cancelled = false;
     setQrDataUrl(null);
     setQrGenerating(true);
-    void QRCode.toDataURL(session.url, { width: 220, margin: 1, errorCorrectionLevel: "M" })
+    void QRCode.toDataURL(qrUrl, { width: 220, margin: 1, errorCorrectionLevel: "M" })
       .then((url) => {
         if (!cancelled) {
           setQrDataUrl(url);
-          // #region agent log
-          fetch("http://127.0.0.1:7651/ingest/9914abac-1aa5-422c-92cf-5c3feb176a32", {
-            method: "POST",
-            headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "3ec0ad" },
-            body: JSON.stringify({
-              sessionId: "3ec0ad",
-              hypothesisId: "F",
-              location: "telegram-login-dialog:qrRender",
-              message: "qr rendered",
-              data: {
-                urlPrefix: session.url.slice(0, 32),
-                urlLen: session.url.length
-              },
-              timestamp: Date.now()
-            })
-          }).catch(() => {});
-          // #endregion
         }
       })
       .catch((err) => {
@@ -218,21 +202,7 @@ export function TelegramLoginDialog(props: Props): JSX.Element | null {
             callbacksRef.current.onMessage?.(message);
           }
         })
-        .catch((err) => {
-          // #region agent log
-          fetch("http://127.0.0.1:7651/ingest/9914abac-1aa5-422c-92cf-5c3feb176a32", {
-            method: "POST",
-            headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "3ec0ad" },
-            body: JSON.stringify({
-              sessionId: "3ec0ad",
-              hypothesisId: "D",
-              location: "telegram-login-dialog:poll",
-              message: "poll failed",
-              data: { error: err instanceof Error ? err.message : String(err) },
-              timestamp: Date.now()
-            })
-          }).catch(() => {});
-          // #endregion
+        .catch(() => {
         });
     }, pollMs);
 

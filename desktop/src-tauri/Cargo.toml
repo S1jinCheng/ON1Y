@@ -1,6 +1,6 @@
 [package]
 name = "on1y-desktop"
-version = "0.1.0"
+version = "0.1.1"
 description = "On1y desktop shell"
 authors = ["On1y"]
 edition = "2021"

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "on1y"
-version = "0.1.0"
+version = "0.1.1"
 description = "Personal information routing — Phase 1: ingestion and extraction"
 readme = "README.md"
 requires-python = ">=3.11"

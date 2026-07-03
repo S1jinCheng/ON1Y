@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "On1y",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "identifier": "app.on1y.desktop",
   "build": {
     "frontendDist": "../ui"
