@@ -107,8 +107,14 @@ def distill_raw_item(
     )
 
     client = get_llm_client()
+    if raw.platform.lower() == "telegram":
+        from on1y.distill.prompts import build_conversation_classify_system_prompt
+
+        system_prompt = build_conversation_classify_system_prompt(locale=lang, themes=active_themes)
+    else:
+        system_prompt = build_system_prompt(locale=lang, themes=active_themes)
     parsed = client.chat_json(
-        build_system_prompt(locale=lang, themes=active_themes),
+        system_prompt,
         user_prompt,
         max_tokens=settings.llm_max_output_tokens,
     )

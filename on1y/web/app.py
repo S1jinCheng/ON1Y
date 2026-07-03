@@ -195,6 +195,7 @@ class TelegramSettingsRequest(BaseModel):
     sync_chat_ids: list[str] | None = None
     interval_seconds: int | None = Field(default=None, ge=15, le=3600)
     auto_distill: bool | None = None
+    auto_tag: bool | None = None
     session_gap_minutes: int | None = Field(default=None, ge=1, le=720)
     min_session_chars: int | None = Field(default=None, ge=0, le=100_000)
     min_msg_count: int | None = Field(default=None, ge=1, le=1000)
@@ -210,6 +211,10 @@ class TelegramAuthSignInRequest(BaseModel):
     phone: str = Field(min_length=3, max_length=32)
     code: str = Field(min_length=3, max_length=16)
     password: str | None = Field(default=None, max_length=128)
+
+
+class TelegramQrPasswordRequest(BaseModel):
+    password: str = Field(min_length=1, max_length=128)
 
 
 class TelegramSyncRequest(BaseModel):
@@ -876,16 +881,23 @@ def create_app() -> FastAPI:
 
     @app.post("/api/telegram/settings")
     def telegram_settings_save(body: TelegramSettingsRequest) -> dict[str, Any]:
+        from on1y.telegram.auto_sync import start_telegram_sync_loop
         from on1y.telegram.settings import public_settings_view, save_settings
 
         save_settings(**body.model_dump(exclude_none=True))
+        start_telegram_sync_loop()
         return {"saved": True, **public_settings_view()}
 
     @app.post("/api/telegram/sync")
     def telegram_sync_run(body: TelegramSyncRequest) -> dict[str, Any]:
-        from on1y.telegram.auto_sync import run_telegram_sync_once
+        from on1y.auth.context import get_effective_user_id
+        from on1y.telegram.auto_sync import start_telegram_sync_manual
 
-        return run_telegram_sync_once(limit=body.limit, auto_distill=body.auto_distill)
+        return start_telegram_sync_manual(
+            user_id=get_effective_user_id(),
+            limit=body.limit,
+            auto_distill=body.auto_distill,
+        )
 
     @app.get("/api/telegram/sync/status")
     def telegram_sync_status_route() -> dict[str, Any]:
@@ -901,6 +913,46 @@ def create_app() -> FastAPI:
             return {"chats": rows, "count": len(rows)}
         finally:
             storage.close()
+
+    @app.get("/api/telegram/account")
+    def telegram_account_route(refresh: bool = Query(default=False)) -> dict[str, Any]:
+        from on1y.telegram.client import TelegramClientError, get_account_info
+
+        try:
+            return get_account_info(refresh_avatar=refresh)
+        except TelegramClientError as exc:
+            return {
+                "valid": False,
+                "account_id": None,
+                "account_name": None,
+                "username": None,
+                "avatar_url": None,
+                "detail": str(exc),
+                "verified_at": None,
+            }
+
+    @app.get("/api/telegram/account/avatar")
+    def telegram_account_avatar_route() -> Any:
+        from fastapi.responses import FileResponse
+
+        from on1y.auth.context import get_effective_user_id
+        from on1y.telegram.client import avatar_file_path, session_authorized
+
+        if not session_authorized():
+            raise HTTPException(status_code=404, detail="avatar not found")
+        path = avatar_file_path(user_id=get_effective_user_id())
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="avatar not found")
+        return FileResponse(path, media_type="image/jpeg")
+
+    @app.post("/api/telegram/auth/logout")
+    def telegram_auth_logout_route() -> dict[str, Any]:
+        from on1y.telegram.client import TelegramClientError, logout_session
+
+        try:
+            return logout_session()
+        except TelegramClientError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.post("/api/telegram/auth/send-code")
     def telegram_auth_send_code(body: TelegramAuthSendCodeRequest) -> dict[str, Any]:
@@ -919,9 +971,56 @@ def create_app() -> FastAPI:
             result = sign_in(phone=body.phone, code=body.code, password=body.password)
             if result.get("needs_password"):
                 raise HTTPException(status_code=400, detail="2FA password required")
-            return result
+            from on1y.telegram.client import get_account_info
+
+            account = get_account_info(refresh_avatar=True)
+            return {**result, "account": account}
         except HTTPException:
             raise
+        except TelegramClientError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/telegram/auth/qr/start")
+    def telegram_auth_qr_start(force: bool = Query(default=False)) -> dict[str, Any]:
+        from on1y.auth.context import get_effective_user_id
+        from on1y.telegram.client import TelegramClientError
+        from on1y.telegram.qr_auth import start_qr_login
+
+        try:
+            return start_qr_login(user_id=get_effective_user_id(), force=force)
+        except TelegramClientError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/telegram/auth/qr/{session_id}")
+    def telegram_auth_qr_poll(session_id: str) -> dict[str, Any]:
+        from on1y.auth.context import get_effective_user_id
+        from on1y.telegram.client import TelegramClientError
+        from on1y.telegram.qr_auth import poll_qr_login
+
+        try:
+            return poll_qr_login(session_id, user_id=get_effective_user_id())
+        except TelegramClientError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/telegram/auth/qr/{session_id}/cancel")
+    def telegram_auth_qr_cancel(session_id: str) -> dict[str, Any]:
+        from on1y.auth.context import get_effective_user_id
+        from on1y.telegram.qr_auth import cancel_qr_login
+
+        return cancel_qr_login(session_id, user_id=get_effective_user_id())
+
+    @app.post("/api/telegram/auth/qr/{session_id}/password")
+    def telegram_auth_qr_password(session_id: str, body: TelegramQrPasswordRequest) -> dict[str, Any]:
+        from on1y.auth.context import get_effective_user_id
+        from on1y.telegram.client import TelegramClientError
+        from on1y.telegram.qr_auth import complete_qr_password
+
+        try:
+            return complete_qr_password(
+                session_id,
+                password=body.password,
+                user_id=get_effective_user_id(),
+            )
         except TelegramClientError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -2558,7 +2657,28 @@ def create_app() -> FastAPI:
                 "unread",
                 "notes",
                 "continue",
+                "chats",
             }:
+                # #region agent log
+                try:
+                    import json
+                    import time
+                    from pathlib import Path
+
+                    payload = {
+                        "sessionId": "3ec0ad",
+                        "hypothesisId": "A",
+                        "location": "app.py:knowledge_items",
+                        "message": "unsupported collection rejected",
+                        "data": {"collection": coll},
+                        "timestamp": int(time.time() * 1000),
+                    }
+                    Path("debug-3ec0ad.log").open("a", encoding="utf-8").write(
+                        json.dumps(payload, ensure_ascii=False) + "\n"
+                    )
+                except Exception:
+                    pass
+                # #endregion
                 raise HTTPException(status_code=400, detail=f"unsupported collection: {collection}")
             hot_day: str | None = None
             hot_src: str | None = None

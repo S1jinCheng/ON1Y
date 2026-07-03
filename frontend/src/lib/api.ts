@@ -1333,6 +1333,7 @@ export type TelegramSettingsView = {
   sync_chat_ids: string[];
   interval_seconds: number;
   auto_distill: boolean;
+  auto_tag: boolean;
   session_gap_minutes: number;
   min_session_chars: number;
   min_msg_count: number;
@@ -1340,7 +1341,27 @@ export type TelegramSettingsView = {
   prefer_local_llm: boolean;
   session_authorized?: boolean;
   client_ready?: boolean;
+  api_configured?: boolean;
 };
+
+export type TelegramAccountInfo = {
+  valid: boolean | null;
+  account_id: string | null;
+  account_name: string | null;
+  username: string | null;
+  avatar_url: string | null;
+  detail: string | null;
+  verified_at: string | null;
+};
+
+export function getTelegramAccount(refresh = false): Promise<TelegramAccountInfo> {
+  const query = refresh ? "?refresh=true" : "";
+  return request<TelegramAccountInfo>(`/api/telegram/account${query}`);
+}
+
+export function logoutTelegram(): Promise<{ ok: boolean; logged_out: boolean }> {
+  return request("/api/telegram/auth/logout", { method: "POST" });
+}
 
 export function getTelegramSettings(): Promise<TelegramSettingsView> {
   return request<TelegramSettingsView>("/api/telegram/settings");
@@ -1359,20 +1380,14 @@ export function runTelegramSync(payload?: {
   limit?: number;
   auto_distill?: boolean;
 }): Promise<{
-  enabled: boolean;
-  reason: string;
-  scanned: number;
-  sessions: number;
-  imported: number;
-  skipped: number;
-  failed: number;
-  distilled?: number;
-  error_count?: number;
-  errors?: string[];
+  started: boolean;
+  running: boolean;
+  message?: string;
 }> {
   return request("/api/telegram/sync", {
     method: "POST",
-    body: JSON.stringify(payload ?? {})
+    body: JSON.stringify(payload ?? {}),
+    direct: true
   });
 }
 
@@ -1415,6 +1430,38 @@ export function signInTelegramAuth(payload: {
 export function getTelegramDialogs(limit = 100): Promise<{ dialogs: TelegramDialog[]; count: number }> {
   const query = new URLSearchParams({ limit: String(limit) });
   return request(`/api/telegram/dialogs?${query.toString()}`);
+}
+
+export type TelegramQrLoginView = {
+  session_id: string;
+  status: string;
+  url: string | null;
+  message?: string | null;
+};
+
+export function startTelegramQrLogin(force = false): Promise<TelegramQrLoginView> {
+  const query = force ? "?force=true" : "";
+  return request<TelegramQrLoginView>(`/api/telegram/auth/qr/start${query}`, { method: "POST" });
+}
+
+export function pollTelegramQrLogin(sessionId: string): Promise<TelegramQrLoginView> {
+  return request<TelegramQrLoginView>(`/api/telegram/auth/qr/${encodeURIComponent(sessionId)}`);
+}
+
+export function cancelTelegramQrLogin(sessionId: string): Promise<TelegramQrLoginView> {
+  return request(`/api/telegram/auth/qr/${encodeURIComponent(sessionId)}/cancel`, {
+    method: "POST"
+  });
+}
+
+export function completeTelegramQrPassword(
+  sessionId: string,
+  password: string
+): Promise<{ ok: boolean; authorized?: boolean }> {
+  return request(`/api/telegram/auth/qr/${encodeURIComponent(sessionId)}/password`, {
+    method: "POST",
+    body: JSON.stringify({ password })
+  });
 }
 
 export type ItemRelation = {

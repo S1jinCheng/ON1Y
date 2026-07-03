@@ -12,6 +12,7 @@ import {
   Loader2,
   QrCode,
   RefreshCw,
+  MessageCircle,
   SlidersHorizontal,
   Trash2,
   Upload,
@@ -226,6 +227,11 @@ export function SettingsCenter(props: Props): JSX.Element | null {
     { key: "general", label: L(locale, "通用", "General"), icon: <SlidersHorizontal className="h-4 w-4" /> },
     { key: "account", label: L(locale, "账号", "Account"), icon: <UserCircle2 className="h-4 w-4" /> },
     {
+      key: "chats",
+      label: L(locale, "聊天", "Chats"),
+      icon: <MessageCircle className="h-4 w-4" />
+    },
+    {
       key: "subscriptions",
       label: L(locale, "订阅与 Cookie", "Subscriptions & cookies"),
       icon: <Cookie className="h-4 w-4" />
@@ -291,6 +297,9 @@ export function SettingsCenter(props: Props): JSX.Element | null {
             ) : null}
             {tab === "account" ? (
               <AccountTab locale={locale} user={user} onUserUpdated={props.onUserUpdated} onMessage={props.onMessage} />
+            ) : null}
+            {tab === "chats" ? (
+              <ChatsTab locale={locale} onMessage={props.onMessage} />
             ) : null}
             {tab === "subscriptions" ? (
               <SubscriptionsTab locale={locale} onClose={onClose} onMessage={props.onMessage} />
@@ -928,8 +937,6 @@ function GeneralTab(props: {
         </div>
       </section>
 
-      <TelegramSettingsPanel locale={locale} onMessage={props.onMessage} />
-
       <section className="space-y-3">
         <h3 className="text-xs font-semibold uppercase tracking-wide text-neutral-400">
           {L(locale, "启动", "Startup")}
@@ -952,6 +959,27 @@ function GeneralTab(props: {
         </div>
       </section>
 
+    </div>
+  );
+}
+
+function ChatsTab(props: { locale: Locale; onMessage?: (message: string) => void }): JSX.Element {
+  const { locale } = props;
+  return (
+    <div className="space-y-6">
+      <section className="space-y-1">
+        <h3 className="text-sm font-semibold text-foreground">
+          {L(locale, "聊天归档", "Chat archive")}
+        </h3>
+        <p className="text-xs leading-relaxed text-muted">
+          {L(
+            locale,
+            "连接 Telegram 后，On1y 会定时拉取选中聊天并归档到「聊天」专栏。",
+            "Connect Telegram to sync selected chats into the Chats collection."
+          )}
+        </p>
+      </section>
+      <TelegramSettingsPanel locale={locale} onMessage={props.onMessage} />
     </div>
   );
 }

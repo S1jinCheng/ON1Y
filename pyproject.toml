@@ -42,6 +42,7 @@ dependencies = [
     "PyJWT>=2.8",
     "tzdata>=2024.1; sys_platform == 'win32'",
     "telethon>=1.36",
+    "python-socks[asyncio]>=2.4",
 ]
 
 [project.optional-dependencies]

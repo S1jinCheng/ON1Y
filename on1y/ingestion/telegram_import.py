@@ -142,6 +142,7 @@ def import_telegram_batch(
         "skipped": 0,
         "failed": 0,
         "distilled": 0,
+        "tagged": 0,
         "errors": [],
     }
     if not cfg.enabled:
@@ -316,12 +317,29 @@ def _process_chat_messages(
                     continue
                 report["imported"] += 1
                 imported += 1
+                from on1y.telegram.tagging import (
+                    apply_conversation_system_tags,
+                    classify_telegram_session,
+                )
+
+                apply_conversation_system_tags(
+                    storage,
+                    raw_id,
+                    contact=session.contact,
+                    chat_type=session.chat_type,
+                )
                 if should_distill:
                     try:
                         distill_raw_item(storage, raw_id)
                         report["distilled"] += 1
                     except Exception as exc:  # noqa: BLE001
                         report["errors"].append(f"distill #{raw_id}: {exc}")
+                elif cfg.auto_tag:
+                    try:
+                        if classify_telegram_session(storage, raw_id) is not None:
+                            report["tagged"] += 1
+                    except Exception as exc:  # noqa: BLE001
+                        report["errors"].append(f"tag #{raw_id}: {exc}")
                 if imported >= limit:
                     break
             except Exception as exc:  # noqa: BLE001
@@ -387,6 +405,7 @@ def _upsert_session(storage: StoragePort, session: TelegramSession) -> tuple[int
         "conversation": True,
         "author": session.contact,
         "author_avatar": _TELEGRAM_AVATAR,
+        "telegram_messages": _messages_meta(session),
     }
     raw = storage.upsert_raw_item(
         RawItemCreate(
@@ -402,6 +421,26 @@ def _upsert_session(storage: StoragePort, session: TelegramSession) -> tuple[int
         )
     )
     return int(raw.id), True
+
+
+def _messages_meta(session: TelegramSession) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for msg in session.messages:
+        text = _render_content(msg)
+        if not text:
+            continue
+        name = "我" if msg.is_self else (msg.sender or session.contact)
+        rows.append(
+            {
+                "sender": name,
+                "timestamp": msg.timestamp,
+                "time": _format_ts(msg.timestamp),
+                "text": text,
+                "is_self": msg.is_self,
+                "kind": msg.kind,
+            }
+        )
+    return rows
 
 
 def _build_transcript(session: TelegramSession) -> str:

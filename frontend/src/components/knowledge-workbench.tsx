@@ -37,6 +37,7 @@ import { ThemeMovePopover } from "@/components/theme-move-popover";
 import { NotesPanel } from "@/components/notes-panel";
 import { BooksDetailColumn, BooksListColumn } from "@/components/books-panel";
 import { invalidateNotePreviewCache } from "@/components/note-hover-preview";
+import { ConversationTranscriptPanel } from "@/components/conversation-transcript-panel";
 import { OriginalTextPanel } from "@/components/original-text-panel";
 import { ContentTypeIndicator } from "@/components/content-type-indicator";
 import { RelatedItemsSection } from "@/components/related-items-section";
@@ -87,8 +88,8 @@ import {
   uploadDocument
 } from "@/lib/api";
 import { handleExternalLinkClick } from "@/lib/open-external";
-import { t, type UiKey } from "@/lib/i18n";
 import { platformLabel } from "@/lib/platform-label";
+import { t, type UiKey } from "@/lib/i18n";
 import {
   type CreatorRow,
   type DynamicTagRow,
@@ -1004,6 +1005,11 @@ export default function KnowledgeWorkbench(): JSX.Element {
   const hideAiSummary =
     (reader?.body_text ?? "").trim().length > 0 &&
     (reader?.body_text ?? "").trim().length < SHORT_CONTENT_SUMMARY_MAX_CHARS;
+
+  const isConversation =
+    active?.platform === "telegram" || Boolean(reader?.is_conversation);
+  const chatWriteUp =
+    (reader?.reader_text ?? "").trim() || (active?.summary ?? "").trim();
 
   function buildItemsQuery(offset: number, limit = FEED_BATCH_SIZE) {
     return {
@@ -2001,11 +2007,38 @@ export default function KnowledgeWorkbench(): JSX.Element {
                   </a>
                 </div>
               </div>
-              <OriginalTextPanel
-                {...originalTextPanelProps}
-                expanded
-                onCollapse={() => setReaderExpanded(false)}
-              />
+              {isConversation ? (
+                <>
+                  <div className="mb-4 shrink-0 rounded-md border border-border bg-panel px-4 py-3">
+                    <p className="mb-2 text-xs font-medium uppercase tracking-wider text-muted">
+                      {ui("chatWriteUp")}
+                    </p>
+                    {chatWriteUp ? (
+                      <div className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">
+                        {chatWriteUp}
+                      </div>
+                    ) : (
+                      <p className="text-sm text-muted">{ui("chatWriteUpEmpty")}</p>
+                    )}
+                  </div>
+                  <ConversationTranscriptPanel
+                    locale={locale}
+                    bodyText={reader?.body_text ?? ""}
+                    structured={reader?.telegram_messages}
+                    emptyLabel={ui("noReaderText")}
+                    expandLabel={ui("expandReader")}
+                    collapseLabel={ui("collapseReader")}
+                    expanded
+                    onCollapse={() => setReaderExpanded(false)}
+                  />
+                </>
+              ) : (
+                <OriginalTextPanel
+                  {...originalTextPanelProps}
+                  expanded
+                  onCollapse={() => setReaderExpanded(false)}
+                />
+              )}
             </div>
           </Panel>
           <PanelResizeHandle className="w-px bg-border" />
@@ -2839,7 +2872,20 @@ export default function KnowledgeWorkbench(): JSX.Element {
                 </div>
               </div>
 
-              {(!isHotlist || isEconomistHotlist) && !hideAiSummary ? (
+              {isConversation ? (
+                <div className="border-b border-border px-4 py-3">
+                  <p className="mb-2 text-xs font-medium uppercase tracking-wider text-muted">
+                    {ui("chatWriteUp")}
+                  </p>
+                  {chatWriteUp ? (
+                    <div className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">
+                      {chatWriteUp}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-muted">{ui("chatWriteUpEmpty")}</p>
+                  )}
+                </div>
+              ) : (!isHotlist || isEconomistHotlist) && !hideAiSummary ? (
                 <div className="border-b border-border px-4 py-3">
                   <p className="mb-2 text-xs font-medium uppercase tracking-wider text-muted">
                     {ui("summary")}
@@ -2852,21 +2898,38 @@ export default function KnowledgeWorkbench(): JSX.Element {
 
               <div className="border-b border-border px-4 py-3">
                 <p className="mb-2 text-xs font-medium uppercase tracking-wider text-muted">
-                  {isHotlist && !isEconomistHotlist
-                    ? ui("hotlistBody")
-                    : ui("originalText")}
+                  {isConversation
+                    ? ui("chatTranscript")
+                    : isHotlist && !isEconomistHotlist
+                      ? ui("hotlistBody")
+                      : ui("originalText")}
                 </p>
-                <OriginalTextPanel
-                  {...originalTextPanelProps}
-                  onExpand={
-                    isHotlist || isEconomistHotlist
-                      ? undefined
-                      : () => {
-                          void handleMarkItemRead(active.raw_id);
-                          setReaderExpanded(true);
-                        }
-                  }
-                />
+                {isConversation ? (
+                  <ConversationTranscriptPanel
+                    locale={locale}
+                    bodyText={reader?.body_text ?? ""}
+                    structured={reader?.telegram_messages}
+                    emptyLabel={ui("noReaderText")}
+                    expandLabel={ui("expandReader")}
+                    collapseLabel={ui("collapseReader")}
+                    onExpand={() => {
+                      void handleMarkItemRead(active.raw_id);
+                      setReaderExpanded(true);
+                    }}
+                  />
+                ) : (
+                  <OriginalTextPanel
+                    {...originalTextPanelProps}
+                    onExpand={
+                      isHotlist || isEconomistHotlist
+                        ? undefined
+                        : () => {
+                            void handleMarkItemRead(active.raw_id);
+                            setReaderExpanded(true);
+                          }
+                    }
+                  />
+                )}
               </div>
 
               {(!isHotlist || isEconomistHotlist) && active ? (

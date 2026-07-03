@@ -166,6 +166,24 @@ Rules:
 - ALL text fields must be in {lang}."""
 
 
+def build_conversation_classify_system_prompt(*, locale: str, themes: list[dict[str, Any]]) -> str:
+    """Classify a time-bounded chat session: theme bucket + linkable topic tags."""
+    base = build_system_prompt(locale=locale, themes=themes)
+    if locale.lower().startswith("en"):
+        extra = """
+Chat-session rules (this is a time-bounded conversation transcript):
+- tags: name the main discussion topics (3-8). Use specific phrases so sessions on the same topic link together even if weeks apart.
+- Do NOT put the chat partner's name, "Telegram", or theme slugs into tags.
+- summary: what was discussed and any conclusion, max 2 sentences."""
+    else:
+        extra = """
+聊天会话规则（这是一段按时间切分的对话记录）：
+- tags：写出主要讨论主题（3-8 个），用具体短语，便于与间隔较久的同主题会话通过标签关联。
+- 不要把聊天对象姓名、「Telegram」或 theme 名称写进 tags。
+- summary：概括讨论内容与结论，最多 2 句。"""
+    return base + extra
+
+
 def build_reader_system_prompt(*, locale: str) -> str:
     lang = "English" if locale.lower().startswith("en") else "Chinese"
     return f"""Rewrite video subtitle/caption text as clean readable prose in {lang}.
@@ -174,27 +192,24 @@ Return plain text only (no JSON, no markdown fences). Max ~1200 words."""
 
 
 def build_conversation_reader_prompt(*, locale: str) -> str:
-    """Write up a 1-on-1 chat transcript as connected, de-noised prose."""
+    """Summarize what was discussed in a chat session as readable prose."""
     if locale.lower().startswith("en"):
         return (
-            "Rewrite the following 1-on-1 chat transcript as a clean, connected "
-            "written account in English.\n"
+            "Summarize the following chat session in clear written English.\n"
             "Goals:\n"
-            "- Preserve who said what, both sides' viewpoints, their reasoning, "
-            "and any conclusions reached.\n"
-            "- Merge fragmented bursts into coherent paragraphs; remove greetings, "
-            "filler, stickers, and entertainment noise.\n"
-            "- Keep it faithful: do NOT invent facts or opinions.\n"
-            "- Use the speaker's name or 'I' to attribute key points where it matters.\n"
+            "- State what topics were discussed and why they mattered.\n"
+            "- Capture each side's main points, reasoning, and any conclusions or open questions.\n"
+            "- Merge fragmented lines into coherent paragraphs; omit greetings, filler, and stickers.\n"
+            "- Stay faithful: do NOT invent facts or opinions.\n"
             "Return plain text only (no JSON, no markdown fences). Max ~1200 words."
         )
     return (
-        "把下面这段一对一聊天记录改写成连贯、书面化的交流纪要（用中文）。\n"
+        "把下面这段聊天会话总结成可读的书面纪要（用中文）。\n"
         "要求：\n"
-        "- 保留谁说了什么、双方的观点、论证过程，以及最终达成或未达成的结论。\n"
-        "- 把零碎的对话合并成连贯段落；去掉寒暄、口头禅、表情、贴纸等娱乐噪声。\n"
+        "- 说明讨论了哪些话题、各自的核心观点与论证。\n"
+        "- 写清双方达成了什么结论，或还有哪些未决问题。\n"
+        "- 合并零碎对话为连贯段落；省略寒暄、口头禅、表情贴纸等噪声。\n"
         "- 必须忠实，不得编造事实或观点。\n"
-        "- 在关键观点处用说话人姓名或「我」标明归属。\n"
         "只返回纯文本（不要 JSON，不要 markdown 代码块）。不超过约 1200 字。"
     )
 

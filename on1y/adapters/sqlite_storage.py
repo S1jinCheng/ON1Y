@@ -2312,6 +2312,10 @@ class SqliteStorage:
             "transcript_kind": transcript_kind,
             "translated_body_text": translated_body_text,
             "can_translate": transcript_kind == "en" and not translated_body_text,
+            "is_conversation": bool(meta.get("conversation")),
+            "telegram_messages": meta.get("telegram_messages")
+            if isinstance(meta.get("telegram_messages"), list)
+            else None,
             **author_info,
         }
 

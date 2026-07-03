@@ -287,6 +287,13 @@ class Settings(BaseSettings):
     llm_max_output_tokens: int = Field(default=384, ge=64, le=1024)
     llm_locale: str = Field(default="zh", pattern="^(zh|en)$")
 
+    # Telegram Client API (chat archive direct sync; shared app credentials)
+    telegram_api_id: int | None = Field(default=None)
+    telegram_api_hash: str | None = Field(default=None)
+    # Telegram MTProto proxy (optional). Does not inherit ON1Y_YTDLP_PROXY unless telegram_use_ytdlp_proxy=true.
+    telegram_proxy: str | None = Field(default=None)
+    telegram_use_ytdlp_proxy: bool = Field(default=False)
+
     @field_validator(
         "data_dir",
         "db_path",

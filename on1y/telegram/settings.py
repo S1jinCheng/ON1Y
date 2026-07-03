@@ -31,6 +31,7 @@ class TelegramSettings(BaseModel):
     sync_chat_ids: list[str] = Field(default_factory=list)
     interval_seconds: int = Field(default=300, ge=15, le=3600)
     auto_distill: bool = True
+    auto_tag: bool = True
     session_gap_minutes: int = Field(default=30, ge=1, le=720)
     min_session_chars: int = Field(default=400, ge=0, le=100_000)
     min_msg_count: int = Field(default=6, ge=1, le=1000)
@@ -87,6 +88,8 @@ def save_settings(*, user_id: int | None = None, **fields: Any) -> TelegramSetti
         update["interval_seconds"] = max(15, min(3600, interval))
     if "auto_distill" in fields and fields["auto_distill"] is not None:
         update["auto_distill"] = bool(fields["auto_distill"])
+    if "auto_tag" in fields and fields["auto_tag"] is not None:
+        update["auto_tag"] = bool(fields["auto_tag"])
     if "session_gap_minutes" in fields and fields["session_gap_minutes"] is not None:
         gap = int(fields["session_gap_minutes"])
         update["session_gap_minutes"] = max(1, min(720, gap))
@@ -114,9 +117,11 @@ def save_settings(*, user_id: int | None = None, **fields: Any) -> TelegramSetti
 
 def public_settings_view(*, user_id: int | None = None) -> dict[str, Any]:
     from on1y.telegram.client import client_configured, session_authorized
+    from on1y.telegram.credentials import api_credentials_configured
 
     settings = load_settings(user_id=user_id)
     payload = settings.model_dump()
+    payload["api_configured"] = api_credentials_configured(settings)
     payload["session_authorized"] = session_authorized(user_id=user_id)
     payload["client_ready"] = client_configured(settings) and payload["session_authorized"]
     return payload
@@ -138,7 +143,7 @@ def any_telegram_sync_enabled() -> bool:
 
     storage = get_storage()
     try:
-        user_ids = list_sync_user_ids(storage, current_user_only=True)
+        user_ids = list_sync_user_ids(storage, current_user_only=False)
     finally:
         storage.close()
     if not user_ids:

@@ -119,6 +119,15 @@ export type ReaderContent = {
   transcript_kind: TranscriptKind;
   translated_body_text: string | null;
   can_translate: boolean;
+  is_conversation?: boolean;
+  telegram_messages?: Array<{
+    sender?: string;
+    time?: string;
+    timestamp?: number;
+    text?: string;
+    is_self?: boolean;
+    kind?: string;
+  }> | null;
 };
 
 export type TaxonomyResponse = {

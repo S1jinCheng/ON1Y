@@ -112,6 +112,16 @@ def _first_working_proxy(candidates: list[str | None]) -> str | None:
     return None
 
 
+def effective_telegram_proxy(*, settings: Settings | None = None, user_id: int | None = None) -> str | None:
+    settings = settings or get_settings()
+    explicit = _normalize_proxy_url(settings.telegram_proxy or "")
+    if explicit:
+        return explicit
+    if settings.telegram_use_ytdlp_proxy:
+        return effective_ytdlp_proxy(settings=settings, user_id=user_id)
+    return None
+
+
 def effective_ytdlp_proxy(*, settings: Settings | None = None, user_id: int | None = None) -> str | None:
     settings = settings or get_settings()
     prefs = load_file_settings(user_id=user_id)

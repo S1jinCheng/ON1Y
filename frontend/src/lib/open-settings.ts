@@ -1,4 +1,4 @@
-export type SettingsTabKey = "general" | "account" | "subscriptions" | "ai" | "books" | "push" | "about";
+export type SettingsTabKey = "general" | "account" | "chats" | "subscriptions" | "ai" | "books" | "push" | "about";
 
 export const OPEN_SETTINGS_EVENT = "on1y-open-settings";
 export const SETTINGS_CLOSED_EVENT = "on1y-settings-closed";
