@@ -1,0 +1,5 @@
+# Normalize contributor display on GitHub (sidebar, commit chips, Insights).
+# Format: Canonical Name <email> Other Name <other-email>
+# https://git-scm.com/docs/gitmailmap
+
+S1jinCheng <Chengsijin815@gmail.com> Cursor <cursoragent@cursor.com>
