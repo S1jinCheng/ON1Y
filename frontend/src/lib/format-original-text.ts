@@ -206,19 +206,61 @@ function cleanSubtitleLines(raw: string): string[] {
   return dedupeLines(cleaned);
 }
 
+function restoreSubtitlePunctuation(line: string, nextLine?: string): string {
+  const value = line.trim();
+  if (!value || /[。！？.!?…；;：:]$/.test(value)) {
+    return value;
+  }
+  if (/[吗呢]$/.test(value) || /^(?:为什么|怎么|如何|是否|是不是|难道)/.test(value)) {
+    return value + "？";
+  }
+  if (/[啊呀哇]$/.test(value)) {
+    return value + "！";
+  }
+  if (/(?:因为|如果|虽然|但是|不过|所以|因此|然后|而且|以及|当|让|把|被|对|从|在|和|与)$/.test(value)) {
+    return value + "，";
+  }
+  const next = (nextLine || "").trim();
+  if (next && /^(?:所以|因此|但是|不过|然后|而且|以及|这|那|它|我们|你们|他们|如果|虽然)/.test(next)) {
+    return value + "，";
+  }
+  if (/[\u4e00-\u9fff]/.test(value)) {
+    return value + "。";
+  }
+  return value;
+}
+
+function normalizeSubtitleSpacing(line: string): string {
+  return line
+    .replace(/([\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])/g, "$1")
+    .replace(/\s+([，。！？；：、）】》」』])/g, "$1")
+    .replace(/([（【《「『])\s+/g, "$1")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 function groupLinesIntoParagraphs(lines: string[]): string[] {
   const paragraphs: string[] = [];
   let buffer = "";
 
   function flush(): void {
-    const value = buffer.trim();
+    const value = restoreSubtitlePunctuation(
+      normalizeSubtitleSpacing(buffer).replace(
+        /([，。！？；：、])\s+(?=[\u4e00-\u9fff])/g,
+        "$1"
+      )
+    );
     if (value) {
       paragraphs.push(value);
     }
     buffer = "";
   }
 
-  for (const line of lines) {
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = restoreSubtitlePunctuation(
+      normalizeSubtitleSpacing(lines[index]),
+      normalizeSubtitleSpacing(lines[index + 1] || "")
+    );
     if (HEADING_LINE.test(line)) {
       flush();
       paragraphs.push(line);
@@ -231,6 +273,16 @@ function groupLinesIntoParagraphs(lines: string[]): string[] {
   }
   flush();
   return paragraphs;
+}
+
+/** Return readable Markdown while preserving headings and normal Markdown blocks. */
+export function formatMarkdownForReading(
+  raw: string | null | undefined,
+  options?: { locale?: Locale; translatedBodyText?: string | null }
+): string {
+  const locale = options?.locale ?? "zh";
+  const picked = pickLocaleTranscript(raw ?? "", locale, options?.translatedBodyText);
+  return picked.text.trim() ? proseFromSection(picked.text) : "";
 }
 
 function proseFromSection(text: string): string {

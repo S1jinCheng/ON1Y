@@ -6,6 +6,7 @@ import ReactMarkdown from "react-markdown";
 
 import {
   formatOriginalText,
+  formatMarkdownForReading,
   originalTextToHtml,
   pickLocaleTranscript
 } from "@/lib/format-original-text";
@@ -83,8 +84,11 @@ export function OriginalTextPanel(props: OriginalTextPanelProps): JSX.Element {
     if (explicit) {
       return explicit;
     }
-    return (bodyText ?? "").trim();
-  }, [markdownText, bodyText]);
+    return formatMarkdownForReading(explicit || bodyText, {
+      locale,
+      translatedBodyText
+    });
+  }, [markdownText, bodyText, locale, translatedBodyText]);
 
   const txtExport = cleaned || bodyText.trim();
   const hasContent = Boolean(txtExport || isNoSubtitle);
