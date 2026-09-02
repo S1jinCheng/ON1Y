@@ -28,6 +28,20 @@ from on1y.utils.json_util import dumps_json, dumps_meta, loads_json_list, loads_
 
 logger = logging.getLogger(__name__)
 
+
+def _source_meta_int(meta: dict[str, Any], *keys: str) -> int | None:
+    social_stats = meta.get("social_stats")
+    if not isinstance(social_stats, dict):
+        social_stats = {}
+    for key in keys:
+        value = _as_int_or_none(meta.get(key))
+        if value is not None:
+            return value
+        value = _as_int_or_none(social_stats.get(key))
+        if value is not None:
+            return value
+    return None
+
 SCHEMA_VERSION = 20
 SCHEMA_PATH = PROJECT_ROOT / "sql" / "schema.sql"
 SCHEMA_V2_PATH = PROJECT_ROOT / "sql" / "schema_v2.sql"
@@ -2293,6 +2307,10 @@ class SqliteStorage:
             "url": item_url,
             "title": row["raw_title"],
             "platform": str(row["platform"]),
+            "published_at": published_at_iso(meta),
+            "duration_sec": _source_meta_int(meta, "duration_sec", "duration"),
+            "like_count": _source_meta_int(meta, "like_count", "likes", "voteup_count"),
+            "comment_count": _source_meta_int(meta, "comment_count", "comments", "reply_count"),
             "body_text": display_body,
             "raw_body_text": body_text,
             "summary": row["summary"],
@@ -3809,6 +3827,9 @@ class SqliteStorage:
                     else "unknown",
                     "ingested_at": row["ingested_at"],
                     "published_at": published_at_iso(meta),
+                    "duration_sec": _source_meta_int(meta, "duration_sec", "duration"),
+                    "like_count": _source_meta_int(meta, "like_count", "likes", "voteup_count"),
+                    "comment_count": _source_meta_int(meta, "comment_count", "comments", "reply_count"),
                     "feed_label": str(meta.get("feed_label") or "").strip() or None,
                     "hot_rank": meta.get("hot_rank"),
                     "heat_text": str(meta.get("heat_text") or "").strip() or None,

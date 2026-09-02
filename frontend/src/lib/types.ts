@@ -54,6 +54,9 @@ export type KnowledgeItem = {
   content_type?: ContentTypeValue | string | null;
   ingested_at: string | null;
   published_at?: string | null;
+  duration_sec?: number | null;
+  like_count?: number | null;
+  comment_count?: number | null;
   feed_label?: string | null;
   hot_rank?: number | null;
   heat_text?: string | null;
@@ -96,6 +99,10 @@ export type ReaderContent = {
   url: string;
   title: string | null;
   platform: string;
+  published_at?: string | null;
+  duration_sec?: number | null;
+  like_count?: number | null;
+  comment_count?: number | null;
   body_text: string | null;
   raw_body_text?: string | null;
   summary: string | null;

@@ -6,9 +6,11 @@ import {
   BookOpen,
   CheckSquare,
   ChevronDown,
+  Clock,
   ExternalLink,
   Flame,
   Forward,
+  Heart,
   Inbox,
   Network,
   MessageCircle,
@@ -89,6 +91,7 @@ import {
 } from "@/lib/api";
 import { handleExternalLinkClick } from "@/lib/open-external";
 import { platformLabel } from "@/lib/platform-label";
+import { formatPublishedAt } from "@/lib/format-published-at";
 import { t, type UiKey } from "@/lib/i18n";
 import {
   type CreatorRow,
@@ -244,6 +247,69 @@ function extractStrategyLabel(strategy: string | null | undefined, locale: Local
     return locale === "zh" ? "网页回退" : "HTML fallback";
   }
   return key || (locale === "zh" ? "抽取" : "Extract");
+}
+
+function formatDurationSeconds(value: number | null | undefined): string | null {
+  if (value === null || value === undefined || !Number.isFinite(value) || value <= 0) {
+    return null;
+  }
+  const total = Math.floor(value);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+  if (hours > 0) {
+    return hours + ":" + String(minutes).padStart(2, "0") + ":" + String(seconds).padStart(2, "0");
+  }
+  return minutes + ":" + String(seconds).padStart(2, "0");
+}
+
+function formatSocialCount(value: number | null | undefined, locale: Locale): string | null {
+  if (value === null || value === undefined || !Number.isFinite(value) || value < 0) {
+    return null;
+  }
+  return new Intl.NumberFormat(locale === "zh" ? "zh-CN" : "en-US", {
+    notation: "compact",
+    maximumFractionDigits: 1
+  }).format(value);
+}
+
+function ActiveItemMeta(props: { item: KnowledgeItem; locale: Locale; ui: (key: UiKey) => string }): JSX.Element | null {
+  const { item, locale, ui } = props;
+  const published = formatPublishedAt(item.published_at || item.ingested_at, locale);
+  const duration = item.content_type === "video" ? formatDurationSeconds(item.duration_sec) : null;
+  const likes = formatSocialCount(item.like_count, locale);
+  const comments = formatSocialCount(item.comment_count, locale);
+  if (!published && !duration && !likes && !comments) {
+    return null;
+  }
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted">
+      {published ? (
+        <span className="inline-flex items-center gap-1" title={ui("publishedAt")}>
+          <Clock className="h-3.5 w-3.5" aria-hidden />
+          {published}
+        </span>
+      ) : null}
+      {duration ? (
+        <span className="inline-flex items-center gap-1" title={ui("videoDuration")}>
+          <span aria-hidden>◷</span>
+          {duration}
+        </span>
+      ) : null}
+      {likes ? (
+        <span className="inline-flex items-center gap-1" title={ui("likes")}>
+          <Heart className="h-3.5 w-3.5" aria-hidden />
+          {likes}
+        </span>
+      ) : null}
+      {comments ? (
+        <span className="inline-flex items-center gap-1" title={ui("comments")}>
+          <MessageCircle className="h-3.5 w-3.5" aria-hidden />
+          {comments}
+        </span>
+      ) : null}
+    </div>
+  );
 }
 
 function escapeHtml(input: string): string {
@@ -2793,6 +2859,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
                       <ExternalLink className="h-3 w-3" />
                     </a>
                   ) : null}
+                  <ActiveItemMeta item={active} locale={locale} ui={ui} />
                   <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
                     <span className="text-xs text-muted">{ui("sourcePlatform")}</span>
                     <span className="rounded bg-soft px-2 py-0.5 text-xs font-medium text-foreground">
