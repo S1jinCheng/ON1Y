@@ -212,6 +212,20 @@ def backfill_bilibili_collections(
                     "backfill": True,
                     "source": "bilibili_fav_api",
                 }
+                for key in ("like_count", "comment_count", "like", "comment", "video_review"):
+                    if media.get(key) is not None:
+                        try:
+                            normalized_count = max(0, int(media[key]))
+                        except (TypeError, ValueError):
+                            continue
+                        target_key = (
+                            "like_count"
+                            if key == "like"
+                            else "comment_count"
+                            if key in {"comment", "video_review"}
+                            else key
+                        )
+                        meta[target_key] = normalized_count
                 pub_raw = media.get("pubtime") or media.get("publish_time")
                 if pub_raw is not None:
                     try:

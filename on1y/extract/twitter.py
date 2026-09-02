@@ -89,5 +89,7 @@ class TwitterExtractor(PlaywrightExtractor):
             source_meta={
                 "twitter_kind": extracted.kind,
                 "twitter_status_url": extracted.status_url,
+                "published": extracted.published,
+                "social_stats": extracted.social_stats or {},
             },
         )

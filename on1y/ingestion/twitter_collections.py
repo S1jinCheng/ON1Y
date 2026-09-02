@@ -63,17 +63,20 @@ def _enqueue_status_refs(
             continue
 
         title = ref.preview or f"{folder_name} {ref.status_id}"
+        meta = {
+            "platform": "twitter",
+            "feed_label": feed_label,
+            "entry_title": title[:500],
+            "status_id": ref.status_id,
+            "folder_name": folder_name,
+        }
+        if ref.published:
+            meta["published"] = ref.published
         enqueue_url(
             storage,
             normalize_twitter_status_url(ref.url),
             source=SourceType.COLLECTION,
-            source_meta={
-                "platform": "twitter",
-                "feed_label": feed_label,
-                "entry_title": title[:500],
-                "status_id": ref.status_id,
-                "folder_name": folder_name,
-            },
+            source_meta=meta,
         )
         report["enqueued"] += 1
     return report

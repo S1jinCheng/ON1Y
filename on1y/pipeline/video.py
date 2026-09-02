@@ -116,6 +116,10 @@ def process_video_fast(
         meta_dict["video_id"] = str(meta.video_id)
     if meta.duration_sec:
         meta_dict["duration_sec"] = int(meta.duration_sec)
+    if meta.like_count is not None:
+        meta_dict["like_count"] = int(meta.like_count)
+    if meta.comment_count is not None:
+        meta_dict["comment_count"] = int(meta.comment_count)
 
     create = RawItemCreate(
         url=normalized,

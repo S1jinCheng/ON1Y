@@ -16,6 +16,8 @@ class VideoMetadata:
     cover_image: str | None = None
     channel_id: str | None = None
     duration_sec: int | None = None
+    like_count: int | None = None
+    comment_count: int | None = None
     upload_timestamp: int | None = None
     live_status: str | None = None
     is_live: bool = False

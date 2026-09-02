@@ -103,6 +103,41 @@ def _target_title(target: dict[str, Any]) -> str:
     return str(target.get("url") or "Zhihu item")
 
 
+def _target_social_stats(target: dict[str, Any]) -> dict[str, int]:
+    """Pick engagement counters when Zhihu includes them in a target payload."""
+    stats = target.get("stats") if isinstance(target.get("stats"), dict) else {}
+
+    def first_int(*values: Any) -> int | None:
+        for value in values:
+            try:
+                parsed = int(value)
+            except (TypeError, ValueError):
+                continue
+            if parsed >= 0:
+                return parsed
+        return None
+
+    result: dict[str, int] = {}
+    likes = first_int(
+        target.get("voteup_count"),
+        target.get("like_count"),
+        target.get("likes"),
+        stats.get("voteup_count"),
+        stats.get("like_count"),
+    )
+    comments = first_int(
+        target.get("comment_count"),
+        target.get("comments"),
+        stats.get("comment_count"),
+        stats.get("comments"),
+    )
+    if likes is not None:
+        result["like_count"] = likes
+    if comments is not None:
+        result["comment_count"] = comments
+    return result
+
+
 def iter_following_moments(
     client: httpx.Client,
     *,
@@ -268,19 +303,21 @@ def poll_zhihu_following_moments(
                     token = str(author.get("url_token") or "").strip()
                 label = slug_label("activities", token or author_name)
                 title = _target_title(target)
+                meta = {
+                    "platform": "zhihu",
+                    "feed_label": label,
+                    "entry_title": title,
+                    "published": created_ts,
+                    "entry_published": _activity_created_iso(created_ts),
+                    "subscription_source": "zhihu_moments",
+                    "author_name": author_name,
+                }
+                meta.update(_target_social_stats(target))
                 enqueue_url(
                     storage,
                     url,
                     source=SourceType.RSS,
-                    source_meta={
-                        "platform": "zhihu",
-                        "feed_label": label,
-                        "entry_title": title,
-                        "published": created_ts,
-                        "entry_published": _activity_created_iso(created_ts),
-                        "subscription_source": "zhihu_moments",
-                        "author_name": author_name,
-                    },
+                    source_meta=meta,
                 )
                 report["enqueued"] += 1
                 progress and progress.log_item(
@@ -483,19 +520,21 @@ def poll_zhihu_follow_activities(
                         report["skipped_existing"] += 1
                         continue
                     title = _target_title(target)
+                    meta = {
+                        "platform": "zhihu",
+                        "feed_label": label,
+                        "entry_title": title,
+                        "published": created_ts,
+                        "entry_published": _activity_created_iso(created_ts),
+                        "subscription_source": "zhihu_api",
+                        "author_name": name,
+                    }
+                    meta.update(_target_social_stats(target))
                     enqueue_url(
                         storage,
                         url,
                         source=SourceType.RSS,
-                        source_meta={
-                            "platform": "zhihu",
-                            "feed_label": label,
-                            "entry_title": title,
-                            "published": created_ts,
-                            "entry_published": _activity_created_iso(created_ts),
-                            "subscription_source": "zhihu_api",
-                            "author_name": name,
-                        },
+                        source_meta=meta,
                     )
                     report["enqueued"] += 1
                     progress and progress.log_item(

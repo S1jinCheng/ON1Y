@@ -486,6 +486,34 @@ _EXTRACT_STATUS_JS = """
     return { author, handle };
   };
 
+  const parseMetric = (label) => {
+    const match = String(label || '').replace(/,/g, '').match(/(\d+(?:\.\d+)?)\s*([KMB万亿])?/i);
+    if (!match) return null;
+    const number = Number(match[1]);
+    const suffix = String(match[2] || '').toLowerCase();
+    const multiplier = suffix === 'k' ? 1e3
+      : suffix === 'm' ? 1e6
+      : suffix === 'b' ? 1e9
+      : suffix === '万' ? 1e4
+      : suffix === '亿' ? 1e8
+      : 1;
+    return Number.isFinite(number) ? Math.round(number * multiplier) : null;
+  };
+
+  const socialStats = (root) => {
+    const find = (testid) => {
+      const el = root.querySelector('[data-testid="' + testid + '"]');
+      if (!el) return null;
+      return parseMetric(el.getAttribute('aria-label') || el.innerText || '');
+    };
+    const result = {};
+    const likes = find('like');
+    const replies = find('reply');
+    if (likes !== null) result.like_count = likes;
+    if (replies !== null) result.comment_count = replies;
+    return result;
+  };
+
   const statusLink = (root) => {
     const timeParent = root.querySelector('a[href*="/status/"] time');
     const link = timeParent && timeParent.parentElement
@@ -628,6 +656,7 @@ _EXTRACT_STATUS_JS = """
   const social = article.querySelector('[data-testid="socialContext"]');
   const socialText = social ? (social.innerText || '').trim() : '';
   const isRetweet = /reposted|retweeted|转推|转发了/i.test(socialText);
+  const timeEl = article.querySelector('time[datetime]');
 
   const card = article.querySelector('[data-testid="card.wrapper"]');
   const postUrl = statusLink(article);
@@ -668,6 +697,8 @@ _EXTRACT_STATUS_JS = """
     main,
     embedded,
     is_retweet: isRetweet,
+    published: timeEl ? timeEl.getAttribute('datetime') : null,
+    social_stats: socialStats(article),
   };
 }
 """
@@ -682,6 +713,8 @@ class TwitterStatusExtract:
     author_url: str | None
     kind: str
     status_url: str | None
+    published: str | None = None
+    social_stats: dict[str, int] | None = None
 
 
 def _extract_status_payload(page: Any, url: str) -> dict[str, Any]:
@@ -742,6 +775,10 @@ def extract_twitter_status_from_page(page: Any, url: str) -> TwitterStatusExtrac
         author_url=author_url,
         kind=str(payload.get("kind") or "tweet"),
         status_url=str(payload.get("url") or "").strip() or None,
+        published=str(payload.get("published") or "").strip() or None,
+        social_stats=payload.get("social_stats")
+        if isinstance(payload.get("social_stats"), dict)
+        else None,
     )
 
 

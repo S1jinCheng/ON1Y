@@ -43,6 +43,8 @@ def video_metadata_from_info(info: dict[str, Any] | None) -> VideoMetadata:
     uploader_avatar = _uploader_avatar_from_info(info) or youtube_channel_avatar_url(channel_id)
     duration = info.get("duration")
     duration_sec = int(duration) if isinstance(duration, (int, float)) and duration > 0 else None
+    like_count = _positive_int(info.get("like_count"))
+    comment_count = _positive_int(info.get("comment_count"))
     live_status, is_live, was_live = live_flags_from_info(info)
     return VideoMetadata(
         title=info.get("title"),
@@ -54,11 +56,21 @@ def video_metadata_from_info(info: dict[str, Any] | None) -> VideoMetadata:
         cover_image=_cover_from_info(info),
         channel_id=channel_id,
         duration_sec=duration_sec,
+        like_count=like_count,
+        comment_count=comment_count,
         upload_timestamp=upload_timestamp_from_info(info),
         live_status=live_status,
         is_live=is_live,
         was_live=was_live,
     )
+
+
+def _positive_int(value: Any) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 else None
 
 
 def _uploader_avatar_from_info(info: dict[str, Any]) -> str | None:

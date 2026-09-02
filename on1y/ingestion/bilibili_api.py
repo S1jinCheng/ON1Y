@@ -375,6 +375,37 @@ def _dynamic_skip_reason(item: dict[str, Any]) -> str:
     return "other"
 
 
+def _video_social_stats(payload: dict[str, Any]) -> dict[str, int]:
+    """Normalize optional Bilibili API engagement counters."""
+    stat = payload.get("stat") or payload.get("statistics") or {}
+    if not isinstance(stat, dict):
+        stat = {}
+
+    def first_int(*values: Any) -> int | None:
+        for value in values:
+            try:
+                parsed = int(value)
+            except (TypeError, ValueError):
+                continue
+            if parsed >= 0:
+                return parsed
+        return None
+
+    result: dict[str, int] = {}
+    like_count = first_int(payload.get("like"), payload.get("likes"), stat.get("like"))
+    comment_count = first_int(
+        payload.get("comment"),
+        payload.get("comments"),
+        payload.get("video_review"),
+        stat.get("reply"),
+    )
+    if like_count is not None:
+        result["like_count"] = like_count
+    if comment_count is not None:
+        result["comment_count"] = comment_count
+    return result
+
+
 def parse_dynamic_video_item(item: dict[str, Any]) -> dict[str, Any] | None:
     """Extract video upload from a following-dynamics feed item (投稿视频 only)."""
     if not isinstance(item, dict):
@@ -437,6 +468,7 @@ def parse_dynamic_video_item(item: dict[str, Any]) -> dict[str, Any] | None:
         "uname": str(author_mod.get("name") or up_mid).strip(),
         "duration_sec": duration_sec,
     }
+    parsed.update(_video_social_stats(archive))
     if up_face:
         parsed["up_face"] = up_face
     return parsed
@@ -467,6 +499,7 @@ def _space_arc_to_parsed(arc: dict[str, Any], *, up_mid: str, uname: str, up_fac
         "uname": uname,
         "duration_sec": duration_sec,
     }
+    parsed.update(_video_social_stats(arc))
     if up_face:
         parsed["up_face"] = up_face
     return parsed

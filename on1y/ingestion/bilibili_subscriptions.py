@@ -188,7 +188,7 @@ def _sort_ups_for_poll(storage: StoragePort, ups: list[dict[str, str]]) -> list[
 
 
 def _dynamic_to_arc(parsed: dict[str, Any]) -> dict[str, Any]:
-    return {
+    arc = {
         "bvid": parsed.get("bvid"),
         "title": parsed.get("title"),
         "created": parsed.get("created"),
@@ -197,6 +197,10 @@ def _dynamic_to_arc(parsed: dict[str, Any]) -> dict[str, Any]:
         "pic": parsed.get("pic"),
         "duration": parsed.get("duration_sec"),
     }
+    for key in ("like_count", "comment_count"):
+        if parsed.get(key) is not None:
+            arc[key] = parsed[key]
+    return arc
 
 
 def poll_bilibili_dynamic_updates(
@@ -603,6 +607,14 @@ def _enqueue_bilibili_video(
         meta["initial_snapshot"] = True
     if backfill:
         meta["backfill"] = True
+    if duration_sec is not None:
+        meta["duration_sec"] = duration_sec
+    for key in ("like_count", "comment_count"):
+        if arc.get(key) is not None:
+            try:
+                meta[key] = max(0, int(arc[key]))
+            except (TypeError, ValueError):
+                pass
     meta.update(
         author_meta_patch(
             author=uname,
