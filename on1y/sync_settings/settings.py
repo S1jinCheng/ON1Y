@@ -12,6 +12,8 @@ from on1y.config import Settings, get_settings
 
 logger = logging.getLogger(__name__)
 
+_COLLECTIONS_PLATFORMS = ("bilibili", "zhihu", "youtube", "twitter")
+
 _INT_BOUNDS: dict[str, tuple[int, int]] = {
     "zhihu_api_poll_max_followees": (1, 200),
     "zhihu_api_poll_max_pages": (1, 20),
@@ -47,6 +49,7 @@ _BOOL_KEYS = frozenset(
 
 _STR_KEYS = frozenset(
     {
+        "collections_sync_platforms",
         "zhihu_follow_sync_mode",
         "zhihu_rsshub_base",
         "bilibili_up_poll_mode",
@@ -62,6 +65,7 @@ EFFECTIVE_KEYS: tuple[str, ...] = (
     "zhihu_follow_sync_mode",
     "zhihu_rsshub_base",
     "youtube_auto_refresh_channels",
+    "collections_sync_platforms",
     "zhihu_auto_refresh_follows",
     "auto_sync_enabled",
     "auto_sync_interval_minutes",
@@ -140,6 +144,16 @@ def save_sync_settings(*, user_id: int | None = None, **fields: Any) -> dict[str
             mode = str(raw).strip().lower()
             if mode in {"dynamic", "space"}:
                 current[key] = mode
+        elif key == "collections_sync_platforms":
+            values: list[str] = []
+            seen: set[str] = set()
+            for part in str(raw).replace(";", ",").split(","):
+                name = part.strip().lower()
+                if name in _COLLECTIONS_PLATFORMS and name not in seen:
+                    seen.add(name)
+                    values.append(name)
+            if values:
+                current[key] = ",".join(values)
         elif key in _STR_KEYS:
             text = str(raw or "").strip().rstrip("/")
             if text:

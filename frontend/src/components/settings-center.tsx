@@ -228,22 +228,37 @@ export function SettingsCenter(props: Props): JSX.Element | null {
   }
 
   const tabs: { key: TabKey; label: string; icon: JSX.Element }[] = [
-    { key: "general", label: L(locale, "通用", "General"), icon: <SlidersHorizontal className="h-4 w-4" /> },
+    { key: "general", label: L(locale, "应用", "App"), icon: <SlidersHorizontal className="h-4 w-4" /> },
     { key: "account", label: L(locale, "账号", "Account"), icon: <UserCircle2 className="h-4 w-4" /> },
-    {
-      key: "chats",
-      label: L(locale, "聊天", "Chats"),
-      icon: <MessageCircle className="h-4 w-4" />
-    },
-    {
-      key: "subscriptions",
-      label: L(locale, "订阅与 Cookie", "Subscriptions & cookies"),
-      icon: <Cookie className="h-4 w-4" />
-    },
+    { key: "chats", label: L(locale, "聊天", "Chats"), icon: <MessageCircle className="h-4 w-4" /> },
+    { key: "subscriptions", label: L(locale, "同步", "Sync"), icon: <Cookie className="h-4 w-4" /> },
     { key: "ai", label: L(locale, "AI", "AI"), icon: <Bot className="h-4 w-4" /> },
     { key: "books", label: L(locale, "图书", "Books"), icon: <BookOpen className="h-4 w-4" /> },
     { key: "push", label: L(locale, "推送", "Delivery"), icon: <KeyRound className="h-4 w-4" /> },
     { key: "about", label: L(locale, "关于", "About"), icon: <Info className="h-4 w-4" /> }
+  ];
+
+  const tabGroups: { label: string; keys: TabKey[] }[] = [
+    {
+      label: L(locale, "应用", "App"),
+      keys: ["general"]
+    },
+    {
+      label: L(locale, "连接", "Connections"),
+      keys: ["account", "chats"]
+    },
+    {
+      label: L(locale, "内容", "Content"),
+      keys: ["subscriptions", "books"]
+    },
+    {
+      label: L(locale, "服务", "Services"),
+      keys: ["ai", "push"]
+    },
+    {
+      label: L(locale, "其他", "Other"),
+      keys: ["about"]
+    }
   ];
 
   return (
@@ -253,21 +268,36 @@ export function SettingsCenter(props: Props): JSX.Element | null {
           <div className="px-2 py-2 text-sm font-semibold tracking-tight text-foreground">
             {L(locale, "设置", "Settings")}
           </div>
-          <nav className="mt-1 space-y-0.5">
-            {tabs.map((item) => (
-              <button
-                key={item.key}
-                type="button"
-                onClick={() => setTab(item.key)}
-                className={`flex w-full items-center gap-2.5 rounded-lg border-l-2 py-2 pl-2 pr-2.5 text-left text-sm transition ${
-                  tab === item.key
-                    ? "border-accent bg-surface font-medium text-foreground shadow-sm"
-                    : "border-transparent text-muted hover:bg-surface/70 hover:text-foreground"
-                }`}
-              >
-                {item.icon}
-                <span className="truncate">{item.label}</span>
-              </button>
+          <nav className="mt-1 space-y-3">
+            {tabGroups.map((group) => (
+              <div key={group.label}>
+                <div className="mb-1 px-2 text-[10px] font-semibold uppercase tracking-wider text-muted/70">
+                  {group.label}
+                </div>
+                <div className="space-y-0.5">
+                  {group.keys.map((key) => {
+                    const item = tabs.find((candidate) => candidate.key === key);
+                    if (!item) {
+                      return null;
+                    }
+                    return (
+                      <button
+                        key={item.key}
+                        type="button"
+                        onClick={() => setTab(item.key)}
+                        className={`flex w-full items-center gap-2.5 rounded-lg border-l-2 py-2 pl-2 pr-2.5 text-left text-sm transition ${
+                          tab === item.key
+                            ? "border-accent bg-surface font-medium text-foreground shadow-sm"
+                            : "border-transparent text-muted hover:bg-surface/70 hover:text-foreground"
+                        }`}
+                      >
+                        {item.icon}
+                        <span className="truncate">{item.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
             ))}
           </nav>
           <div className="mt-auto px-2 py-2 text-[11px] text-muted">
@@ -1326,6 +1356,12 @@ function SubscriptionsTab(props: {
   const [autoSyncBatchSize, setAutoSyncBatchSize] = useState(25);
   const [collectionsSyncEnabled, setCollectionsSyncEnabled] = useState(true);
   const [collectionsSyncSeconds, setCollectionsSyncSeconds] = useState(120);
+  const [collectionsSyncPlatforms, setCollectionsSyncPlatforms] = useState<string[]>([
+    "bilibili",
+    "zhihu",
+    "youtube",
+    "twitter"
+  ]);
 
   async function reloadCookies(fullVerify = false): Promise<void> {
     setCookiesLoading(true);
@@ -1393,6 +1429,13 @@ function SubscriptionsTab(props: {
     setAutoSyncBatchSize(syncSettings.auto_sync_pipeline_batch_size ?? 25);
     setCollectionsSyncEnabled(Boolean(syncSettings.collections_sync_enabled));
     setCollectionsSyncSeconds(syncSettings.collections_sync_interval_seconds);
+    const collectionPlatforms = String(syncSettings.collections_sync_platforms || "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter((value) => SUB_PLATFORMS.some((platform) => platform.key === value));
+    setCollectionsSyncPlatforms(
+      collectionPlatforms.length > 0 ? collectionPlatforms : SUB_PLATFORMS.map((platform) => platform.key)
+    );
   }
 
   function syncSettingsPayload(): Partial<SyncSettingsView> {
@@ -1417,7 +1460,8 @@ function SubscriptionsTab(props: {
       auto_sync_interval_minutes: autoSyncMinutes,
       auto_sync_pipeline_batch_size: autoSyncBatchSize,
       collections_sync_enabled: collectionsSyncEnabled,
-      collections_sync_interval_seconds: collectionsSyncSeconds
+      collections_sync_interval_seconds: collectionsSyncSeconds,
+      collections_sync_platforms: collectionsSyncPlatforms.join(",")
     };
   }
 
@@ -2113,6 +2157,37 @@ function SubscriptionsTab(props: {
                 setCollectionsSyncSeconds(Math.max(30, Math.min(3600, Number(e.target.value) || 120)))
               }
             />
+            <FieldLabel>{L(locale, "收藏夹平台", "Collection platforms")}</FieldLabel>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {SUB_PLATFORMS.map((platform) => (
+                <label
+                  key={platform.key}
+                  className="flex items-center gap-2 rounded-md border border-border bg-surface px-3 py-2 text-xs text-foreground"
+                >
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 accent-accent"
+                    checked={collectionsSyncPlatforms.includes(platform.key)}
+                    disabled={collectionsSyncPlatforms.length === 1 && collectionsSyncPlatforms.includes(platform.key)}
+                    onChange={() =>
+                      setCollectionsSyncPlatforms((prev) =>
+                        prev.includes(platform.key)
+                          ? prev.filter((key) => key !== platform.key)
+                          : [...prev, platform.key]
+                      )
+                    }
+                  />
+                  {platform.label}
+                </label>
+              ))}
+            </div>
+            <p className="text-[11px] leading-relaxed text-muted">
+              {L(
+                locale,
+                "可单独关闭 YouTube 收藏夹扫描；至少保留一个平台。",
+                "Disable YouTube collection scanning independently; keep at least one platform selected."
+              )}
+            </p>
           </div>
         ) : null}
       </section>

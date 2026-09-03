@@ -1234,6 +1234,7 @@ export type SyncSettingsView = {
   zhihu_follow_sync_mode: "api" | "rss";
   zhihu_rsshub_base: string;
   youtube_auto_refresh_channels: boolean;
+  collections_sync_platforms: string;
   zhihu_auto_refresh_follows: boolean;
   auto_sync_enabled: boolean;
   auto_sync_interval_minutes: number;

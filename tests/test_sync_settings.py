@@ -77,3 +77,16 @@ def test_bilibili_and_alert_fields(tmp_path, monkeypatch) -> None:
         view = public_settings_view()
         assert view["economist_github_raw_base"] == "https://mirror.example/raw"
         assert resolve_settings().bilibili_dynamic_poll_max_pages == 8
+
+
+def test_collection_platforms_are_normalized_and_user_scoped(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("ON1Y_DATA_DIR", str(tmp_path))
+    from on1y.config import get_settings
+
+    get_settings.cache_clear()
+
+    with user_context(1):
+        save_sync_settings(collections_sync_platforms=" youtube, bad, bilibili, youtube ")
+        prefs = load_sync_prefs()
+        assert prefs["collections_sync_platforms"] == "youtube,bilibili"
+        assert resolve_settings().collections_sync_platforms == "youtube,bilibili"
