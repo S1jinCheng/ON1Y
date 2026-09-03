@@ -62,6 +62,7 @@ import {
   saveBookSettings,
   fetchBookSources,
   saveBookSources,
+  scanBookFolder,
   type AuthUser,
   type CookieAccountInfo,
   type CookiePlatform,
@@ -2246,6 +2247,8 @@ function AiTab(props: { locale: Locale; onMessage?: (message: string) => void })
 function BooksTab(props: { locale: Locale; onMessage?: (message: string) => void }): JSX.Element {
   const { locale, onMessage } = props;
   const [bookCacheDir, setBookCacheDir] = useState("");
+  const [folderSyncEnabled, setFolderSyncEnabled] = useState(false);
+  const [scanningBookFolder, setScanningBookFolder] = useState(false);
   const [bookFormatFilters, setBookFormatFilters] = useState<BookFormat[]>([]);
   const [bookResolvedCacheDir, setBookResolvedCacheDir] = useState("");
   const [zlibEnabled, setZlibEnabled] = useState(true);
@@ -2285,6 +2288,7 @@ function BooksTab(props: { locale: Locale; onMessage?: (message: string) => void
           return;
         }
         setBookCacheDir(bookSettings.cache_dir ?? "");
+        setFolderSyncEnabled(Boolean(bookSettings.folder_sync_enabled));
         const filters =
           bookSettings.format_filters && bookSettings.format_filters.length > 0
             ? bookSettings.format_filters
@@ -2331,6 +2335,22 @@ function BooksTab(props: { locale: Locale; onMessage?: (message: string) => void
     }
   }
 
+  async function scanBookFolderNow(): Promise<void> {
+    setScanningBookFolder(true);
+    try {
+      const result = await scanBookFolder();
+      const detail = result.errors.length > 0 ? ` · ${result.errors.join("；")}` : "";
+      onMessage?.(
+        locale === "zh"
+          ? `文件夹扫描完成：新增 ${result.imported} 本${detail}`
+          : `Folder scan complete: ${result.imported} new book(s)${detail}`
+      );
+    } catch (err) {
+      onMessage?.(err instanceof Error ? err.message : String(err));
+    } finally {
+      setScanningBookFolder(false);
+    }
+  }
   async function onBrowseObsidianVault(): Promise<void> {
     setBrowsingObsidianVault(true);
     try {
@@ -2400,6 +2420,7 @@ function BooksTab(props: { locale: Locale; onMessage?: (message: string) => void
       const [bookSettings] = await Promise.all([
         saveBookSettings({
           cache_dir: bookCacheDir.trim() || null,
+          folder_sync_enabled: folderSyncEnabled,
           format_filters: bookFormatFilters,
           format_filter: bookFormatFilters.length === 1 ? bookFormatFilters[0] : null,
           preferred_format: bookFormatFilters[0] ?? "epub",
@@ -2506,6 +2527,33 @@ function BooksTab(props: { locale: Locale; onMessage?: (message: string) => void
             {bookResolvedCacheDir}
           </p>
         ) : null}
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-panel px-3 py-2">
+          <label className="flex cursor-pointer items-center gap-2 text-xs text-foreground">
+            <input
+              type="checkbox"
+              className="rounded border-border"
+              checked={folderSyncEnabled}
+              disabled={saving}
+              onChange={(e) => setFolderSyncEnabled(e.target.checked)}
+            />
+            {L(locale, "自动同步此文件夹", "Watch this folder automatically")}
+          </label>
+          <button
+            type="button"
+            className={`${ghostBtn} px-2 py-1 text-xs`}
+            disabled={scanningBookFolder || saving || !folderSyncEnabled}
+            onClick={() => void scanBookFolderNow()}
+          >
+            {scanningBookFolder ? L(locale, "扫描中…", "Scanning…") : L(locale, "立即扫描", "Scan now")}
+          </button>
+        </div>
+        <p className="mt-1 text-[11px] text-muted">
+          {L(
+            locale,
+            "开启后每 15 秒扫描一次该目录。发现 PDF、EPUB、MOBI 会自动加入书库并按 Kindle 设置尝试发送；已处理文件不会重复入库。",
+            "When enabled, this folder is scanned every 15 seconds. New PDF, EPUB, and MOBI files are added to the shelf and sent using Kindle settings; processed files are not duplicated."
+          )}
+        </p>
         <p className="mt-1 text-[11px] text-muted">
           {L(locale, "点「浏览」选目录后会立即保存。", "Picking a folder with Browse saves immediately.")}
         </p>

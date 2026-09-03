@@ -27,6 +27,7 @@ export type BookAcquireStrategy = "match_first" | "format_first";
 export type BookSettings = {
   version: number;
   cache_dir?: string | null;
+  folder_sync_enabled?: boolean;
   zlib_base_url: string;
   acquire_strategy: BookAcquireStrategy;
   preferred_format: BookFormat;

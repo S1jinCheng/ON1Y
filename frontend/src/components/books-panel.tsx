@@ -34,7 +34,8 @@ import {
   openLocalPath,
   searchBooks,
   sendBookShelfToKindle,
-  updateBookShelfItem
+  updateBookShelfItem,
+  uploadBookFile,
 } from "@/lib/api";
 import { probeShelfCachedFiles, type ShelfCachedState } from "@/lib/use-shelf-cached-files";
 import { readBuiltinToggles, BOOK_ANNAS_BASE, BOOK_ZLIB_BASE } from "@/lib/book-builtin";
@@ -903,6 +904,7 @@ export function BooksDetailColumn(props: BooksDetailColumnProps): JSX.Element {
   const [status, setStatus] = useState<BookStatus>("reading");
   const [notes, setNotes] = useState("");
   const [links, setLinks] = useState<{ label: string; url: string }[]>([{ label: "", url: "" }]);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
   const [detailAcquiring, setDetailAcquiring] = useState(false);
   const [zlibEnabled, setZlibEnabled] = useState(true);
@@ -1049,6 +1051,7 @@ export function BooksDetailColumn(props: BooksDetailColumnProps): JSX.Element {
       setStatus("reading");
       setNotes("");
       setLinks([{ label: "", url: "" }]);
+      setSelectedFile(null);
       return;
     }
     if (!item) return;
@@ -1121,6 +1124,34 @@ export function BooksDetailColumn(props: BooksDetailColumnProps): JSX.Element {
   }
 
   async function handleSave(): Promise<void> {
+    if (selectedFile) {
+      setSaving(true);
+      try {
+        const result = await uploadBookFile(selectedFile, {
+          title: title.trim(),
+          author: author.trim(),
+          status
+        });
+        if (!result.shelf_item) {
+          throw new Error(locale === "zh" ? "上传成功，但书库信息块创建失败" : "Uploaded, but the shelf card was not created");
+        }
+        onSaved(result.shelf_item);
+        onAcquireNotice(buildKindleSendNotice(locale, result));
+        const delivery =
+          result.kindle_status === "sent"
+            ? locale === "zh"
+              ? "已发送到 Kindle"
+              : "sent to Kindle"
+            : result.kindle_detail || (locale === "zh" ? "未发送到 Kindle" : "not sent to Kindle");
+        onMessage(locale === "zh" ? `已上传 ${result.format.toUpperCase()} · ${delivery}` : `Uploaded ${result.format.toUpperCase()} · ${delivery}`);
+      } catch (error) {
+        onMessage(error instanceof Error ? error.message : "upload failed");
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
+
     const cleanLinks = links
       .map((l) => ({ label: l.label.trim(), url: l.url.trim() }))
       .filter((l) => l.label && l.url);
@@ -1170,6 +1201,30 @@ export function BooksDetailColumn(props: BooksDetailColumnProps): JSX.Element {
             className="mt-1 w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm"
           />
         </label>
+        <div>
+          <p className="text-xs text-muted">{locale === "zh" ? "上传电子书" : "Upload ebook"}</p>
+          <input
+            type="file"
+            accept=".pdf,.epub,.mobi,application/pdf,application/epub+zip,application/x-mobipocket-ebook"
+            onChange={(e) => {
+              const file = e.target.files?.[0] ?? null;
+              setSelectedFile(file);
+              if (file && !title.trim()) {
+                setTitle(file.name.replace(/\.[^.]+$/, ""));
+              }
+            }}
+            className="mt-1 block w-full rounded-md border border-border bg-surface px-2 py-1.5 text-xs"
+          />
+          <p className="mt-1 text-[11px] text-muted">
+            {selectedFile
+              ? locale === "zh"
+                ? `${selectedFile.name} · 保存后自动入库并尝试发送 Kindle`
+                : `${selectedFile.name} · saved to shelf and sent to Kindle when configured`
+              : locale === "zh"
+                ? "支持 PDF、EPUB、MOBI；选择文件后无需填写外链。"
+                : "PDF, EPUB, MOBI supported; links are optional when a file is selected."}
+          </p>
+        </div>
         <label className="block text-xs text-muted">
           {locale === "zh" ? "状态" : "Status"}
           <select

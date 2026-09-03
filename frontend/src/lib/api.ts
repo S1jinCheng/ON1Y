@@ -1986,6 +1986,57 @@ export function updateBookShelfItem(
   });
 }
 
+export type BookUploadResult = {
+  ok: boolean;
+  format: BookFormat;
+  local_path: string;
+  original_filename?: string;
+  kindle_sent: boolean;
+  kindle_status?: "sent" | "skipped" | "failed";
+  kindle_detail?: string | null;
+  shelf_item?: BookShelfItem | null;
+};
+
+export async function uploadBookFile(
+  file: File,
+  input: { title?: string; author?: string; status?: BookStatus }
+): Promise<BookUploadResult> {
+  const token = getAuthToken();
+  const form = new FormData();
+  form.append("file", file);
+  form.append("title", input.title ?? "");
+  form.append("author", input.author ?? "");
+  form.append("status", input.status ?? "reading");
+  const response = await fetch(resolveApiUrl("/api/books/upload", true), {
+    method: "POST",
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    body: form,
+    cache: "no-store"
+  });
+  if (!response.ok) {
+    let detail = `upload failed: ${response.status}`;
+    try {
+      const payload = (await response.json()) as { detail?: string };
+      if (payload.detail) detail = payload.detail;
+    } catch {
+      /* ignore */
+    }
+    throw new Error(detail);
+  }
+  return (await response.json()) as BookUploadResult;
+}
+
+export type BookFolderSyncResult = {
+  enabled: boolean;
+  folder?: string;
+  imported: number;
+  skipped: number;
+  errors: string[];
+};
+
+export function scanBookFolder(): Promise<BookFolderSyncResult> {
+  return request<BookFolderSyncResult>("/api/books/folder-sync/scan", { method: "POST" });
+}
 export function deleteBookShelfItem(id: number): Promise<{ ok: boolean }> {
   return request<{ ok: boolean }>(`/api/books/shelf/${id}`, { method: "DELETE" });
 }

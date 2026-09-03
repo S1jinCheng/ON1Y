@@ -26,8 +26,8 @@ def validate_ebook_bytes(data: bytes, fmt: str) -> dict[str, object]:
                 ok = False
         detail = "EPUB 结构正常" if ok else "EPUB 压缩包损坏或不完整"
     elif fmt_l == "mobi":
-        head = data[:8]
-        ok = head.startswith(b"BOOKMOBI") or head[4:8] == b"MOBI"
+        head = data[:4096]
+        ok = b"BOOKMOBI" in head or b"MOBI" in head[:256]
         detail = "MOBI 文件头有效" if ok else "不是有效的 MOBI 文件"
     else:
         detail = "未知格式，仅检查文件大小"

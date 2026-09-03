@@ -11,7 +11,7 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any
 
-from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -2274,6 +2274,67 @@ def create_app() -> FastAPI:
         finally:
             storage.close()
 
+    @app.post("/api/books/upload")
+    async def books_upload(
+        file: UploadFile = File(...),
+        title: str = Form(default=""),
+        author: str = Form(default=""),
+        status: str = Form(default="reading"),
+    ) -> dict[str, Any]:
+        """Save a local PDF/EPUB/MOBI, create a shelf card, and send it to Kindle."""
+        from on1y.auth.context import get_effective_user_id
+        from on1y.books.acquire import _safe_filename
+        from on1y.books.file_validate import validate_ebook_bytes
+        from on1y.books.folder_sync import import_local_file, mark_file_seen
+        from on1y.books.settings_store import load_book_settings
+        from on1y.user.paths import resolve_books_cache_dir
+
+        filename = str(file.filename or "").strip()
+        fmt = Path(filename).suffix.lower().lstrip(".")
+        if fmt not in {"pdf", "epub", "mobi"}:
+            raise HTTPException(status_code=400, detail="仅支持 PDF、EPUB、MOBI 文件")
+        if status not in {"reading", "read"}:
+            raise HTTPException(status_code=400, detail="invalid book status")
+        data = await file.read(200 * 1024 * 1024 + 1)
+        if len(data) > 200 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="文件超过 200MB 上传上限")
+        validation = validate_ebook_bytes(data, fmt)
+        if not validation.get("ok"):
+            raise HTTPException(
+                status_code=400,
+                detail=str(validation.get("detail") or "电子书文件无效"),
+            )
+
+        uid = get_effective_user_id()
+        settings = load_book_settings(uid)
+        folder = resolve_books_cache_dir(uid, settings.cache_dir)
+        clean_title = title.strip() or Path(filename).stem.strip() or "未命名电子书"
+        destination = folder / _safe_filename(clean_title, fmt)
+        index = 2
+        while destination.exists():
+            destination = folder / _safe_filename(f"{clean_title} ({index})", fmt)
+            index += 1
+        destination.write_bytes(data)
+        try:
+            result = import_local_file(
+                uid,
+                destination,
+                source="manual-upload",
+                title=clean_title,
+                author=author.strip() or None,
+                status=status,
+            )
+            mark_file_seen(uid, destination, result)
+            result["original_filename"] = filename
+            return result
+        except HTTPException:
+            destination.unlink(missing_ok=True)
+            raise
+        except Exception as exc:
+            destination.unlink(missing_ok=True)
+            logger.exception("books_upload failed for %s", filename)
+            raise HTTPException(status_code=502, detail=f"电子书入库失败：{exc}") from exc
+
     @app.patch("/api/books/shelf/{item_id}")
     def books_shelf_update(item_id: int, body: dict[str, Any]) -> dict[str, Any]:
         from on1y.auth.context import get_effective_user_id
@@ -2385,6 +2446,7 @@ def create_app() -> FastAPI:
                     k: body[k]
                     for k in (
                         "cache_dir",
+                        "folder_sync_enabled",
                         "zlib_base_url",
                         "acquire_strategy",
                         "preferred_format",
@@ -2408,6 +2470,12 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return out
 
+    @app.post("/api/books/folder-sync/scan")
+    def books_folder_sync_scan() -> dict[str, Any]:
+        from on1y.auth.context import get_effective_user_id
+        from on1y.books.folder_sync import scan_user_folder
+
+        return scan_user_folder(get_effective_user_id())
     @app.post("/api/books/acquire/preview")
     def books_acquire_preview(body: dict[str, Any]) -> dict[str, Any]:
         from on1y.auth.context import get_effective_user_id
@@ -3633,6 +3701,7 @@ def create_app() -> FastAPI:
 def run_server(*, host: str | None = None, port: int | None = None) -> None:
     import uvicorn
 
+    from on1y.books.folder_sync import start_folder_sync_loop
     from on1y.digest.evening_auto import start_evening_digest_loop
     from on1y.hotlist.economist_auto import start_economist_auto_loop
     from on1y.obsidian.auto_sync import start_obsidian_sync_loop
@@ -3644,6 +3713,7 @@ def run_server(*, host: str | None = None, port: int | None = None) -> None:
     settings.ensure_data_dir()
     get_storage().close()
     start_auto_sync_loop()
+    start_folder_sync_loop()
     start_collections_sync_loop()
     start_obsidian_sync_loop()
     start_telegram_sync_loop()

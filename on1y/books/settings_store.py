@@ -20,8 +20,9 @@ DEFAULT_ALLOWED_FORMATS: list[BookFormat] = ["epub", "pdf", "mobi"]
 
 
 class BookSettings(BaseModel):
-    version: int = 3
+    version: int = 4
     cache_dir: str | None = None
+    folder_sync_enabled: bool = False
     zlib_base_url: str = DEFAULT_ZLIB_BASE
     acquire_strategy: AcquireStrategy = "match_first"
     preferred_format: BookFormat = "epub"
