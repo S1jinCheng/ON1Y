@@ -143,6 +143,20 @@ function cookieDotClass(status: CookieStatus | undefined): string {
   return "bg-amber-400";
 }
 
+function cookieFailureHint(locale: Locale, detail?: string | null): string {
+  const source = String(detail || "").toLowerCase();
+  if (/429|too many|rate.?limit|network|proxy|timeout|timed out|connection|connect|dns|fetch|ssl|certificate|socket|econn/.test(source)) {
+    return L(locale, "网络问题，请检查代理后重试", "Network problem — check your proxy and try again");
+  }
+  if (/captcha|验证码|security verification|安全验证|风控|blocked automated|unhuman/.test(source)) {
+    return L(locale, "平台要求安全验证，请稍后重试或使用扫码登录", "The platform requires security verification — try later or use QR sign-in");
+  }
+  if (/cookie|login|sign in|未登录|过期|失效|访客|缺少 google/.test(source)) {
+    return L(locale, "登录状态无效，请重新导入已登录页面的 Cookie", "Sign-in is invalid — re-import cookies from a logged-in page");
+  }
+  return L(locale, "验证失败，请重新导入 Cookie 后重试", "Verification failed — re-import cookies and try again");
+}
+
 function cookieAccountSubtitle(status: CookieStatus | undefined, locale: Locale): string {
   if (!status?.exists) {
     return L(locale, "未配置", "Not configured");
@@ -160,7 +174,7 @@ function cookieAccountSubtitle(status: CookieStatus | undefined, locale: Locale)
     if (!identity) missing.push(L(locale, "用户名", "username"));
     if (!acc.avatar_url?.trim()) missing.push(L(locale, "头像", "avatar"));
     if (missing.length > 0) {
-      return `${identity || L(locale, "Cookie 有效", "Cookies valid")} · ${L(locale, `未读取到${missing.join("和")}`, `could not read ${missing.join(" and ")}`)}`;
+      return `${identity || L(locale, "Cookie 有效", "Cookies valid")} · ${L(locale, "账号信息不完整，请重新导出已登录页面的 Cookie", "Account details are incomplete — re-export cookies from a logged-in page")}`;
     }
     if (detail && detail.includes("订阅频道")) {
       return `${identity} · ${detail}`;
@@ -168,9 +182,9 @@ function cookieAccountSubtitle(status: CookieStatus | undefined, locale: Locale)
     return identity || detail || L(locale, "Cookie 有效", "Cookies valid");
   }
   if (acc.valid === false) {
-    return `${L(locale, "验证失败", "Verification failed")}: ${acc.detail || L(locale, "Cookie 无效或已过期", "Invalid or expired cookies")}`;
+    return cookieFailureHint(locale, acc.detail);
   }
-  return `${L(locale, "暂未完成验证", "Verification incomplete")}: ${acc.detail || L(locale, `${status.count} 条 Cookie`, `${status.count} cookies`)}`;
+  return L(locale, "尚未完成验证，请点击验证", "Verification incomplete — click Verify to check again");
 }
 
 function cookieStatusTextClass(status: CookieStatus | undefined): string {
@@ -202,8 +216,8 @@ function cookieImportMessage(
   if (account?.valid === false && account.detail) {
     return L(
       locale,
-      `已导入 ${count} 条，但验证失败：${account.detail}`,
-      `Imported ${count} cookies but verification failed: ${account.detail}`
+      `已导入 ${count} 条，但${cookieFailureHint(locale, account.detail)}`,
+      `Imported ${count} cookies, but ${cookieFailureHint(locale, account.detail)}`
     );
   }
   return L(locale, `已导入 ${count} 条 Cookie`, `Imported ${count} cookies`);
@@ -421,11 +435,6 @@ function GeneralTab(props: {
   const [autostartSupported, setAutostartSupported] = useState(false);
   const [desktop, setDesktop] = useState<DesktopAppStatus | null>(null);
   const [browsingDataDir, setBrowsingDataDir] = useState(false);
-  const [archiveExporting, setArchiveExporting] = useState(false);
-  const [archiveImporting, setArchiveImporting] = useState(false);
-  const [archiveExportIncludeSettings, setArchiveExportIncludeSettings] = useState(false);
-  const [archiveExportIncludeTrash, setArchiveExportIncludeTrash] = useState(false);
-  const [archiveConflict, setArchiveConflict] = useState<"skip" | "overwrite">("overwrite");
   const [proxyMode, setProxyMode] = useState<"auto" | "manual" | "off">("auto");
   const [manualProxy, setManualProxy] = useState("");
   const [networkStatus, setNetworkStatus] = useState<NetworkSettingsView | null>(null);
@@ -433,7 +442,6 @@ function GeneralTab(props: {
   const [alertEnabled, setAlertEnabled] = useState(true);
   const [alertCooldown, setAlertCooldown] = useState(300);
   const [alertWebhook, setAlertWebhook] = useState("");
-  const archiveImportRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -495,79 +503,6 @@ function GeneralTab(props: {
     void patchDesktopPrefs({ close_window_action: action }).catch((err) => {
       props.onMessage?.(err instanceof Error ? err.message : String(err));
     });
-  }
-
-  async function onExportArchive(): Promise<void> {
-    const exportOptions = {
-      includeTrash: archiveExportIncludeTrash,
-      includeSettings: archiveExportIncludeSettings
-    };
-    const stamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, "").slice(0, 15);
-    const filename = `on1y-library-${stamp}.on1y.zip`;
-
-    if (!isDesktopShell()) {
-      triggerBrowserFileDownload(buildUserArchiveExportUrl(exportOptions), filename);
-      props.onMessage?.(
-        L(locale, "正在下载导出文件…", "Downloading export…")
-      );
-      return;
-    }
-
-    setArchiveExporting(true);
-    props.onMessage?.(
-      L(locale, "正在打包知识库，请稍候…", "Packaging library, please wait…")
-    );
-    try {
-      const blob = await exportUserArchive(exportOptions);
-      const savedPath = await saveArchiveFile(filename, new Uint8Array(await blob.arrayBuffer()));
-      if (!savedPath) {
-        props.onMessage?.(L(locale, "已取消保存", "Save cancelled"));
-        return;
-      }
-      props.onMessage?.(
-        L(locale, `知识库已保存到 ${savedPath}`, `Library saved to ${savedPath}`)
-      );
-    } catch (err) {
-      props.onMessage?.(err instanceof Error ? err.message : String(err));
-    } finally {
-      setArchiveExporting(false);
-    }
-  }
-
-  async function onArchiveFileSelected(file: File | null): Promise<void> {
-    if (!file) {
-      return;
-    }
-    setArchiveImporting(true);
-    try {
-      const result = await importUserArchive(file, archiveConflict);
-      let summary = L(
-        locale,
-        `已导入 ${result.imported} 条，跳过 ${result.skipped} 条，新建主题 ${result.themes_created} 个`,
-        `Imported ${result.imported}, skipped ${result.skipped}, ${result.themes_created} themes created`
-      );
-      if (result.subscription_restored > 0 || result.cookies_restored > 0) {
-        summary += L(
-          locale,
-          `；订阅设置 ${result.subscription_restored > 0 ? "已还原" : "未包含"}，Cookie ${result.cookies_restored} 个`,
-          `; subscription ${result.subscription_restored > 0 ? "restored" : "not included"}, ${result.cookies_restored} cookie file(s)`
-        );
-      }
-      if (result.error_count > 0) {
-        props.onMessage?.(
-          `${summary}；${L(locale, "部分失败", "some errors")}: ${result.errors.slice(0, 3).join("; ")}`
-        );
-      } else {
-        props.onMessage?.(summary);
-      }
-    } catch (err) {
-      props.onMessage?.(err instanceof Error ? err.message : String(err));
-    } finally {
-      setArchiveImporting(false);
-      if (archiveImportRef.current) {
-        archiveImportRef.current.value = "";
-      }
-    }
   }
 
   async function onBrowseDataDir(): Promise<void> {
@@ -852,95 +787,9 @@ function GeneralTab(props: {
             "Knowledge base, cookies, subscriptions, and LLM settings live here (per-user subfolders). Browse opens a folder dialog on the machine running on1y serve; restart after changing."
           )}
         </p>
-        <div className="rounded-lg border border-border bg-soft/40 px-3 py-3">
-          <p className="text-sm font-medium text-foreground">
-            {L(locale, "知识库备份与迁移", "Library backup & migration")}
-          </p>
-          <p className="mt-1 text-xs leading-relaxed text-muted">
-            {L(
-              locale,
-              "导出当前账号的订阅内容（正文、摘要、标签、主题，不含热榜）。在另一台电脑或另一账号中导入即可快速还原。",
-              "Export this account's feed items (body, summaries, tags, themes; hotlist excluded). Import on another machine or account to restore quickly."
-            )}
-          </p>
-          <div className="mt-3 space-y-2">
-            <ToggleRow
-              label={L(locale, "同时导出 Cookie 与订阅设置", "Include cookies & subscription settings")}
-              description={L(
-                locale,
-                "包含各平台登录 Cookie 与 B 站/YouTube/知乎订阅起始日期。导入时会一并还原。",
-                "Includes platform login cookies and Bilibili/YouTube/Zhihu sync-since dates. Restored on import."
-              )}
-              checked={archiveExportIncludeSettings}
-              disabled={archiveExporting || archiveImporting}
-              onChange={setArchiveExportIncludeSettings}
-            />
-            <ToggleRow
-              label={L(locale, "包含已删除条目", "Include deleted items")}
-              description={L(
-                locale,
-                "默认只导出回收站以外的内容。",
-                "By default only non-trashed items are exported."
-              )}
-              checked={archiveExportIncludeTrash}
-              disabled={archiveExporting || archiveImporting}
-              onChange={setArchiveExportIncludeTrash}
-            />
-          </div>
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              className={`inline-flex items-center gap-1.5 ${ghostBtn} px-3 py-1.5`}
-              disabled={archiveExporting || archiveImporting}
-              onClick={() => void onExportArchive()}
-            >
-              {archiveExporting ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Download className="h-4 w-4" />
-              )}
-              {L(locale, "导出知识库", "Export library")}
-            </button>
-            <button
-              type="button"
-              className={`inline-flex items-center gap-1.5 ${ghostBtn} px-3 py-1.5`}
-              disabled={archiveExporting || archiveImporting}
-              onClick={() => archiveImportRef.current?.click()}
-            >
-              {archiveImporting ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Upload className="h-4 w-4" />
-              )}
-              {L(locale, "导入知识库", "Import library")}
-            </button>
-            <input
-              ref={archiveImportRef}
-              type="file"
-              accept=".zip,.on1y.zip,application/zip"
-              className="hidden"
-              onChange={(e) => void onArchiveFileSelected(e.target.files?.[0] ?? null)}
-            />
-          </div>
-          <div className="mt-3">
-            <FieldLabel>{L(locale, "导入冲突", "Import conflicts")}</FieldLabel>
-            <SegmentedControl
-              value={archiveConflict}
-              onChange={setArchiveConflict}
-              options={[
-                { value: "overwrite", label: L(locale, "覆盖", "Overwrite") },
-                { value: "skip", label: L(locale, "跳过", "Skip") }
-              ]}
-            />
-            <p className="mt-1 text-[11px] text-muted">
-              {L(
-                locale,
-                "相同 URL 已存在时：覆盖会更新正文与摘要；跳过则保留本地版本。",
-                "When the same URL exists: overwrite updates body and summary; skip keeps the local copy."
-              )}
-            </p>
-          </div>
-        </div>
+        <p className="rounded-lg border border-border bg-soft/40 px-3 py-3 text-xs leading-relaxed text-muted">
+          {L(locale, "账户备份、历史内容和 Cookie 迁移已统一放在「账号 → 数据」中。", "Account backup, history, and cookie migration are now under Account → Data.")}
+        </p>
       </section>
 
       <section className="space-y-3">
@@ -1052,7 +901,68 @@ const primaryBtn =
 const ghostBtn =
   "rounded-lg border border-border bg-surface px-4 py-2 text-sm text-muted transition hover:bg-soft disabled:opacity-50";
 
+type AccountCenterSection = "overview" | "data";
+
 function AccountTab(props: {
+  locale: Locale;
+  user: AuthUser | null;
+  onUserUpdated?: (user: AuthUser) => void;
+  onMessage?: (message: string) => void;
+}): JSX.Element {
+  const [section, setSection] = useState<AccountCenterSection>("overview");
+  const { locale } = props;
+
+  return (
+    <div className="space-y-5">
+      <div className="rounded-xl border border-border bg-panel/60 p-4">
+        <div className="flex items-center gap-3">
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-inverse text-base font-semibold text-inverse-foreground">
+            {(props.user?.display_name || props.user?.username || "?").charAt(0).toUpperCase()}
+          </div>
+          <div className="min-w-0">
+            <div className="truncate text-base font-semibold text-foreground">
+              {props.user?.display_name || props.user?.username || L(locale, "本机账户", "Local account")}
+            </div>
+            <div className="mt-0.5 truncate text-xs text-muted">
+              {props.user ? `@${props.user.username}` : L(locale, "当前设备上的个人数据", "Personal data on this device")}
+            </div>
+          </div>
+        </div>
+        <p className="mt-3 text-xs leading-relaxed text-muted">
+          {L(
+            locale,
+            "账户中心管理个人资料、账户切换和当前账户的数据。它们都保存在本机，不会自动上传到云端。",
+            "Manage your profile, account switching, and account data here. Everything stays on this device unless you export it."
+          )}
+        </p>
+      </div>
+
+      <div className="flex flex-wrap gap-1 rounded-lg border border-border bg-soft/40 p-1">
+        {(
+          [
+            ["overview", L(locale, "概览", "Overview")],
+            ["data", L(locale, "数据", "Data")]
+          ] as [AccountCenterSection, string][]
+        ).map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            onClick={() => setSection(key)}
+            className={`rounded-md px-3 py-1.5 text-xs transition ${
+              section === key ? "bg-surface font-medium text-foreground shadow-sm" : "text-muted hover:text-foreground"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {section === "overview" ? <AccountOverviewTab {...props} /> : <AccountDataTab locale={locale} onMessage={props.onMessage} />}
+    </div>
+  );
+}
+
+function AccountOverviewTab(props: {
   locale: Locale;
   user: AuthUser | null;
   onUserUpdated?: (user: AuthUser) => void;
@@ -1319,6 +1229,247 @@ function AccountTab(props: {
   );
 }
 
+function AccountPlatformsTab(props: {
+  locale: Locale;
+  onMessage?: (message: string) => void;
+}): JSX.Element {
+  const { locale } = props;
+  const [statuses, setStatuses] = useState<CookieStatus[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState<CookiePlatform | null>(null);
+  const [qrLogin, setQrLogin] = useState<{ platform: CookiePlatform; label: string } | null>(null);
+
+  async function reload(fullVerify = false): Promise<void> {
+    setLoading(true);
+    try {
+      const result = await getCookieStatuses(true, { quick: !fullVerify });
+      setStatuses(result.platforms);
+    } catch (err) {
+      props.onMessage?.(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void reload();
+    // Load once when the account center opens.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function paste(platform: CookiePlatform): Promise<void> {
+    setBusy(platform);
+    try {
+      const result = await importCookieFromClipboard(platform);
+      props.onMessage?.(cookieImportMessage(locale, result.count, result.account));
+      await reload(true);
+    } catch (err) {
+      props.onMessage?.(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function verify(platform: CookiePlatform): Promise<void> {
+    setBusy(platform);
+    try {
+      const result = await verifyCookiePlatform(platform);
+      setStatuses((prev) => prev.map((row) => row.platform === platform ? { ...row, account: result.account } : row));
+      const account = result.account;
+      props.onMessage?.(
+        account.valid === true
+          ? L(locale, `验证通过：${account.account_name || account.account_id || platform}`, `Verified: ${account.account_name || account.account_id || platform}`)
+          : cookieFailureHint(locale, account.detail)
+      );
+    } catch (err) {
+      props.onMessage?.(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function remove(platform: CookiePlatform): Promise<void> {
+    setBusy(platform);
+    try {
+      await deleteCookieFile(platform);
+      props.onMessage?.(L(locale, "已删除该平台登录记录", "Platform sign-in removed"));
+      await reload();
+    } catch (err) {
+      props.onMessage?.(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <div className="space-y-5">
+      <section className="space-y-2">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-semibold text-foreground">{L(locale, "平台账号", "Platform accounts")}</h3>
+            <p className="mt-1 text-xs leading-relaxed text-muted">
+              {L(locale, "这些登录记录只属于当前本机账户。页面打开后会自动检查状态。", "These sign-ins belong only to the current local account. Status is checked when this page opens.")}
+            </p>
+          </div>
+          <button type="button" className={`inline-flex items-center gap-1.5 ${ghostBtn} px-3 py-1.5`} disabled={loading} onClick={() => void reload(true)}>
+            {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+            {L(locale, "刷新", "Refresh")}
+          </button>
+        </div>
+        <div className="rounded-lg border border-border bg-soft/40 px-3 py-2.5 text-[11px] leading-relaxed text-muted">
+          {L(locale, "B 站支持扫码登录；其他平台可用 Cookie-Editor 导出 JSON 后粘贴。", "Bilibili supports QR sign-in; for other platforms, export JSON with Cookie-Editor and paste it here.")}
+        </div>
+      </section>
+
+      <div className="space-y-2">
+        {COOKIE_PLATFORMS.map((platform) => {
+          const status = statuses.find((row) => row.platform === platform.key);
+          const account = status?.account;
+          const avatar = account?.avatar_url?.trim();
+          const exists = status?.exists ?? false;
+          return (
+            <div key={platform.key} className="rounded-xl border border-border bg-surface px-3 py-3">
+              <div className="flex items-center gap-3">
+                <div className="relative shrink-0">
+                  {avatar ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={avatar} alt="" className="h-10 w-10 rounded-full border border-border object-cover" referrerPolicy="no-referrer" />
+                  ) : (
+                    <div className="flex h-10 w-10 items-center justify-center rounded-full border border-border bg-soft text-muted"><UserCircle2 className="h-5 w-5" /></div>
+                  )}
+                  <span className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-surface ${cookieDotClass(status)}`} aria-hidden />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-medium text-foreground">{platform.label}</div>
+                  <div className={`truncate text-[11px] leading-relaxed ${cookieStatusTextClass(status)}`}>
+                    {status ? cookieAccountSubtitle(status, locale) : loading ? L(locale, "正在检测…", "Checking…") : L(locale, "未配置", "Not configured")}
+                  </div>
+                  {status?.updated_at ? <div className="text-[10px] text-muted/70">{L(locale, "更新", "Updated")}: {status.updated_at.replace("T", " ")}</div> : null}
+                </div>
+                <div className="flex shrink-0 flex-wrap justify-end gap-1.5">
+                  {COOKIE_QR_PLATFORMS.has(platform.key) ? (
+                    <button type="button" className={`${ghostBtn} px-2.5 py-1.5 text-xs`} disabled={busy === platform.key} onClick={() => setQrLogin({ platform: platform.key, label: platform.label })}>
+                      <QrCode className="mr-1 inline h-3.5 w-3.5" />{L(locale, "扫码", "QR")}
+                    </button>
+                  ) : null}
+                  <button type="button" className={`${ghostBtn} px-2.5 py-1.5 text-xs`} disabled={busy === platform.key} onClick={() => void paste(platform.key)}>
+                    {busy === platform.key ? <Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" /> : <ClipboardPaste className="mr-1 inline h-3.5 w-3.5" />}
+                    {L(locale, "更新", "Update")}
+                  </button>
+                  {exists ? <>
+                    <button type="button" className={`${ghostBtn} px-2.5 py-1.5 text-xs`} disabled={busy === platform.key} onClick={() => void verify(platform.key)}><RefreshCw className="mr-1 inline h-3.5 w-3.5" />{L(locale, "验证", "Verify")}</button>
+                    <button type="button" className="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition hover:bg-red-500/10 hover:text-red-500 disabled:opacity-50" disabled={busy === platform.key} onClick={() => void remove(platform.key)} aria-label={L(locale, "删除", "Delete")}><Trash2 className="h-4 w-4" /></button>
+                  </> : null}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <CookieQrLoginDialog
+        locale={locale}
+        platform={qrLogin?.platform ?? "bilibili"}
+        platformLabel={qrLogin?.label ?? ""}
+        open={qrLogin != null}
+        onClose={() => setQrLogin(null)}
+        onSuccess={() => void reload(true)}
+        onMessage={props.onMessage}
+      />
+    </div>
+  );
+}
+
+function AccountDataTab(props: {
+  locale: Locale;
+  onMessage?: (message: string) => void;
+}): JSX.Element {
+  const { locale } = props;
+  const [archiveExporting, setArchiveExporting] = useState(false);
+  const [archiveImporting, setArchiveImporting] = useState(false);
+  const [includeSettings, setIncludeSettings] = useState(false);
+  const [includeTrash, setIncludeTrash] = useState(false);
+  const [conflict, setConflict] = useState<"skip" | "overwrite">("overwrite");
+  const archiveImportRef = useRef<HTMLInputElement>(null);
+
+  async function exportArchive(): Promise<void> {
+    const options = { includeTrash, includeSettings };
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, "").slice(0, 15);
+    const filename = `on1y-library-${stamp}.on1y.zip`;
+    if (!isDesktopShell()) {
+      triggerBrowserFileDownload(buildUserArchiveExportUrl(options), filename);
+      props.onMessage?.(L(locale, "正在下载导出文件…", "Downloading export…"));
+      return;
+    }
+    setArchiveExporting(true);
+    try {
+      const blob = await exportUserArchive(options);
+      const savedPath = await saveArchiveFile(filename, new Uint8Array(await blob.arrayBuffer()));
+      if (savedPath) props.onMessage?.(L(locale, `账户数据已保存到 ${savedPath}`, `Account data saved to ${savedPath}`));
+    } catch (err) {
+      props.onMessage?.(err instanceof Error ? err.message : String(err));
+    } finally {
+      setArchiveExporting(false);
+    }
+  }
+
+  async function importArchive(file: File | null): Promise<void> {
+    if (!file) return;
+    setArchiveImporting(true);
+    try {
+      const result = await importUserArchive(file, conflict);
+      let summary = L(locale, `已导入 ${result.imported} 条，跳过 ${result.skipped} 条`, `Imported ${result.imported}, skipped ${result.skipped}`);
+      if (result.subscription_restored > 0 || result.cookies_restored > 0) {
+        summary += L(locale, `；订阅设置${result.subscription_restored > 0 ? "已还原" : "未包含"}，Cookie ${result.cookies_restored} 个`, `; subscription ${result.subscription_restored > 0 ? "restored" : "not included"}, ${result.cookies_restored} cookie file(s)`);
+      }
+      props.onMessage?.(result.error_count > 0 ? `${summary}；${L(locale, "部分失败", "some errors")}: ${result.errors.slice(0, 3).join("; ")}` : summary);
+    } catch (err) {
+      props.onMessage?.(err instanceof Error ? err.message : String(err));
+    } finally {
+      setArchiveImporting(false);
+      if (archiveImportRef.current) archiveImportRef.current.value = "";
+    }
+  }
+
+  return (
+    <div className="space-y-5">
+      <section className="space-y-2">
+        <h3 className="text-sm font-semibold text-foreground">{L(locale, "账户数据", "Account data")}</h3>
+        <p className="text-xs leading-relaxed text-muted">
+          {L(locale, "当前账户的知识库、历史内容、订阅和 Cookie 都按账户独立保存。导出文件可用于备份或迁移。", "This account's library, history, subscriptions, and cookies are stored separately. Export a bundle for backup or migration.")}
+        </p>
+      </section>
+
+      <section className="rounded-xl border border-border bg-panel/60 p-4">
+        <div className="flex items-start gap-3">
+          <div className="rounded-lg bg-soft p-2 text-muted"><Download className="h-4 w-4" /></div>
+          <div>
+            <h4 className="text-sm font-medium text-foreground">{L(locale, "备份与迁移", "Backup & migration")}</h4>
+            <p className="mt-1 text-xs leading-relaxed text-muted">{L(locale, "正文、摘要、标签和主题默认包含；Cookie 属于敏感信息，需要单独确认。", "Body text, summaries, tags, and themes are included by default. Cookies are sensitive and require separate confirmation.")}</p>
+          </div>
+        </div>
+        <div className="mt-4 space-y-2">
+          <ToggleRow label={L(locale, "同时导出 Cookie 与订阅设置", "Include cookies & subscriptions")} description={L(locale, "仅在迁移到可信设备时开启。", "Enable only when migrating to a trusted device.")} checked={includeSettings} disabled={archiveExporting || archiveImporting} onChange={setIncludeSettings} />
+          <ToggleRow label={L(locale, "包含已删除条目", "Include deleted items")} description={L(locale, "默认不包含回收站内容。", "Trash is excluded by default.")} checked={includeTrash} disabled={archiveExporting || archiveImporting} onChange={setIncludeTrash} />
+        </div>
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          <button type="button" className={`inline-flex items-center gap-1.5 ${ghostBtn} px-3 py-1.5`} disabled={archiveExporting || archiveImporting} onClick={() => void exportArchive()}>{archiveExporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}{L(locale, "导出账户数据", "Export account data")}</button>
+          <button type="button" className={`inline-flex items-center gap-1.5 ${ghostBtn} px-3 py-1.5`} disabled={archiveExporting || archiveImporting} onClick={() => archiveImportRef.current?.click()}>{archiveImporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}{L(locale, "导入账户数据", "Import account data")}</button>
+          <input ref={archiveImportRef} type="file" accept=".zip,.on1y.zip,application/zip" className="hidden" onChange={(e) => void importArchive(e.target.files?.[0] ?? null)} />
+        </div>
+        <div className="mt-4">
+          <FieldLabel>{L(locale, "导入冲突", "Import conflicts")}</FieldLabel>
+          <SegmentedControl value={conflict} onChange={setConflict} options={[{ value: "overwrite", label: L(locale, "覆盖", "Overwrite") }, { value: "skip", label: L(locale, "跳过", "Skip") }]} />
+        </div>
+      </section>
+
+      <section className="rounded-lg border border-amber-200/70 bg-amber-50/60 px-3 py-3 text-xs leading-relaxed text-amber-900/80">
+        {L(locale, "导出的 .on1y.zip 可能包含登录 Cookie，请像保管密码一样保管，不要上传到公共位置。", "An exported .on1y.zip may contain login cookies. Treat it like a password and never upload it publicly.")}
+      </section>
+    </div>
+  );
+}
+
 function SubscriptionsTab(props: {
   locale: Locale;
   onClose?: () => void;
@@ -1330,11 +1481,8 @@ function SubscriptionsTab(props: {
   const [useAiSummary, setUseAiSummary] = useState(true);
   const [statuses, setStatuses] = useState<CookieStatus[]>([]);
   const [loading, setLoading] = useState(true);
-  const [cookiesLoading, setCookiesLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
-  const [cookieBusy, setCookieBusy] = useState<CookiePlatform | null>(null);
-  const [qrLogin, setQrLogin] = useState<{ platform: CookiePlatform; label: string } | null>(null);
   const [zhihuFollowMode, setZhihuFollowMode] = useState<"api" | "rss">("api");
   const [zhihuMaxFollowees, setZhihuMaxFollowees] = useState(25);
   const [zhihuMaxPages, setZhihuMaxPages] = useState(2);
@@ -1363,16 +1511,6 @@ function SubscriptionsTab(props: {
     "twitter"
   ]);
 
-  async function reloadCookies(fullVerify = false): Promise<void> {
-    setCookiesLoading(true);
-    try {
-      const result = await getCookieStatuses(true, { quick: !fullVerify });
-      setStatuses(result.platforms);
-    } finally {
-      setCookiesLoading(false);
-    }
-  }
-
   useEffect(() => {
     let cancelled = false;
     void (async () => {
@@ -1396,7 +1534,6 @@ function SubscriptionsTab(props: {
       } finally {
         if (!cancelled) {
           setLoading(false);
-          setCookiesLoading(false);
         }
       }
     })();
@@ -1463,64 +1600,6 @@ function SubscriptionsTab(props: {
       collections_sync_interval_seconds: collectionsSyncSeconds,
       collections_sync_platforms: collectionsSyncPlatforms.join(",")
     };
-  }
-
-  function cookieStatusFor(key: CookiePlatform): CookieStatus | undefined {
-    return statuses.find((s) => s.platform === key);
-  }
-
-  async function onPasteCookie(platform: CookiePlatform): Promise<void> {
-    setCookieBusy(platform);
-    try {
-      const result = await importCookieFromClipboard(platform);
-      props.onMessage?.(cookieImportMessage(locale, result.count, result.account));
-      await reloadCookies(true);
-    } catch (err) {
-      props.onMessage?.(err instanceof Error ? err.message : String(err));
-    } finally {
-      setCookieBusy(null);
-    }
-  }
-
-  async function onVerifyCookie(platform: CookiePlatform): Promise<void> {
-    setCookieBusy(platform);
-    try {
-      const result = await verifyCookiePlatform(platform);
-      setStatuses((prev) =>
-        prev.map((row) =>
-          row.platform === platform ? { ...row, account: result.account } : row
-        )
-      );
-      const acc = result.account;
-      if (acc.valid === true) {
-        props.onMessage?.(
-          L(
-            locale,
-            `验证通过：${acc.account_name || acc.account_id || platform}`,
-            `Verified: ${acc.account_name || acc.account_id || platform}`
-          )
-        );
-      } else {
-        props.onMessage?.(acc.detail || L(locale, "Cookie 验证失败", "Cookie verification failed"));
-      }
-    } catch (err) {
-      props.onMessage?.(err instanceof Error ? err.message : String(err));
-    } finally {
-      setCookieBusy(null);
-    }
-  }
-
-  async function onDeleteCookie(platform: CookiePlatform): Promise<void> {
-    setCookieBusy(platform);
-    try {
-      await deleteCookieFile(platform);
-      props.onMessage?.(L(locale, "已删除", "Removed"));
-      await reloadCookies();
-    } catch (err) {
-      props.onMessage?.(err instanceof Error ? err.message : String(err));
-    } finally {
-      setCookieBusy(null);
-    }
   }
 
   function toggle(key: string): void {
@@ -1660,141 +1739,9 @@ function SubscriptionsTab(props: {
         )}
       </p>
 
-      <InitialSyncSection locale={locale} statuses={statuses} busy={cookieBusy != null} onClose={props.onClose} />
+      <AccountPlatformsTab locale={locale} onMessage={props.onMessage} />
 
-      <section className="space-y-2">
-        <div className="flex items-center gap-2">
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">{L(locale, "Cookie", "Cookies")}</h3>
-          {cookiesLoading ? (
-            <span className="inline-flex items-center gap-1 text-[10px] text-muted">
-              <Loader2 className="h-3 w-3 animate-spin" />
-              {L(locale, "验证登录态…", "Verifying login…")}
-            </span>
-          ) : null}
-        </div>
-        <p className="text-[11px] leading-relaxed text-muted">
-          {L(
-            locale,
-            "B 站可点「扫码」App 登录；其他平台请用浏览器扩展 Cookie-Editor 导出 JSON 后点「粘贴」。详见 docs/COOKIES.md。",
-            "Bilibili: use Scan QR. Other platforms: export JSON with the Cookie-Editor extension, then Paste. See docs/COOKIES.md."
-          )}
-        </p>
-        <div className="space-y-2">
-          {COOKIE_PLATFORMS.map((platform) => {
-            const status = cookieStatusFor(platform.key);
-            const exists = status?.exists ?? false;
-            const avatar = status?.account?.avatar_url?.trim();
-            const subtitle = status
-              ? cookieAccountSubtitle(status, locale)
-              : cookiesLoading
-                ? L(locale, "正在检测 Cookie 登录状态…", "Checking cookie login status…")
-                : L(locale, "未配置", "Not configured");
-            return (
-              <div
-                key={platform.key}
-                className="flex items-center gap-3 rounded-lg border border-border bg-surface px-3 py-2.5"
-              >
-                <div className="relative shrink-0">
-                  {avatar ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={avatar}
-                      alt=""
-                      className="h-9 w-9 rounded-full border border-border object-cover"
-                      referrerPolicy="no-referrer"
-                    />
-                  ) : (
-                    <div className="flex h-9 w-9 items-center justify-center rounded-full border border-border bg-soft text-muted">
-                      <UserCircle2 className="h-5 w-5" />
-                    </div>
-                  )}
-                  <span
-                    className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-surface ${cookieDotClass(status)}`}
-                    aria-hidden
-                  />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="text-sm font-medium text-foreground">{platform.label}</div>
-                  <div className={`text-[11px] leading-relaxed ${cookieStatusTextClass(status)}`}>
-                    {subtitle}
-                  </div>
-                  {status?.updated_at ? (
-                    <div className="text-[10px] text-muted/70">
-                      {L(locale, "更新", "Updated")}: {status.updated_at.replace("T", " ")}
-                    </div>
-                  ) : null}
-                </div>
-                {COOKIE_QR_PLATFORMS.has(platform.key) ? (
-                  <button
-                    type="button"
-                    className={`inline-flex items-center gap-1.5 ${ghostBtn} px-3 py-1.5`}
-                    disabled={cookieBusy === platform.key}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setQrLogin({ platform: platform.key, label: platform.label });
-                    }}
-                    title={L(locale, "B 站 App 扫码登录", "Bilibili app QR sign-in")}
-                  >
-                    <QrCode className="h-3.5 w-3.5" />
-                    {L(locale, "扫码", "Scan")}
-                  </button>
-                ) : null}
-                <button
-                  type="button"
-                  className={`inline-flex items-center gap-1.5 ${ghostBtn} px-3 py-1.5`}
-                  disabled={cookieBusy === platform.key}
-                  onClick={() => void onPasteCookie(platform.key)}
-                  title={L(locale, "从剪贴板粘贴 Cookie JSON", "Paste cookie JSON from clipboard")}
-                >
-                  {cookieBusy === platform.key ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <ClipboardPaste className="h-3.5 w-3.5" />
-                  )}
-                  {L(locale, "粘贴", "Paste")}
-                </button>
-                {exists ? (
-                  <>
-                    <button
-                      type="button"
-                      className={`inline-flex items-center gap-1.5 ${ghostBtn} px-3 py-1.5`}
-                      disabled={cookieBusy === platform.key}
-                      onClick={() => void onVerifyCookie(platform.key)}
-                      title={L(locale, "重新验证 Cookie", "Re-verify cookies")}
-                    >
-                      {cookieBusy === platform.key ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      ) : (
-                        <RefreshCw className="h-3.5 w-3.5" />
-                      )}
-                      {L(locale, "验证", "Verify")}
-                    </button>
-                    <button
-                      type="button"
-                      className="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition hover:bg-red-500/10 hover:text-red-500 disabled:opacity-50"
-                      disabled={cookieBusy === platform.key}
-                      onClick={() => void onDeleteCookie(platform.key)}
-                      aria-label="Delete"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  </>
-                ) : null}
-              </div>
-            );
-          })}
-        </div>
-      </section>
-
-      <CookieQrLoginDialog
-        locale={locale}
-        platform={qrLogin?.platform ?? "bilibili"}
-        platformLabel={qrLogin?.label ?? ""}
-        open={qrLogin != null}
-        onClose={() => setQrLogin(null)}
-        onSuccess={() => void reloadCookies(true)}
-        onMessage={props.onMessage}
-      />
+      <InitialSyncSection locale={locale} statuses={statuses} busy={false} onClose={props.onClose} />
 
       <div className="border-t border-border pt-6" />
 
