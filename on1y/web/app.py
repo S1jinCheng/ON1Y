@@ -2155,6 +2155,9 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="book detail not found")
         return detail.model_dump()
 
+    # Keep the legacy trailing-slash form working for already-built frontend
+    # bundles. New frontend requests use the canonical no-slash route.
+    @app.get("/api/books/cover/")
     @app.get("/api/books/cover")
     def books_cover_proxy(url: str = Query(..., min_length=8)) -> Any:
         import httpx
