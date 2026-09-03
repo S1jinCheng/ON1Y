@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from on1y.network.proxy import _normalize_proxy_url, effective_ytdlp_proxy
+from on1y.network.proxy import _normalize_proxy_url, effective_telegram_proxy, effective_ytdlp_proxy
 from on1y.network.settings import load_file_settings, save_file_settings
 
 
@@ -29,3 +29,24 @@ def test_effective_proxy_off_mode(tmp_path, monkeypatch) -> None:
     assert effective_ytdlp_proxy(user_id=1) is None
     prefs = load_file_settings(user_id=1)
     assert prefs["proxy_mode"] == "off"
+
+
+def test_effective_telegram_proxy_explicit(monkeypatch) -> None:
+    monkeypatch.setenv("ON1Y_TELEGRAM_PROXY", "http://127.0.0.1:7897")
+    monkeypatch.delenv("ON1Y_TELEGRAM_USE_YTDLP_PROXY", raising=False)
+    from on1y.config import get_settings
+
+    get_settings.cache_clear()
+    assert effective_telegram_proxy() == "http://127.0.0.1:7897"
+    get_settings.cache_clear()
+
+
+def test_effective_telegram_proxy_not_ytdlp_by_default(monkeypatch) -> None:
+    monkeypatch.setenv("ON1Y_YTDLP_PROXY", "http://127.0.0.1:7890")
+    monkeypatch.delenv("ON1Y_TELEGRAM_PROXY", raising=False)
+    monkeypatch.setenv("ON1Y_TELEGRAM_USE_YTDLP_PROXY", "false")
+    from on1y.config import get_settings
+
+    get_settings.cache_clear()
+    assert effective_telegram_proxy() is None
+    get_settings.cache_clear()
