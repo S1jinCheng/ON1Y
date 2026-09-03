@@ -149,31 +149,34 @@ function cookieAccountSubtitle(status: CookieStatus | undefined, locale: Locale)
   }
   const acc = status.account;
   if (!acc) {
-    return L(
-      locale,
-      `${status.count} 条 Cookie`,
-      `${status.count} cookies`
-    );
+    return L(locale, `${status.count} 条 Cookie · 正在检测`, `${status.count} cookies · checking`);
   }
-    if (acc.valid === true) {
+  if (acc.valid === true) {
     const detail = acc.detail?.trim();
     const name = acc.account_name?.trim();
     const id = acc.account_id?.trim();
-    if (detail && (!name || name === "YouTube")) {
-      return detail;
+    const identity = name && name !== "YouTube" ? (id && name !== id ? `${name} · ${id}` : name) : id;
+    const missing: string[] = [];
+    if (!identity) missing.push(L(locale, "用户名", "username"));
+    if (!acc.avatar_url?.trim()) missing.push(L(locale, "头像", "avatar"));
+    if (missing.length > 0) {
+      return `${identity || L(locale, "Cookie 有效", "Cookies valid")} · ${L(locale, `未读取到${missing.join("和")}`, `could not read ${missing.join(" and ")}`)}`;
     }
     if (detail && detail.includes("订阅频道")) {
-      return detail;
+      return `${identity} · ${detail}`;
     }
-    if (name && id && name !== id) {
-      return `${name} · ${id}`;
-    }
-    return detail || name || id || L(locale, "已验证", "Verified");
+    return identity || detail || L(locale, "Cookie 有效", "Cookies valid");
   }
   if (acc.valid === false) {
-    return acc.detail || L(locale, "Cookie 无效或已过期", "Invalid or expired cookies");
+    return `${L(locale, "验证失败", "Verification failed")}: ${acc.detail || L(locale, "Cookie 无效或已过期", "Invalid or expired cookies")}`;
   }
-  return acc.detail || L(locale, `${status.count} 条 · 待验证`, `${status.count} cookies · unverified`);
+  return `${L(locale, "暂未完成验证", "Verification incomplete")}: ${acc.detail || L(locale, `${status.count} 条 Cookie`, `${status.count} cookies`)}`;
+}
+
+function cookieStatusTextClass(status: CookieStatus | undefined): string {
+  if (status?.account?.valid === false) return "text-red-600";
+  if (status?.account?.valid === null) return "text-amber-600";
+  return "text-muted";
 }
 
 function cookieImportMessage(
@@ -1341,7 +1344,7 @@ function SubscriptionsTab(props: {
         const [settings, syncSettings, cookieMeta] = await Promise.all([
           getSubscriptionSettings(),
           getSyncSettings(),
-          getCookieStatuses(false)
+          getCookieStatuses(true, { quick: true })
         ]);
         if (cancelled) {
           return;
@@ -1352,11 +1355,6 @@ function SubscriptionsTab(props: {
         setStatuses(cookieMeta.platforms);
         applySyncSettings(syncSettings);
         setLoading(false);
-
-        const verified = await getCookieStatuses(true, { quick: true });
-        if (!cancelled) {
-          setStatuses(verified.platforms);
-        }
       } catch (err) {
         props.onMessage?.(err instanceof Error ? err.message : String(err));
       } finally {
@@ -1642,6 +1640,11 @@ function SubscriptionsTab(props: {
             const status = cookieStatusFor(platform.key);
             const exists = status?.exists ?? false;
             const avatar = status?.account?.avatar_url?.trim();
+            const subtitle = status
+              ? cookieAccountSubtitle(status, locale)
+              : cookiesLoading
+                ? L(locale, "正在检测 Cookie 登录状态…", "Checking cookie login status…")
+                : L(locale, "未配置", "Not configured");
             return (
               <div
                 key={platform.key}
@@ -1668,8 +1671,8 @@ function SubscriptionsTab(props: {
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="text-sm font-medium text-foreground">{platform.label}</div>
-                  <div className="text-[11px] leading-relaxed text-muted">
-                    {cookieAccountSubtitle(status, locale)}
+                  <div className={`text-[11px] leading-relaxed ${cookieStatusTextClass(status)}`}>
+                    {subtitle}
                   </div>
                   {status?.updated_at ? (
                     <div className="text-[10px] text-muted/70">
