@@ -52,6 +52,13 @@ def cover_proxy_allowed(url: str) -> bool:
     host = (parsed.hostname or "").lower()
     if not host:
         return False
+    try:
+        import ipaddress
+
+        if not ipaddress.ip_address(host).is_global:
+            return False
+    except ValueError:
+        pass
     return any(host == suffix or host.endswith(f".{suffix}") for suffix in _ALLOWED_SUFFIXES)
 
 

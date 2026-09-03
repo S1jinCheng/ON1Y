@@ -2162,28 +2162,54 @@ def create_app() -> FastAPI:
     def books_cover_proxy(url: str = Query(..., min_length=8)) -> Any:
         import httpx
         from fastapi.responses import Response
+        from urllib.parse import urljoin
 
         from on1y.books.cover import cover_fetch_headers, cover_proxy_allowed, normalize_cover_url
 
+        max_bytes = 10 * 1024 * 1024
         target = normalize_cover_url(url)
         if not target or not cover_proxy_allowed(target):
             raise HTTPException(status_code=400, detail="cover url not allowed")
+        current = target
         try:
-            with httpx.Client(timeout=20.0, follow_redirects=True) as client:
-                resp = client.get(target, headers=cover_fetch_headers(target))
+            with httpx.Client(timeout=20.0, follow_redirects=False) as client:
+                for _ in range(4):
+                    with client.stream(
+                        "GET", current, headers=cover_fetch_headers(current)
+                    ) as resp:
+                        if 300 <= resp.status_code < 400:
+                            location = resp.headers.get("location")
+                            next_url = normalize_cover_url(urljoin(current, location or ""))
+                            if not next_url or not cover_proxy_allowed(next_url):
+                                raise HTTPException(status_code=400, detail="cover redirect not allowed")
+                            current = next_url
+                            continue
+                        if resp.status_code >= 400:
+                            raise HTTPException(
+                                status_code=502,
+                                detail=f"cover fetch failed: HTTP {resp.status_code}",
+                            )
+                        content_length = int(resp.headers.get("content-length") or 0)
+                        if content_length > max_bytes:
+                            raise HTTPException(status_code=413, detail="cover image is too large")
+                        body = bytearray()
+                        for chunk in resp.iter_bytes():
+                            body.extend(chunk)
+                            if len(body) > max_bytes:
+                                raise HTTPException(status_code=413, detail="cover image is too large")
+                        media = resp.headers.get("content-type") or "image/jpeg"
+                        if not str(media).startswith("image/"):
+                            raise HTTPException(status_code=502, detail="cover response is not an image")
+                        return Response(
+                            content=bytes(body),
+                            media_type=str(media).split(";", 1)[0],
+                            headers={"Cache-Control": "public, max-age=86400"},
+                        )
+                raise HTTPException(status_code=502, detail="too many cover redirects")
+        except HTTPException:
+            raise
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"cover fetch failed: {exc}") from exc
-        if resp.status_code >= 400:
-            raise HTTPException(status_code=502, detail=f"cover fetch failed: HTTP {resp.status_code}")
-        media = resp.headers.get("content-type") or "image/jpeg"
-        if not str(media).startswith("image/"):
-            media = "image/jpeg"
-        return Response(
-            content=resp.content,
-            media_type=str(media).split(";", 1)[0],
-            headers={"Cache-Control": "public, max-age=86400"},
-        )
-
     @app.get("/api/books/shelf")
     def books_shelf_list(
         status: str | None = Query(default=None),
@@ -2285,10 +2311,12 @@ def create_app() -> FastAPI:
         status: str = Form(default="reading"),
     ) -> dict[str, Any]:
         """Save a local PDF/EPUB/MOBI, create a shelf card, and send it to Kindle."""
+        from uuid import uuid4
+
         from on1y.auth.context import get_effective_user_id
         from on1y.books.acquire import _safe_filename
-        from on1y.books.file_validate import validate_ebook_bytes
-        from on1y.books.folder_sync import import_local_file, mark_file_seen
+        from on1y.books.file_validate import validate_ebook_file
+        from on1y.books.folder_sync import folder_sync_lock, import_local_file, mark_file_seen
         from on1y.books.settings_store import load_book_settings
         from on1y.user.paths import resolve_books_cache_dir
 
@@ -2298,46 +2326,63 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail="仅支持 PDF、EPUB、MOBI 文件")
         if status not in {"reading", "read"}:
             raise HTTPException(status_code=400, detail="invalid book status")
-        data = await file.read(200 * 1024 * 1024 + 1)
-        if len(data) > 200 * 1024 * 1024:
-            raise HTTPException(status_code=413, detail="文件超过 200MB 上传上限")
-        validation = validate_ebook_bytes(data, fmt)
-        if not validation.get("ok"):
-            raise HTTPException(
-                status_code=400,
-                detail=str(validation.get("detail") or "电子书文件无效"),
-            )
 
         uid = get_effective_user_id()
         settings = load_book_settings(uid)
         folder = resolve_books_cache_dir(uid, settings.cache_dir)
         clean_title = title.strip() or Path(filename).stem.strip() or "未命名电子书"
-        destination = folder / _safe_filename(clean_title, fmt)
-        index = 2
-        while destination.exists():
-            destination = folder / _safe_filename(f"{clean_title} ({index})", fmt)
-            index += 1
-        destination.write_bytes(data)
+        temporary = folder / f".on1y-upload-{uuid4().hex}.uploading"
+        destination: Path | None = None
+        imported = False
         try:
-            result = import_local_file(
-                uid,
-                destination,
-                source="manual-upload",
-                title=clean_title,
-                author=author.strip() or None,
-                status=status,
-            )
-            mark_file_seen(uid, destination, result)
-            result["original_filename"] = filename
-            return result
+            total = 0
+            with temporary.open("wb") as output:
+                while True:
+                    chunk = await file.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > 200 * 1024 * 1024:
+                        raise HTTPException(status_code=413, detail="文件超过 200MB 上传上限")
+                    output.write(chunk)
+            validation = validate_ebook_file(temporary, fmt)
+            if not validation.get("ok"):
+                raise HTTPException(
+                    status_code=400,
+                    detail=str(validation.get("detail") or "电子书文件无效"),
+                )
+            with folder_sync_lock(uid):
+                destination = folder / _safe_filename(clean_title, fmt)
+                index = 2
+                while destination.exists():
+                    destination = folder / _safe_filename(f"{clean_title} ({index})", fmt)
+                    index += 1
+                temporary.replace(destination)
+                result = import_local_file(
+                    uid,
+                    destination,
+                    source="manual-upload",
+                    title=clean_title,
+                    author=author.strip() or None,
+                    status=status,
+                )
+                imported = True
+                mark_file_seen(uid, destination, result)
+                result["original_filename"] = filename
+                return result
         except HTTPException:
-            destination.unlink(missing_ok=True)
+            if temporary.is_file():
+                temporary.unlink(missing_ok=True)
+            if destination is not None and not imported:
+                destination.unlink(missing_ok=True)
             raise
         except Exception as exc:
-            destination.unlink(missing_ok=True)
+            if temporary.is_file():
+                temporary.unlink(missing_ok=True)
+            if destination is not None and not imported:
+                destination.unlink(missing_ok=True)
             logger.exception("books_upload failed for %s", filename)
             raise HTTPException(status_code=502, detail=f"电子书入库失败：{exc}") from exc
-
     @app.patch("/api/books/shelf/{item_id}")
     def books_shelf_update(item_id: int, body: dict[str, Any]) -> dict[str, Any]:
         from on1y.auth.context import get_effective_user_id
