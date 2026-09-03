@@ -110,6 +110,9 @@ def sync_bilibili_up_config(
     enabled: bool = True,
     user_id: int | None = None,
 ) -> dict[str, Any]:
+    if user_id is None:
+        from on1y.auth.context import get_effective_user_id
+        user_id = get_effective_user_id()
     settings = settings or get_settings()
     cookie_path = resolve_cookie_path("bilibili", settings, user_id=user_id)
     followings = fetch_bilibili_followings(settings=settings, cookie_path=cookie_path)
@@ -214,6 +217,9 @@ def poll_bilibili_dynamic_updates(
     user_id: int | None = None,
 ) -> dict[str, Any]:
     """Enqueue new videos from following dynamics (polymer feed, type=video)."""
+    if user_id is None:
+        from on1y.auth.context import get_effective_user_id
+        user_id = get_effective_user_id()
     settings = settings or get_settings()
     from on1y.subscriptions.settings import resolve_sync_since_ts
 
@@ -353,6 +359,9 @@ def poll_bilibili_up_updates(
     Enqueue new uploads from followed UPs via Bilibili API.
     Uses rss_feed_state keyed by bilibili-up://{mid}.
     """
+    if user_id is None:
+        from on1y.auth.context import get_effective_user_id
+        user_id = get_effective_user_id()
     settings = settings or get_settings()
     from on1y.subscriptions.settings import resolve_sync_since_ts
 
@@ -651,6 +660,9 @@ def sync_bilibili_subscriptions(
     backfill_max_days: int | None = None,
     user_id: int | None = None,
 ) -> dict[str, Any]:
+    if user_id is None:
+        from on1y.auth.context import get_effective_user_id
+        user_id = get_effective_user_id()
     settings = settings or get_settings()
     report: dict[str, Any] = {"platform": "bilibili"}
     if not settings.bilibili_up_sync_enabled and not dry_run:

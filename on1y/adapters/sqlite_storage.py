@@ -3304,7 +3304,7 @@ class SqliteStorage:
                 COUNT(*) AS item_count
             FROM raw_items r
             WHERE r.platform = 'twitter'
-              AND ({trash_filter})
+              AND r.deleted_at IS NULL
               AND COALESCE(json_extract(r.source_meta, '$.author_url'), '') != ''
               {user_filter}
             GROUP BY author_url, author, author_avatar

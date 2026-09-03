@@ -198,6 +198,9 @@ def poll_zhihu_following_moments(
     user_id: int | None = None,
 ) -> dict[str, Any]:
     """Enqueue new content from Zhihu following feed (/api/v3/moments)."""
+    if user_id is None:
+        from on1y.auth.context import get_effective_user_id
+        user_id = get_effective_user_id()
     settings = settings or get_settings()
     from on1y.subscriptions.settings import resolve_sync_since_ts
 
@@ -356,6 +359,9 @@ def poll_zhihu_api_subscriptions(
     user_id: int | None = None,
 ) -> dict[str, Any]:
     """Dispatch Zhihu API poll: moments feed (default) or legacy per-followee activities."""
+    if user_id is None:
+        from on1y.auth.context import get_effective_user_id
+        user_id = get_effective_user_id()
     settings = settings or get_settings()
     mode = str(settings.zhihu_api_poll_mode or "moments").strip().lower()
     if mode == "activities":
@@ -422,6 +428,9 @@ def poll_zhihu_follow_activities(
     user_id: int | None = None,
 ) -> dict[str, Any]:
     """Enqueue new content from followed Zhihu users via API (cookie only)."""
+    if user_id is None:
+        from on1y.auth.context import get_effective_user_id
+        user_id = get_effective_user_id()
     settings = settings or get_settings()
     from on1y.subscriptions.settings import resolve_sync_since_ts
 

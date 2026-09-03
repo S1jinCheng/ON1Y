@@ -6,6 +6,7 @@ import re
 from typing import Any
 
 from on1y.ingestion.rss import FeedConfig, load_feeds
+from on1y.exceptions import ConfigurationError
 
 _SUBSCRIPTION_PREFIXES = ("zhihu-", "yt-", "bili-")
 _ZHIHU_PERSON_FEED_RE = re.compile(r"^zhihu-(?:activities|answers)-(.+)$")
@@ -31,6 +32,13 @@ _TWITTER_RESERVED_HANDLES = frozenset(
     }
 )
 
+
+def _load_feeds_or_empty() -> list[FeedConfig]:
+    """Creator discovery should still work when optional feeds.yaml is absent."""
+    try:
+        return load_feeds()
+    except ConfigurationError:
+        return []
 
 def is_subscription_feed(label: str) -> bool:
     if label.startswith("hotlist-"):
@@ -252,7 +260,7 @@ def bilibili_following_groups() -> dict[str, dict[str, Any]]:
     from on1y.ingestion.bilibili_feeds import BILI_UP_FEED_LABEL_PREFIX
 
     groups: dict[str, dict[str, Any]] = {}
-    for feed in load_feeds():
+    for feed in _load_feeds_or_empty():
         if not feed.enabled or not feed.label.startswith(BILI_UP_FEED_LABEL_PREFIX):
             continue
         match = _BILI_UP_FEED_URL_RE.search(feed.url)
@@ -277,7 +285,7 @@ def bilibili_following_groups() -> dict[str, dict[str, Any]]:
 def subscription_feed_groups() -> dict[str, dict[str, Any]]:
     """Merge subscription feeds into creator sidebar groups."""
     groups: dict[str, dict[str, Any]] = {}
-    for feed in load_feeds():
+    for feed in _load_feeds_or_empty():
         if not is_sidebar_creator_feed(feed):
             continue
         key = creator_key_from_feed(feed)

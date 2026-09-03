@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from on1y.config import get_settings
+from on1y import config
+get_settings = config.get_settings  # compatibility alias for integrations/tests
 
 COOKIE_PLATFORMS = ("youtube", "bilibili", "zhihu", "xiaohongshu", "twitter", "zlibrary")
 
 
 def user_dir(user_id: int) -> Path:
-    root = get_settings().data_dir / "users" / str(user_id)
+    root = config.get_settings().data_dir / "users" / str(user_id)
     root.mkdir(parents=True, exist_ok=True)
     return root
 
