@@ -11,6 +11,7 @@ from on1y.config import get_settings
 from on1y.exceptions import ExtractionError
 from on1y.extract.subtitles import build_video_body
 from on1y.extract.ytdlp_video import get_ytdlp_video_extractor
+from on1y.extract.youtube_rate_limit import pause_youtube_subtitles, youtube_subtitle_pause_remaining
 from on1y.models.enums import ExtractStatus
 from on1y.pipeline.video_meta import (
     VIDEO_DESCRIPTION,
@@ -41,11 +42,14 @@ def _handle_subtitle_rate_limit(*, attempts: int) -> None:
                 settings.clash_api_base,
             )
     backoff = min(
-        settings.subtitle_rate_limit_backoff_seconds * (2 ** max(0, attempts - 1)),
-        600.0,
+        max(
+            settings.youtube_subtitle_rate_limit_pause_seconds,
+            settings.subtitle_rate_limit_backoff_seconds * (2 ** max(0, attempts - 1)),
+        ),
+        3600.0,
     )
-    logger.warning("YouTube/subtitle 429 backoff %.0fs before retry (attempt %s)", backoff, attempts)
-    time.sleep(backoff)
+    pause_youtube_subtitles(backoff)
+    logger.warning("YouTube subtitle queue paused for %.0fs after 429 (attempt %s)", backoff, attempts)
 
 
 def _maybe_auto_distill(storage: SqliteStorage, raw_id: int) -> None:
@@ -82,9 +86,16 @@ def run_subtitle_batch(
     )
     processed = 0
     failed = 0
+    claim_platform = platform
+    if youtube_subtitle_pause_remaining() > 0:
+        if platform == "youtube":
+            return {"processed": 0, "failed": 0, "paused": 1}
+        if platform is None:
+            # Keep Bilibili processing available while the YouTube queue is paused.
+            claim_platform = "bilibili"
 
     for _ in range(max(0, limit)):
-        job = storage.claim_next_pending_subtitle(platform)
+        job = storage.claim_next_pending_subtitle(claim_platform)
         if job is None:
             break
         logger.info("Subtitle job id=%s raw_id=%s url=%s", job.id, job.raw_id, job.url)
@@ -164,7 +175,11 @@ def run_subtitle_batch(
             retry = not permanent and job.attempts < settings.subtitle_max_retries
             if retry and is_rate_limit_error(msg):
                 storage.mark_subtitle_failed(job.id, msg, retry=True)
-                _handle_subtitle_rate_limit(attempts=job.attempts)
+                if raw.platform == "youtube":
+                    _handle_subtitle_rate_limit(attempts=job.attempts)
+                    failed += 1
+                    logger.error("YouTube subtitle rate-limited raw_id=%s retry=%s: %s", job.raw_id, retry, exc)
+                    break
                 failed += 1
                 logger.error("Subtitle rate-limited raw_id=%s retry=%s: %s", job.raw_id, retry, exc)
                 continue
@@ -200,9 +215,13 @@ def run_subtitle_batch(
             retry = job.attempts < settings.subtitle_max_retries
             if retry and is_rate_limit_error(msg):
                 storage.mark_subtitle_failed(job.id, msg, retry=True)
-                _handle_subtitle_rate_limit(attempts=job.attempts)
+                if raw.platform == "youtube":
+                    _handle_subtitle_rate_limit(attempts=job.attempts)
+                    failed += 1
+                    logger.exception("YouTube subtitle rate-limited unexpectedly raw_id=%s", job.raw_id)
+                    break
                 failed += 1
-                logger.exception("Subtitle rate-limited unexpected error raw_id=%s", job.raw_id)
+                logger.exception("Subtitle rate-limited unexpectedly raw_id=%s", job.raw_id)
                 continue
             storage.mark_subtitle_failed(job.id, msg, retry=retry)
             maybe_alert_from_error(

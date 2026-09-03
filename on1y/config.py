@@ -61,6 +61,8 @@ class Settings(BaseSettings):
     subtitle_max_retries: int = Field(default=3, ge=1, le=10)
     subtitle_fetch_delay_seconds: float = Field(default=2.5, ge=0.0, le=30.0)
     subtitle_rate_limit_backoff_seconds: float = Field(default=60.0, ge=5.0, le=600.0)
+    youtube_subtitle_min_interval_seconds: float = Field(default=8.0, ge=0.0, le=120.0)
+    youtube_subtitle_rate_limit_pause_seconds: float = Field(default=900.0, ge=30.0, le=3600.0)
     subtitle_rotate_clash_on_429: bool = Field(default=True)
     # Clash external-controller (enable in Clash: external-controller 0.0.0.0:9090)
     clash_api_base: str | None = Field(default=None)

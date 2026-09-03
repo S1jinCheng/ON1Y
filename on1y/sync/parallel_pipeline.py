@@ -119,6 +119,7 @@ def _subtitle_worker(
 ) -> None:
     from on1y.auth.context import user_context
     from on1y.pipeline.subtitle_worker import run_subtitle_batch
+    from on1y.extract.youtube_rate_limit import youtube_subtitle_pause_remaining
 
     storage = _open_storage()
     try:
@@ -130,6 +131,9 @@ def _subtitle_worker(
                     platform=None,
                     auto_distill=False,
                 )
+                if result.get("paused"):
+                    time.sleep(min(30.0, max(1.0, youtube_subtitle_pause_remaining())))
+                    continue
                 processed = int(result.get("processed", 0))
                 failed = int(result.get("failed", 0))
                 if processed == 0 and failed == 0:

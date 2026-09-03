@@ -14,6 +14,7 @@ from on1y.extract.base import BaseExtractor
 from on1y.extract.subtitles import build_video_body, collect_bilingual_subtitles, yt_dlp_subtitle_request_langs
 from on1y.extract.ytdlp_meta import video_metadata_from_info
 from on1y.extract.ytdlp_util import build_ytdlp_opts, proxy_hint
+from on1y.extract.youtube_rate_limit import wait_for_youtube_subtitle_request
 from on1y.models.enums import ContentType
 from on1y.models.extract import ExtractResult
 from on1y.models.video_extract import VideoMetadata, VideoSubtitlePayload
@@ -69,7 +70,6 @@ class YouTubeExtractor(BaseExtractor):
     def fetch_subtitles(self, url: str) -> VideoSubtitlePayload:
         settings = get_settings()
         langs = yt_dlp_subtitle_request_langs(settings.ytdlp_sub_langs)
-        meta = self.fetch_metadata(url)
 
         with tempfile.TemporaryDirectory(prefix="on1y_yt_sub_") as tmp:
             outtmpl = str(Path(tmp) / "%(id)s")
@@ -83,12 +83,14 @@ class YouTubeExtractor(BaseExtractor):
                 ignore_no_formats_error=True,
             )
             try:
+                wait_for_youtube_subtitle_request()
                 with yt_dlp.YoutubeDL(sub_opts) as ydl:
-                    ydl.extract_info(url, download=True)
+                    info = ydl.extract_info(url, download=True)
             except Exception as exc:
                 msg = f"yt-dlp subtitle error: {exc}. {proxy_hint()}"
                 raise self._fail(url, msg, platform=PLATFORM_YOUTUBE) from exc
 
+            meta = video_metadata_from_info(info if isinstance(info, dict) else None)
             subtitle_text, langs_found = collect_bilingual_subtitles(
                 Path(tmp),
                 lang_config=settings.ytdlp_sub_langs,

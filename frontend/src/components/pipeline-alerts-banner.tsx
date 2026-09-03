@@ -25,8 +25,8 @@ function alertSummary(alert: PipelineAlert, locale: Locale): string {
   }
   if (alert.kind === "rate_limit") {
     return locale === "zh"
-      ? `${platform} 请求过快，请稍后再试`
-      : `${platform} is rate-limited — try again later`;
+      ? `${platform} 字幕接口被限流，请稍后再试`
+      : `${platform} subtitle requests are rate-limited — try again later`;
   }
   return locale === "zh"
     ? `${platform} 同步遇到问题，请稍后再试`
