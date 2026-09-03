@@ -8,6 +8,7 @@ from on1y.utils.youtube_account import (
     _decode_json_string,
     _parse_yt_initial_data,
     _pick_best_profile,
+    _profile_from_initial_data,
     _walk_profile_candidates,
     _channel_title_from_html,
 )
@@ -37,6 +38,36 @@ def test_parse_yt_initial_data_from_html() -> None:
     assert profile["account_name"] == "Alice Channel"
     assert profile["account_id"] == "UCtest123456789012345678"
     assert "yt3.ggpht.com" in profile["avatar_url"]
+
+
+def test_profile_from_initial_data_ignores_recommended_creator_channels() -> None:
+    payload = {
+        "header": {
+            "activeAccountHeader": {
+                "accountName": {"simpleText": "我的频道"},
+                "accountAvatar": {"thumbnails": [{"url": "https://yt3.ggpht.com/me"}]},
+                "navigationEndpoint": {
+                    "browseEndpoint": {"browseId": "UCtest123456789012345678"},
+                },
+            },
+        },
+        "contents": {
+            "videoRenderer": {
+                "channelMetadataRenderer": {
+                    "title": {"simpleText": "推荐博主"},
+                    "avatar": {"thumbnails": [{"url": "https://yt3.ggpht.com/creator"}]},
+                    "browseId": "UCdemo123456789012345678",
+                },
+            },
+        },
+    }
+
+    profile = _profile_from_initial_data(payload)
+
+    assert profile is not None
+    assert profile["account_id"] == "UCtest123456789012345678"
+    assert profile["account_name"] == "我的频道"
+    assert profile["avatar_url"] == "https://yt3.ggpht.com/me"
 
 
 def test_verify_youtube_returns_profile(monkeypatch) -> None:

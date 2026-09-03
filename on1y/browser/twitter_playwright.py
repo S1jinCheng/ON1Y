@@ -247,6 +247,101 @@ _TWITTER_ACCOUNT_META_JS = """
 """
 
 
+_TWITTER_ACCOUNT_FALLBACK_META_JS = """
+() => {
+  const normSrc = (img) => {
+    if (!img) return null;
+    let src = img.getAttribute('src') || '';
+    if (!src) return null;
+    if (src.startsWith('//')) src = 'https:' + src;
+    return src;
+  };
+  const reserved = new Set([
+    'home', 'explore', 'search', 'notifications', 'messages', 'i', 'settings',
+    'compose', 'login', 'signup', 'intent', 'bookmarks', 'lists', 'communities',
+  ]);
+  const handleFromHref = (href) => {
+    const parts = (href || '').split('?')[0].split('/').filter(Boolean);
+    if (parts.length !== 1 || reserved.has(parts[0].toLowerCase())) return null;
+    return parts[0];
+  };
+  const roots = [
+    document.querySelector('[role="navigation"]'),
+    document.querySelector('nav'),
+    document.querySelector('header'),
+  ].filter(Boolean);
+  let handle = null;
+  let name = null;
+  let avatar = null;
+  const accountSelector = [
+    '[data-testid="SideNav_AccountSwitcher_Button"]',
+    '[data-testid*="AccountSwitcher"]',
+    'button[aria-label*="Account"]',
+    'button[aria-label*="账号"]',
+    'button[aria-label*="帐户"]',
+    '[role="button"][aria-label*="Account"]',
+  ].join(',');
+  const switcher = document.querySelector(accountSelector);
+  if (switcher) {
+    avatar = normSrc(switcher.querySelector('img[src*="profile_images"], img'));
+    const lines = (switcher.innerText || '').split('\n').map((s) => s.trim()).filter(Boolean);
+    for (const line of lines) {
+      if (line.startsWith('@')) handle = handle || line.slice(1);
+      else if (!name && !/^(account|账号|帐户|profile|个人资料)$/i.test(line)) name = line;
+    }
+  }
+  for (const root of roots) {
+    if (!avatar) avatar = normSrc(root.querySelector('img[src*="profile_images"], img'));
+    if (!handle) {
+      const links = [...root.querySelectorAll('a[href^="/"]')];
+      for (const link of links) {
+        const label = (link.getAttribute('aria-label') || link.getAttribute('title') || '').toLowerCase();
+        const candidate = handleFromHref(link.getAttribute('href'));
+        if (candidate && (
+          label.includes('profile') || label.includes('account') ||
+          label.includes('个人资料') || label.includes('账号') || label.includes('帐户')
+        )) {
+          handle = candidate;
+          break;
+        }
+      }
+    }
+  }
+  return { handle, name, avatar };
+}
+"""
+
+
+_TWITTER_ACCOUNT_SETTINGS_META_JS = """
+() => {
+  const valueOf = (selectors) => {
+    for (const selector of selectors) {
+      const node = document.querySelector(selector);
+      const value = node && ('value' in node ? node.value : node.getAttribute('content'));
+      if (value && String(value).trim()) return String(value).trim();
+    }
+    return null;
+  };
+  const image = document.querySelector('img[src*="profile_images"]');
+  return {
+    handle: valueOf([
+      'input[name="username"]',
+      'input[autocomplete="username"]',
+      'input[aria-label*="Username"]',
+      'input[aria-label*="用户名"]',
+    ]),
+    name: valueOf([
+      'input[name="displayName"]',
+      'input[name="display_name"]',
+      'input[aria-label*="Name"]',
+      'input[aria-label*="名称"]',
+    ]),
+    avatar: image ? image.getAttribute('src') : null,
+  };
+}
+"""
+
+
 def _normalize_twitter_image_url(url: str | None) -> str | None:
     text = (url or "").strip()
     if not text:
@@ -265,6 +360,38 @@ def _account_meta_from_page(page: Any) -> dict[str, str | None]:
         return {"handle": None, "name": None, "avatar": None}
     return {
         "handle": str(raw.get("handle") or "").strip() or None,
+        "name": str(raw.get("name") or "").strip() or None,
+        "avatar": _normalize_twitter_image_url(str(raw.get("avatar") or "").strip() or None),
+    }
+
+
+def _account_meta_from_fallback_page(page: Any) -> dict[str, str | None]:
+    try:
+        raw = page.evaluate(_TWITTER_ACCOUNT_FALLBACK_META_JS)
+    except Exception:
+        raw = {}
+    if not isinstance(raw, dict):
+        return {"handle": None, "name": None, "avatar": None}
+    return {
+        "handle": str(raw.get("handle") or "").strip() or None,
+        "name": str(raw.get("name") or "").strip() or None,
+        "avatar": _normalize_twitter_image_url(str(raw.get("avatar") or "").strip() or None),
+    }
+
+
+def _account_meta_from_settings_page(page: Any, *, settings: Settings) -> dict[str, str | None]:
+    try:
+        page.goto("https://x.com/settings/profile", wait_until="domcontentloaded")
+        page.wait_for_timeout(max(settings.playwright_settle_ms, 2000))
+        check_twitter_page_health(page)
+        raw = page.evaluate(_TWITTER_ACCOUNT_SETTINGS_META_JS)
+    except Exception:
+        return {"handle": None, "name": None, "avatar": None}
+    if not isinstance(raw, dict):
+        return {"handle": None, "name": None, "avatar": None}
+    handle = str(raw.get("handle") or "").strip().removeprefix("@") or None
+    return {
+        "handle": handle,
         "name": str(raw.get("name") or "").strip() or None,
         "avatar": _normalize_twitter_image_url(str(raw.get("avatar") or "").strip() or None),
     }
@@ -321,6 +448,16 @@ def verify_twitter_session(
                 check_twitter_page_health(page)
 
                 meta = _account_meta_from_page(page)
+                if not all(meta.values()):
+                    fallback = _account_meta_from_fallback_page(page)
+                    for key in ("handle", "name", "avatar"):
+                        if not meta.get(key) and fallback.get(key):
+                            meta[key] = fallback[key]
+                if not all(meta.values()):
+                    settings_meta = _account_meta_from_settings_page(page, settings=settings)
+                    for key in ("handle", "name", "avatar"):
+                        if not meta.get(key) and settings_meta.get(key):
+                            meta[key] = settings_meta[key]
                 account_id = meta.get("handle")
                 account_name = meta.get("name")
                 avatar_url = meta.get("avatar")

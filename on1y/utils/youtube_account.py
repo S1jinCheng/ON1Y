@@ -194,25 +194,29 @@ def _candidates_from_topbar(initial: dict[str, Any]) -> list[dict[str, str]]:
     return out
 
 
+_ACCOUNT_PROFILE_KEYS = frozenset(
+    {
+        "activeAccountHeader",
+        "accountItemRenderer",
+        "accountHeaderRenderer",
+        "accountMenuItemRenderer",
+        "accountSwitcherRenderer",
+    }
+)
+
+
 def _walk_profile_candidates(node: Any, out: list[dict[str, str]], *, depth: int = 0) -> None:
     if depth > 24:
         return
     if isinstance(node, dict):
-        for key in (
-            "activeAccountHeader",
-            "accountItemRenderer",
-            "buttonRenderer",
-            "channelMetadataRenderer",
-        ):
+        # Homepages contain channelMetadataRenderer nodes for recommended
+        # creators. Only explicit account-menu containers identify the viewer.
+        for key in _ACCOUNT_PROFILE_KEYS:
             child = node.get(key)
             if isinstance(child, dict):
                 profile = _profile_from_node(child)
                 if profile:
                     out.append(profile)
-        if "browseEndpoint" in node or "avatarThumbnail" in node or "accountAvatar" in node:
-            profile = _profile_from_node(node)
-            if profile:
-                out.append(profile)
         for value in node.values():
             _walk_profile_candidates(value, out, depth=depth + 1)
     elif isinstance(node, list):
@@ -337,12 +341,12 @@ def _fetch_profile_once(
             channel_resp = client.get(f"https://www.youtube.com/channel/{account_id}")
             if channel_resp.status_code == 200:
                 title = _channel_title_from_html(channel_resp.text)
-                if title:
+                if title and not account_name:
                     account_name = title
                 from on1y.utils.youtube_author import _avatar_from_channel_html
 
                 channel_avatar = _avatar_from_channel_html(channel_resp.text)
-                if channel_avatar:
+                if channel_avatar and not avatar_url:
                     avatar_url = channel_avatar
 
         if account_id and not avatar_url:

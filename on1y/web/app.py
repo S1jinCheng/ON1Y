@@ -1385,7 +1385,7 @@ def create_app() -> FastAPI:
                 except Exception:
                     count = 0
             account: dict[str, Any] | None = None
-            if exists and verify and platform in {"bilibili", "youtube", "zhihu", "zlibrary"}:
+            if exists and verify:
                 account = verify_cookie_account(
                     platform,
                     user_id=uid,

@@ -55,3 +55,30 @@ def test_click_following_tab_js_present() -> None:
     assert callable(tw.click_twitter_following_tab)
     assert callable(tw.ensure_twitter_following_tab)
 
+
+
+def test_twitter_account_fallback_meta_normalizes_profile_data() -> None:
+    from on1y.browser import twitter_playwright as tw
+
+    class FakePage:
+        def evaluate(self, script):
+            assert script == tw._TWITTER_ACCOUNT_FALLBACK_META_JS
+            return {
+                "handle": "alice",
+                "name": "Alice",
+                "avatar": "//pbs.twimg.com/profile_images/alice.jpg",
+            }
+
+    assert tw._account_meta_from_fallback_page(FakePage()) == {
+        "handle": "alice",
+        "name": "Alice",
+        "avatar": "https://pbs.twimg.com/profile_images/alice.jpg",
+    }
+
+
+def test_twitter_account_settings_meta_script_has_username_and_avatar_fallbacks() -> None:
+    from on1y.browser import twitter_playwright as tw
+
+    assert 'input[name="username"]' in tw._TWITTER_ACCOUNT_SETTINGS_META_JS
+    assert 'input[name="displayName"]' in tw._TWITTER_ACCOUNT_SETTINGS_META_JS
+    assert 'img[src*="profile_images"]' in tw._TWITTER_ACCOUNT_SETTINGS_META_JS
