@@ -14,7 +14,7 @@ def create_access_token(*, user_id: int, username: str) -> str:
     settings = get_settings()
     secret = (settings.auth_secret_key or "").strip()
     if not secret or secret == "change-me-in-production":
-        pass  # local dev may use default; production should set ON1Y_AUTH_SECRET_KEY
+        raise RuntimeError("ON1Y_AUTH_SECRET_KEY must be configured before using web authentication")
     now = datetime.now(timezone.utc)
     exp = now + timedelta(hours=settings.auth_token_ttl_hours)
     payload: dict[str, Any] = {
@@ -29,4 +29,6 @@ def create_access_token(*, user_id: int, username: str) -> str:
 def decode_access_token(token: str) -> dict[str, Any]:
     settings = get_settings()
     secret = (settings.auth_secret_key or "").strip()
+    if not secret or secret == "change-me-in-production":
+        raise RuntimeError("ON1Y_AUTH_SECRET_KEY must be configured before using web authentication")
     return jwt.decode(token, secret, algorithms=["HS256"])

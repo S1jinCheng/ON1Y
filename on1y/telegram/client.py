@@ -61,8 +61,23 @@ def avatar_file_path(*, user_id: int | None = None) -> Path:
 
 def session_authorized(*, user_id: int | None = None) -> bool:
     base = session_path(user_id=user_id)
-    return base.with_suffix(".session").is_file() or Path(f"{base}.session").is_file()
+    candidates = (base.with_suffix(".session"), Path(f"{base}.session"))
+    session_file = next((path for path in candidates if path.is_file()), None)
+    if session_file is None or session_file.stat().st_size == 0:
+        return False
+    # Telethon's default session is SQLite. A stale or corrupt file must not
+    # be reported as an active login, otherwise logout attempts a network
+    # request against an unusable session and may refuse cleanup.
+    try:
+        import sqlite3
 
+        with sqlite3.connect(
+            f"file:{session_file.as_posix()}?mode=ro", uri=True
+        ) as conn:
+            conn.execute("SELECT 1 FROM sqlite_master LIMIT 1").fetchone()
+    except (OSError, sqlite3.DatabaseError):
+        return False
+    return True
 
 def client_configured(cfg: TelegramSettings) -> bool:
     return bool(api_credentials_configured(cfg) and cfg.sync_chat_ids)

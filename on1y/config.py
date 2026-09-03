@@ -29,6 +29,8 @@ PROJECT_ROOT = resolve_project_root()
 
 
 def _settings_env_files() -> tuple[str, ...]:
+    if os.environ.get("ON1Y_DISABLE_DOTENV", "").strip().lower() in {"1", "true", "yes"}:
+        return ()
     paths: list[str] = []
     explicit = os.environ.get("ON1Y_ENV_FILE", "").strip()
     if explicit:
@@ -45,7 +47,7 @@ class Settings(BaseSettings):
     """Central configuration; all paths are resolved to absolute paths."""
 
     model_config = SettingsConfigDict(
-        env_file=_settings_env_files(),
+        env_file=(),
         env_file_encoding="utf-8",
         env_prefix="ON1Y_",
         extra="ignore",
@@ -344,4 +346,4 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    return Settings(_env_file=_settings_env_files())
