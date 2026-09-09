@@ -1,5 +1,5 @@
 use std::fs;
-use std::net::{SocketAddr, TcpStream};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -15,7 +15,10 @@ fn backend_port(root: &Path, data_dir: &Path) -> u16 {
             return port;
         }
     }
-    for env_path in [data_dir.parent().map(|p| p.join(".env")), Some(root.join(".env"))] {
+    for env_path in [
+        data_dir.parent().map(|p| p.join(".env")),
+        Some(root.join(".env")),
+    ] {
         let Some(env_path) = env_path else { continue };
         if let Ok(text) = fs::read_to_string(env_path) {
             for line in text.lines() {
@@ -151,13 +154,8 @@ pub fn prepare_portable_runtime(app_root: &Path, bundled: bool) -> PathBuf {
 }
 
 pub fn boot(config: &BootConfig) -> Result<(ManagedServers, String), BootError> {
-    let backend_port = backend_port(&config.root, &config.data_dir);
-    let app_url = format!("http://127.0.0.1:{backend_port}");
-    let frontend_out = config
-        .root
-        .join("frontend")
-        .join("out")
-        .join("index.html");
+    let configured_port = backend_port(&config.root, &config.data_dir);
+    let frontend_out = config.root.join("frontend").join("out").join("index.html");
 
     let on1y_exe = resolve_backend_exe(config)?;
 
@@ -177,8 +175,35 @@ pub fn boot(config: &BootConfig) -> Result<(ManagedServers, String), BootError> 
         started_backend: false,
     };
 
-    if is_port_listening(backend_port) {
-        log_line(&config.data_dir, "on1y serve already listening");
+    let (backend_port, reuse_existing) = if is_port_listening(configured_port) {
+        let configured_url = format!("http://127.0.0.1:{configured_port}");
+        if http_ok(&format!("{configured_url}/api/auth/status")) {
+            log_line(&config.data_dir, "reusing healthy on1y serve");
+            (configured_port, true)
+        } else {
+            let fallback_port = find_available_port(configured_port)?;
+            log_line(
+                &config.data_dir,
+                &format!(
+                    "port {configured_port} is occupied by an unavailable service; starting On1y on {fallback_port}"
+                ),
+            );
+            (fallback_port, false)
+        }
+    } else if is_port_available(configured_port) {
+        (configured_port, false)
+    } else {
+        let fallback_port = find_available_port(configured_port)?;
+        log_line(
+            &config.data_dir,
+            &format!("port {configured_port} cannot be bound; starting On1y on {fallback_port}"),
+        );
+        (fallback_port, false)
+    };
+    let app_url = format!("http://127.0.0.1:{backend_port}");
+
+    if reuse_existing {
+        // The health check above already established that the existing service is usable.
     } else {
         servers.backend = Some(spawn_backend(
             &on1y_exe,
@@ -207,9 +232,7 @@ pub fn boot(config: &BootConfig) -> Result<(ManagedServers, String), BootError> 
     }
 
     if !wait_http_ok(&app_url, Duration::from_secs(30)) {
-        return Err(BootError::msg(format!(
-            "工作台页面未就绪: {app_url}"
-        )));
+        return Err(BootError::msg(format!("工作台页面未就绪: {app_url}")));
     }
 
     Ok((servers, app_url))
@@ -255,8 +278,12 @@ fn spawn_backend(
     }
 
     hide_console(&mut cmd);
-    cmd.spawn()
-        .map_err(|e| BootError::msg(format!("无法启动 on1y serve: {e}\n路径: {}", on1y_exe.display())))
+    cmd.spawn().map_err(|e| {
+        BootError::msg(format!(
+            "无法启动 on1y serve: {e}\n路径: {}",
+            on1y_exe.display()
+        ))
+    })
 }
 
 #[cfg(windows)]
@@ -282,6 +309,39 @@ fn is_port_listening(port: u16) -> bool {
         Duration::from_millis(250),
     )
     .is_ok()
+}
+
+fn is_port_available(port: u16) -> bool {
+    TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], port))).is_ok()
+}
+
+fn find_available_port(configured_port: u16) -> Result<u16, BootError> {
+    let preferred_start = configured_port.checked_add(10_000).unwrap_or(18_765);
+    for offset in 0..32_u16 {
+        let Some(candidate) = preferred_start.checked_add(offset) else {
+            break;
+        };
+        if is_port_available(candidate) {
+            return Ok(candidate);
+        }
+    }
+
+    let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
+        .map_err(|err| BootError::msg(format!("无法分配本地服务端口: {err}")))?;
+    listener
+        .local_addr()
+        .map(|addr| addr.port())
+        .map_err(|err| BootError::msg(format!("无法读取本地服务端口: {err}")))
+}
+
+fn http_ok(url: &str) -> bool {
+    let Ok(client) = Client::builder().timeout(Duration::from_secs(3)).build() else {
+        return false;
+    };
+    let Ok(response) = client.get(url).send() else {
+        return false;
+    };
+    response.status().is_success()
 }
 
 fn wait_http_ok(url: &str, timeout: Duration) -> bool {
@@ -350,7 +410,10 @@ fn is_dev_root(path: &Path) -> bool {
 }
 
 fn is_bundled_app_root(path: &Path) -> bool {
-    path.join("frontend").join("out").join("index.html").is_file()
+    path.join("frontend")
+        .join("out")
+        .join("index.html")
+        .is_file()
 }
 
 fn find_on1y_exe_dev() -> Result<PathBuf, BootError> {
@@ -399,13 +462,14 @@ fn which_on1y_from_path() -> Result<PathBuf, BootError> {
     Err(BootError::msg("on1y.exe not on PATH"))
 }
 
-fn resolve_user_config_paths(data_dir: &Path, app_root: &Path, bundled: bool) -> (PathBuf, PathBuf) {
+fn resolve_user_config_paths(
+    data_dir: &Path,
+    app_root: &Path,
+    bundled: bool,
+) -> (PathBuf, PathBuf) {
     let portable = portable_user_base();
     if bundled && data_dir.starts_with(&portable) {
-        (
-            portable.join("config"),
-            portable.join(".env"),
-        )
+        (portable.join("config"), portable.join(".env"))
     } else {
         let parent = data_dir.parent().unwrap_or(app_root);
         (parent.join("config"), parent.join(".env"))
