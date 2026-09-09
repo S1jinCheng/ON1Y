@@ -1,4 +1,5 @@
 const AUTH_TOKEN_KEY = "on1y_auth_token";
+const SESSION_AUTH_TOKEN_KEY = "on1y_session_auth_token";
 const RECENT_USERNAMES_KEY = "on1y_recent_usernames";
 const RECENT_USERNAMES_MAX = 8;
 
@@ -14,18 +15,23 @@ export function getAuthToken(): string | null {
   if (typeof window === "undefined") {
     return null;
   }
-  return localStorage.getItem(AUTH_TOKEN_KEY);
+  return sessionStorage.getItem(SESSION_AUTH_TOKEN_KEY) ?? localStorage.getItem(AUTH_TOKEN_KEY);
 }
 
-export function setAuthToken(token: string | null): void {
+export function setAuthToken(token: string | null, persist = true): void {
   if (typeof window === "undefined") {
     return;
   }
+  localStorage.removeItem(AUTH_TOKEN_KEY);
+  sessionStorage.removeItem(SESSION_AUTH_TOKEN_KEY);
   if (!token) {
-    localStorage.removeItem(AUTH_TOKEN_KEY);
     return;
   }
-  localStorage.setItem(AUTH_TOKEN_KEY, token);
+  if (persist) {
+    localStorage.setItem(AUTH_TOKEN_KEY, token);
+  } else {
+    sessionStorage.setItem(SESSION_AUTH_TOKEN_KEY, token);
+  }
 }
 
 export function clearAuth(): void {
@@ -58,7 +64,7 @@ export function getRecentAuthUsernames(): string[] {
     if (!Array.isArray(parsed)) {
       return [];
     }
-    return parsed.map((v) => String(v).trim()).filter(Boolean);
+    return parsed.map((value) => String(value).trim()).filter(Boolean);
   } catch {
     return [];
   }

@@ -102,7 +102,9 @@ async function request<T>(path: string, init?: RequestOptions): Promise<T> {
   }
   if (response.status === 401) {
     clearAuth();
-    throw new Error("请先登录");
+    if (path !== "/api/auth/login") {
+      throw new Error("请先登录");
+    }
   }
   if (!response.ok) {
     const fallback = `request failed: ${response.status}`;
@@ -134,12 +136,16 @@ export function fetchAuthStatus(): Promise<AuthStatus> {
   return request<AuthStatus>("/api/auth/status");
 }
 
-export function login(username: string, password: string): Promise<{ token: string; user: AuthUser }> {
+export function login(
+  username: string,
+  password: string,
+  persist = true
+): Promise<{ token: string; user: AuthUser }> {
   return request<{ token: string; user: AuthUser }>("/api/auth/login", {
     method: "POST",
     body: JSON.stringify({ username, password })
   }).then((data) => {
-    setAuthToken(data.token);
+    setAuthToken(data.token, persist ?? true);
     rememberAuthUsername(data.user.username);
     return data;
   });
@@ -150,12 +156,14 @@ export function register(input: {
   password: string;
   email?: string;
   display_name?: string;
+  persist?: boolean;
 }): Promise<{ token: string; user: AuthUser }> {
+  const { persist, ...body } = input;
   return request<{ token: string; user: AuthUser }>("/api/auth/register", {
     method: "POST",
-    body: JSON.stringify(input)
+    body: JSON.stringify(body)
   }).then((data) => {
-    setAuthToken(data.token);
+    setAuthToken(data.token, persist ?? true);
     rememberAuthUsername(data.user.username);
     return data;
   });
