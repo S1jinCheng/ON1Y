@@ -33,6 +33,7 @@ import type {
   BookStatus,
   BookWorkDetail
 } from "@/lib/book-types";
+import type { PaperItem, PaperSettings, PaperStatus, PaperSyncResult } from "@/lib/paper-types";
 import {
   clearAuth,
   getAuthToken,
@@ -736,6 +737,7 @@ export function getCollectionCounts(params?: {
   hotlist: number;
   unread: number;
   notes: number;
+  papers: number;
   books: number;
   chats: number;
 }> {
@@ -753,6 +755,7 @@ export function getCollectionCounts(params?: {
     hotlist: number;
     unread: number;
     notes: number;
+    papers: number;
     books: number;
     chats: number;
   }>(`/api/knowledge/collections${suffix}`);
@@ -2048,4 +2051,105 @@ export function scanBookFolder(): Promise<BookFolderSyncResult> {
 }
 export function deleteBookShelfItem(id: number): Promise<{ ok: boolean }> {
   return request<{ ok: boolean }>(`/api/books/shelf/${id}`, { method: "DELETE" });
+}
+
+export function listPapers(params: { status?: PaperStatus; query?: string } = {}): Promise<{ items: PaperItem[]; total: number }> {
+  const query = new URLSearchParams();
+  if (params.status) query.set("status", params.status);
+  if (params.query) query.set("query", params.query);
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request<{ items: PaperItem[]; total: number }>(`/api/papers${suffix}`);
+}
+
+export function fetchPaper(id: number): Promise<PaperItem> {
+  return request<PaperItem>(`/api/papers/item/${id}`);
+}
+
+export function createPaper(input: {
+  title: string;
+  authors?: { name: string; scholar_id?: string; scholar_url?: string }[];
+  abstract?: string;
+  status?: PaperStatus;
+  year?: number;
+  venue?: string;
+  doi?: string;
+  url?: string;
+  tags?: string[];
+}): Promise<PaperItem> {
+  return request<PaperItem>("/api/papers", { method: "POST", body: JSON.stringify(input) });
+}
+
+export function updatePaper(
+  id: number,
+  input: Partial<{
+    title: string;
+    authors: { name: string; scholar_id?: string; scholar_url?: string }[];
+    abstract: string | null;
+    status: PaperStatus;
+    year: number | null;
+    venue: string | null;
+    doi: string | null;
+    url: string | null;
+    pdf_path: string | null;
+    citation_count: number | null;
+    user_note_html: string | null;
+    importance: number | null;
+    theme_slug: string | null;
+    tags: string[];
+  }>
+): Promise<PaperItem> {
+  return request<PaperItem>(`/api/papers/${id}`, { method: "PATCH", body: JSON.stringify(input) });
+}
+
+export function deletePaper(id: number): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>(`/api/papers/${id}`, { method: "DELETE" });
+}
+
+export function fetchRelatedPapers(id: number): Promise<{ items: KnowledgeItem[]; scope: string; from_raw_id: number | null }> {
+  return request(`/api/papers/${id}/related`);
+}
+
+export function fetchPaperSettings(): Promise<PaperSettings> {
+  return request<PaperSettings>("/api/papers/settings");
+}
+
+export function savePaperSettings(input: Partial<PaperSettings>): Promise<PaperSettings> {
+  return request<PaperSettings>("/api/papers/settings", { method: "PUT", body: JSON.stringify(input) });
+}
+
+export function scanPaperFolder(): Promise<PaperSyncResult> {
+  return request<PaperSyncResult>("/api/papers/folder-sync", { method: "POST" });
+}
+
+export function syncZoteroPapers(): Promise<PaperSyncResult> {
+  return request<PaperSyncResult>("/api/papers/zotero-sync", { method: "POST", direct: true });
+}
+
+export async function uploadPaperFile(
+  file: File,
+  input: { title?: string; authors?: string; status?: PaperStatus }
+): Promise<{ ok: boolean; paper: PaperItem; local_path: string }> {
+  const token = getAuthToken();
+  const form = new FormData();
+  form.append("file", file);
+  form.append("title", input.title ?? "");
+  form.append("authors", input.authors ?? "");
+  form.append("status", input.status ?? "to_read");
+  const response = await fetch(resolveApiUrl("/api/papers/upload", true), {
+    method: "POST",
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    body: form,
+    cache: "no-store"
+  });
+  if (!response.ok) {
+    let detail = `upload failed: ${response.status}`;
+    try {
+      const payload = (await response.json()) as { detail?: string };
+      if (payload.detail) detail = payload.detail;
+    } catch {
+      /* ignore non-JSON errors */
+    }
+    throw new Error(detail);
+  }
+  return (await response.json()) as { ok: boolean; paper: PaperItem; local_path: string };
 }

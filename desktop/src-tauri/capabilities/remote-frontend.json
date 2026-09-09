@@ -4,11 +4,12 @@
   "description": "Allow the workbench on on1y serve to open external URLs",
   "windows": ["main"],
   "remote": {
-    "urls": ["http://127.0.0.1:8765", "http://localhost:8765"]
+    "urls": ["http://127.0.0.1:*", "http://localhost:*"]
   },
   "permissions": [
     "opener:default",
     "allow-open-external-url",
+    "allow-open-zotero-pdf",
     "allow-pick-data-folder",
     "allow-save-archive-file"
   ]

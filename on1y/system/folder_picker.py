@@ -27,7 +27,8 @@ def _pick_folder_win32(title: str) -> str | None:
     import ctypes
     import uuid
     from ctypes import POINTER, Structure, byref, c_void_p, cast, windll
-    from ctypes.wintypes import BYTE, DWORD, HRESULT, HWND, LPCWSTR, WORD
+    from ctypes.wintypes import BYTE, DWORD, HWND, LPCWSTR, WORD
+    HRESULT = ctypes.c_long
 
     class GUID(Structure):
         _fields_ = [

@@ -3,8 +3,8 @@ mod boot;
 use std::sync::Mutex;
 
 use boot::{
-    boot, find_on1y_root, prepare_portable_runtime, read_close_window_action, read_open_window_pref,
-    resolve_runtime_layout, BootConfig, ManagedServers,
+    boot, find_on1y_root, prepare_portable_runtime, read_close_window_action,
+    read_open_window_pref, resolve_runtime_layout, BootConfig, ManagedServers,
 };
 use tauri::{
     menu::{Menu, MenuItem},
@@ -29,6 +29,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             open_external_url,
+            open_zotero_pdf,
             pick_data_folder,
             save_archive_file
         ])
@@ -96,12 +97,13 @@ const SPLASH_LABEL: &str = "splash";
 const MAIN_LABEL: &str = "main";
 
 fn create_splash_window(app: &AppHandle) -> tauri::Result<()> {
-    let _window = WebviewWindowBuilder::new(app, SPLASH_LABEL, WebviewUrl::App("index.html".into()))
-        .title("On1y")
-        .inner_size(1320.0, 880.0)
-        .min_inner_size(960.0, 640.0)
-        .center()
-        .build()?;
+    let _window =
+        WebviewWindowBuilder::new(app, SPLASH_LABEL, WebviewUrl::App("index.html".into()))
+            .title("On1y")
+            .inner_size(1320.0, 880.0)
+            .min_inner_size(960.0, 640.0)
+            .center()
+            .build()?;
     Ok(())
 }
 
@@ -191,7 +193,10 @@ fn handle_navigation(app: &AppHandle, url: &Url) -> bool {
     false
 }
 
-fn run_boot_sequence(app: &AppHandle, config: &BootConfig) -> Result<(), Box<dyn std::error::Error>> {
+fn run_boot_sequence(
+    app: &AppHandle,
+    config: &BootConfig,
+) -> Result<(), Box<dyn std::error::Error>> {
     match boot(config) {
         Ok((servers, frontend_url)) => {
             if let Some(state) = app.try_state::<AppState>() {
@@ -304,6 +309,77 @@ fn open_external_url(app: AppHandle, url: String) -> Result<(), String> {
     app.opener()
         .open_url(trimmed, None::<&str>)
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn open_zotero_pdf(app: AppHandle, url: String) -> Result<(), String> {
+    let trimmed = url.trim();
+    if !valid_zotero_reader_url(trimmed) {
+        return Err("invalid Zotero reader URL".into());
+    }
+    app.opener()
+        .open_url(trimmed, None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
+fn valid_zotero_reader_url(value: &str) -> bool {
+    let Ok(parsed) = Url::parse(value) else {
+        return false;
+    };
+    let segments = parsed
+        .path_segments()
+        .map(|parts| parts.collect::<Vec<_>>())
+        .unwrap_or_default();
+    let personal = segments.len() == 3
+        && segments[0] == "library"
+        && segments[1] == "items"
+        && valid_zotero_key(segments[2]);
+    let group = segments.len() == 4
+        && segments[0] == "groups"
+        && segments[1].chars().all(|ch| ch.is_ascii_digit())
+        && !segments[1].is_empty()
+        && segments[2] == "items"
+        && valid_zotero_key(segments[3]);
+    parsed.scheme() == "zotero"
+        && parsed.host_str() == Some("open-pdf")
+        && parsed.query().is_none()
+        && parsed.fragment().is_none()
+        && (personal || group)
+}
+
+fn valid_zotero_key(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 100 && value.chars().all(|ch| ch.is_ascii_alphanumeric())
+}
+
+#[cfg(test)]
+mod zotero_reader_tests {
+    use super::valid_zotero_reader_url;
+
+    #[test]
+    fn accepts_personal_and_group_pdf_links() {
+        assert!(valid_zotero_reader_url(
+            "zotero://open-pdf/library/items/ABCD1234"
+        ));
+        assert!(valid_zotero_reader_url(
+            "zotero://open-pdf/groups/42/items/PDF123"
+        ));
+    }
+
+    #[test]
+    fn rejects_non_reader_and_untrusted_links() {
+        assert!(!valid_zotero_reader_url(
+            "https://open-pdf/library/items/ABCD1234"
+        ));
+        assert!(!valid_zotero_reader_url(
+            "zotero://select/library/items/ABCD1234"
+        ));
+        assert!(!valid_zotero_reader_url(
+            "zotero://open-pdf/groups/not-a-group/items/PDF123"
+        ));
+        assert!(!valid_zotero_reader_url(
+            "zotero://open-pdf/library/items/../../bad"
+        ));
+    }
 }
 
 fn setup_tray(app: &AppHandle) -> tauri::Result<()> {

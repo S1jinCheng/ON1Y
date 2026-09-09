@@ -10,6 +10,7 @@ import {
   ExternalLink,
   Flame,
   Forward,
+  FileText,
   Heart,
   Inbox,
   Network,
@@ -38,6 +39,7 @@ import { FeedItemCard } from "@/components/feed-item-card";
 import { ThemeMovePopover } from "@/components/theme-move-popover";
 import { NotesPanel } from "@/components/notes-panel";
 import { BooksDetailColumn, BooksListColumn } from "@/components/books-panel";
+import { PapersDetailColumn, PapersListColumn } from "@/components/papers-panel";
 import { invalidateNotePreviewCache } from "@/components/note-hover-preview";
 import { ConversationTranscriptPanel } from "@/components/conversation-transcript-panel";
 import { OriginalTextPanel } from "@/components/original-text-panel";
@@ -66,6 +68,7 @@ import {
   type FullSyncStatus,
   economistEpubDownloadUrl,
   fetchBookShelfItem,
+  fetchPaper,
   getEconomistWeeks,
   getKnowledgeItems,
   getStatsOverview,
@@ -101,6 +104,7 @@ import {
   type ThemeRow
 } from "@/lib/types";
 import type { BookEditionHit, BookShelfItem } from "@/lib/book-types";
+import type { PaperItem } from "@/lib/paper-types";
 import { sortKnowledgeItems, sortOptionsForUi } from "@/lib/sort-knowledge-items";
 import { getUserProfile, patchUserProfile } from "@/lib/api";
 import { loadStoredLocale, persistStoredLocale } from "@/lib/locale-preference";
@@ -461,7 +465,8 @@ export default function KnowledgeWorkbench(): JSX.Element {
   const isNotes = collection === "notes";
   const isChats = collection === "chats";
   const isBooks = collection === "books";
-  const isFeedBrowse = !isTrash && !isFavorites && !isHotlist && !isNotes && !isChats && !isBooks;
+  const isPapers = collection === "papers";
+  const isFeedBrowse = !isTrash && !isFavorites && !isHotlist && !isNotes && !isChats && !isBooks && !isPapers;
   const [unreadOnly, setUnreadOnly] = useState(false);
   const [minImportance, setMinImportance] = useState<number | null>(null);
 
@@ -511,6 +516,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
     notes: number;
     chats: number;
     books: number;
+    papers: number;
   }>({
     favorites: 0,
     trash: 0,
@@ -518,13 +524,17 @@ export default function KnowledgeWorkbench(): JSX.Element {
     unread: 0,
     notes: 0,
     chats: 0,
-    books: 0
+    books: 0,
+    papers: 0
   });
   const [activeBook, setActiveBook] = useState<BookShelfItem | null>(null);
   const [activeEdition, setActiveEdition] = useState<BookEditionHit | null>(null);
   const [manualAddBook, setManualAddBook] = useState(false);
   const [bookAcquireNotice, setBookAcquireNotice] = useState<BookAcquireNotice | null>(null);
   const [booksRefreshKey, setBooksRefreshKey] = useState(0);
+  const [activePaper, setActivePaper] = useState<PaperItem | null>(null);
+  const [manualAddPaper, setManualAddPaper] = useState(false);
+  const [papersRefreshKey, setPapersRefreshKey] = useState(0);
   const [feedDate, setFeedDate] = useState<string | null>(null);
   const [calendarMonth, setCalendarMonth] = useState<Date>(() => {
     const now = new Date();
@@ -557,8 +567,8 @@ export default function KnowledgeWorkbench(): JSX.Element {
   );
 
   const sortOptions = useMemo(
-    () => sortOptionsForUi(locale, hasSearch, isBooks ? "feed" : collection),
-    [locale, hasSearch, collection, isBooks]
+    () => sortOptionsForUi(locale, hasSearch, isBooks || isPapers ? "feed" : collection),
+    [locale, hasSearch, collection, isBooks, isPapers]
   );
   const importanceFilterOptions = useMemo(
     () => [
@@ -1085,7 +1095,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
       tagId: isHotlist ? undefined : selectedTagId,
       q: isHotlist ? undefined : query,
       platform: isHotlist ? undefined : filterValue(platform),
-      collection: (isFeedBrowse ? "feed" : isBooks ? "feed" : collection) as
+      collection: (isFeedBrowse || isBooks || isPapers ? "feed" : collection) as
         | "feed"
         | "favorites"
         | "trash"
@@ -1376,6 +1386,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
     };
     const onSettingsClosed = (): void => {
       setBooksRefreshKey((k) => k + 1);
+      setPapersRefreshKey((k) => k + 1);
       void (async () => {
         try {
           const profile = await getUserProfile();
@@ -1494,7 +1505,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
       feedFiltersReadyRef.current = true;
       return;
     }
-    if (isBooks) {
+    if (isBooks || isPapers) {
       return;
     }
     let cancelled = false;
@@ -1647,6 +1658,8 @@ export default function KnowledgeWorkbench(): JSX.Element {
     setActiveBook(null);
     setActiveEdition(null);
     setManualAddBook(false);
+    setActivePaper(null);
+    setManualAddPaper(false);
     if (next !== "feed") {
       setFeedDate(null);
       setUnreadOnly(false);
@@ -2009,7 +2022,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {!isBooks ? (
+          {!isBooks && !isPapers ? (
           <div className="on1y-glass-trigger inline-flex items-center gap-2 rounded-md px-2 py-1.5">
             <Search className="h-4 w-4 text-muted" />
             <input
@@ -2020,7 +2033,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
             />
           </div>
           ) : null}
-          {!isBooks && query.trim() && searchTotal !== undefined ? (
+          {!isBooks && !isPapers && query.trim() && searchTotal !== undefined ? (
             <span className="text-xs text-muted">
               {ui("searchResults").replace("{n}", String(searchTotal))}
               {searchEngine ? ` · ${searchEngine}` : ""}
@@ -2286,6 +2299,21 @@ export default function KnowledgeWorkbench(): JSX.Element {
                   </button>
                   <button
                     type="button"
+                    onClick={() => switchCollection("papers")}
+                    className={`flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-sm transition-colors ${glassNavClass(
+                      isPapers
+                    )}`}
+                  >
+                    <span className="inline-flex items-center gap-1.5">
+                      <FileText className="h-3.5 w-3.5" />
+                      {ui("collectionPapers")}
+                    </span>
+                    <span className={`text-xs ${isPapers ? GLASS_MUTED : "text-muted"}`}>
+                      {collectionCounts.papers}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => switchCollection("hotlist")}
                     className={`flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-sm transition-colors ${glassNavClass(
                       isHotlist
@@ -2386,6 +2414,37 @@ export default function KnowledgeWorkbench(): JSX.Element {
                       setActiveBook(null);
                     }
                     setBooksRefreshKey((k) => k + 1);
+                    void getCollectionCounts().then(setCollectionCounts);
+                  }}
+                  onMessage={setMessage}
+                />
+              </div>
+            </div>
+          ) : isPapers ? (
+            <div className="flex h-full min-h-0 flex-col border-r border-border p-3">
+              <h2 className="mb-3 shrink-0 text-xs font-medium uppercase tracking-wider text-muted">
+                {ui("collectionPapers")} ({collectionCounts.papers})
+              </h2>
+              <div className="min-h-0 flex-1">
+                <PapersListColumn
+                  locale={locale}
+                  activeId={manualAddPaper ? null : activePaper?.id ?? null}
+                  refreshKey={papersRefreshKey}
+                  onSelect={(item) => {
+                    setManualAddPaper(false);
+                    setActivePaper(item);
+                  }}
+                  onStartManualAdd={() => {
+                    setActivePaper(null);
+                    setManualAddPaper(true);
+                  }}
+                  onChanged={() => {
+                    setPapersRefreshKey((key) => key + 1);
+                    void getCollectionCounts().then(setCollectionCounts);
+                  }}
+                  onRemoved={(id) => {
+                    if (activePaper?.id === id) setActivePaper(null);
+                    setPapersRefreshKey((key) => key + 1);
                     void getCollectionCounts().then(setCollectionCounts);
                   }}
                   onMessage={setMessage}
@@ -2780,6 +2839,32 @@ export default function KnowledgeWorkbench(): JSX.Element {
                 void selectItem(item);
               }}
             />
+          ) : isPapers ? (
+            <PapersDetailColumn
+              locale={locale}
+              item={activePaper}
+              manualAdd={manualAddPaper}
+              onSaved={(paper) => {
+                setManualAddPaper(false);
+                setActivePaper(paper);
+                setPapersRefreshKey((key) => key + 1);
+                void getCollectionCounts().then(setCollectionCounts);
+              }}
+              onCancelManual={() => setManualAddPaper(false)}
+              onMessage={setMessage}
+              onSelectPaper={(id) => {
+                void fetchPaper(id).then((paper) => {
+                  setManualAddPaper(false);
+                  setActivePaper(paper);
+                });
+              }}
+              onSelectKnowledgeItem={(item) => {
+                setManualAddPaper(false);
+                setActivePaper(null);
+                switchCollection("feed");
+                void selectItem(item);
+              }}
+            />
           ) : active ? (
             <ColumnScroll className="border-r border-border bg-surface">
               <div className="space-y-0">
@@ -3057,7 +3142,7 @@ export default function KnowledgeWorkbench(): JSX.Element {
             </ColumnScroll>
           )}
         </Panel>
-        {relationPanelOpen && !isBooks ? (
+        {relationPanelOpen && !isBooks && !isPapers ? (
           <>
             <PanelResizeHandle className="w-px bg-border" />
             <Panel minSize={18} defaultSize={22} className="min-h-0 overflow-hidden">

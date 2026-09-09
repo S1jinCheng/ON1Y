@@ -19,7 +19,8 @@ export type KnowledgeCollection =
   | "hotlist"
   | "notes"
   | "chats"
-  | "books";
+  | "books"
+  | "papers";
 
 export type SidebarMode = "theme" | "creator";
 

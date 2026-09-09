@@ -18,17 +18,13 @@ export function isDesktopShell(): boolean {
 async function pickFolderTauri(): Promise<string | null> {
   const tauri = tauriGlobals();
   if (!tauri?.core?.invoke) {
-    return null;
+    throw new Error("Desktop folder picker is unavailable");
   }
-  try {
-    const result = await tauri.core.invoke("pick_data_folder");
-    if (typeof result === "string" && result.trim()) {
-      return result.trim();
-    }
-    return null;
-  } catch {
-    return null;
+  const result = await tauri.core.invoke("pick_data_folder");
+  if (typeof result === "string" && result.trim()) {
+    return result.trim();
   }
+  return null;
 }
 
 /** Native folder picker (Tauri desktop, or server dialog for web UI). */

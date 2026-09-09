@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-open-zotero-pdf"
+description = "Open a validated Zotero PDF reader deep link."
+commands.allow = ["open_zotero_pdf"]

@@ -7,6 +7,7 @@ import {
   Cookie,
   Download,
   FolderOpen,
+  FileText,
   Info,
   KeyRound,
   Loader2,
@@ -63,6 +64,10 @@ import {
   fetchBookSources,
   saveBookSources,
   scanBookFolder,
+  fetchPaperSettings,
+  savePaperSettings,
+  scanPaperFolder,
+  syncZoteroPapers,
   type AuthUser,
   type CookieAccountInfo,
   type CookiePlatform,
@@ -90,6 +95,7 @@ import {
 import { persistStoredLocale } from "@/lib/locale-preference";
 import { isDesktopShell, pickFolder } from "@/lib/pick-data-folder";
 import type { BookFormat } from "@/lib/book-types";
+import type { PaperSettings } from "@/lib/paper-types";
 import { buildBuiltinSourcesSave, readBuiltinToggles } from "@/lib/book-builtin";
 import { saveArchiveFile, triggerBrowserFileDownload } from "@/lib/save-archive-file";
 
@@ -248,6 +254,7 @@ export function SettingsCenter(props: Props): JSX.Element | null {
     { key: "subscriptions", label: L(locale, "同步", "Sync"), icon: <Cookie className="h-4 w-4" /> },
     { key: "ai", label: L(locale, "AI", "AI"), icon: <Bot className="h-4 w-4" /> },
     { key: "books", label: L(locale, "图书", "Books"), icon: <BookOpen className="h-4 w-4" /> },
+    { key: "papers", label: "Paper", icon: <FileText className="h-4 w-4" /> },
     { key: "push", label: L(locale, "推送", "Delivery"), icon: <KeyRound className="h-4 w-4" /> },
     { key: "about", label: L(locale, "关于", "About"), icon: <Info className="h-4 w-4" /> }
   ];
@@ -263,7 +270,7 @@ export function SettingsCenter(props: Props): JSX.Element | null {
     },
     {
       label: L(locale, "内容", "Content"),
-      keys: ["subscriptions", "books"]
+      keys: ["subscriptions", "books", "papers"]
     },
     {
       label: L(locale, "服务", "Services"),
@@ -354,6 +361,7 @@ export function SettingsCenter(props: Props): JSX.Element | null {
             ) : null}
             {tab === "ai" ? <AiTab locale={locale} onMessage={props.onMessage} /> : null}
             {tab === "books" ? <BooksTab locale={locale} onMessage={props.onMessage} /> : null}
+            {tab === "papers" ? <PapersTab locale={locale} onMessage={props.onMessage} /> : null}
             {tab === "push" ? <PushTab locale={locale} onMessage={props.onMessage} /> : null}
             {tab === "about" ? <AboutTab locale={locale} /> : null}
           </div>
@@ -2800,6 +2808,216 @@ function BooksTab(props: { locale: Locale; onMessage?: (message: string) => void
       <div className="flex justify-end">
         <button type="button" className={primaryBtn} disabled={saving} onClick={() => void save()}>
           {saving ? L(locale, "保存中…", "Saving…") : L(locale, "保存", "Save")}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function PapersTab(props: { locale: Locale; onMessage?: (message: string) => void }): JSX.Element {
+  const { locale, onMessage } = props;
+  const [settings, setSettings] = useState<PaperSettings | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [browsing, setBrowsing] = useState(false);
+  const [running, setRunning] = useState<"folder" | "zotero" | null>(null);
+  const onMessageRef = useRef(onMessage);
+  onMessageRef.current = onMessage;
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchPaperSettings()
+      .then((value) => {
+        if (!cancelled) setSettings(value);
+      })
+      .catch((error) => onMessageRef.current?.(error instanceof Error ? error.message : String(error)))
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  function patch(value: Partial<PaperSettings>): void {
+    setSettings((current) => (current ? { ...current, ...value } : current));
+  }
+
+  async function browse(): Promise<void> {
+    setBrowsing(true);
+    try {
+      const picked = await pickFolder();
+      if (picked) patch({ cache_dir: picked });
+    } catch (error) {
+      onMessage?.(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBrowsing(false);
+    }
+  }
+
+  async function save(): Promise<PaperSettings | null> {
+    if (!settings) return null;
+    setSaving(true);
+    try {
+      const saved = await savePaperSettings(settings);
+      setSettings(saved);
+      onMessage?.(L(locale, "Paper 设置已保存", "Paper settings saved"));
+      return saved;
+    } catch (error) {
+      onMessage?.(error instanceof Error ? error.message : String(error));
+      return null;
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function run(kind: "folder" | "zotero"): Promise<void> {
+    if (!settings) return;
+    setRunning(kind);
+    try {
+      const saved = await savePaperSettings(settings);
+      setSettings(saved);
+      const result = kind === "folder" ? await scanPaperFolder() : await syncZoteroPapers();
+      if (!result.enabled) {
+        onMessage?.(L(locale, "请先启用对应的同步开关", "Enable this sync first"));
+        return;
+      }
+      const errorText = result.errors.length ? ` · ${result.errors[0]}` : "";
+      onMessage?.(
+        L(
+          locale,
+          `同步完成：新增 ${result.imported} 篇，更新 ${result.updated ?? 0} 篇，跳过 ${result.skipped ?? 0} 篇${errorText}`,
+          `Sync complete: ${result.imported} imported, ${result.updated ?? 0} updated, ${result.skipped ?? 0} skipped${errorText}`
+        )
+      );
+    } catch (error) {
+      onMessage?.(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRunning(null);
+    }
+  }
+
+  if (loading || !settings) return <LoadingRow locale={locale} />;
+
+  return (
+    <div className="space-y-7">
+      <section className="space-y-4">
+        <div>
+          <h3 className="text-sm font-semibold text-foreground">{L(locale, "本地 PDF", "Local PDFs")}</h3>
+          <p className="mt-1 text-xs leading-relaxed text-muted">
+            {L(locale, "监控指定目录，把新增 PDF 自动加入 Paper。", "Watch a folder and add new PDFs to Papers automatically.")}
+          </p>
+        </div>
+        <label className="block">
+          <FieldLabel>{L(locale, "Paper 文件夹", "Paper folder")}</FieldLabel>
+          <div className="flex gap-2">
+            <input
+              className={`${inputClass} min-w-0 flex-1`}
+              value={settings.cache_dir ?? ""}
+              onChange={(event) => patch({ cache_dir: event.target.value })}
+              placeholder={settings.resolved_cache_dir || L(locale, "使用默认目录", "Use default folder")}
+            />
+            <button type="button" className={`inline-flex shrink-0 items-center gap-1.5 ${ghostBtn}`} disabled={browsing} onClick={() => void browse()}>
+              {browsing ? <Loader2 className="h-4 w-4 animate-spin" /> : <FolderOpen className="h-4 w-4" />}
+              {L(locale, "选择…", "Choose…")}
+            </button>
+          </div>
+          {settings.resolved_cache_dir ? (
+            <p className="mt-1.5 break-all text-[11px] text-muted">{settings.resolved_cache_dir}</p>
+          ) : null}
+        </label>
+        <ToggleRow
+          label={L(locale, "启用文件夹同步", "Enable folder sync")}
+          description={L(locale, "后台定期扫描此目录；已存在的论文会被识别并跳过或合并。", "Scan this folder in the background; existing papers are skipped or merged.")}
+          checked={settings.folder_sync_enabled}
+          onChange={(checked) => patch({ folder_sync_enabled: checked })}
+        />
+        <div className="flex justify-end">
+          <button type="button" className={ghostBtn} disabled={running !== null} onClick={() => void run("folder")}>
+            {running === "folder" ? L(locale, "扫描中…", "Scanning…") : L(locale, "保存并立即扫描", "Save and scan now")}
+          </button>
+        </div>
+      </section>
+
+      <section className="space-y-4 border-t border-border pt-6">
+        <div>
+          <h3 className="text-sm font-semibold text-foreground">Zotero</h3>
+          <p className="mt-1 text-xs leading-relaxed text-muted">
+            {L(locale, "连接 Zotero Desktop 本地 API，或使用 Zotero Web API。", "Connect to the Zotero Desktop local API or Zotero Web API.")}
+          </p>
+        </div>
+        <ToggleRow
+          label={L(locale, "启用 Zotero 同步", "Enable Zotero sync")}
+          description={L(locale, "同步论文元数据，并可下载 PDF 附件。", "Sync paper metadata and optionally download PDF attachments.")}
+          checked={settings.zotero_enabled}
+          onChange={(checked) => patch({ zotero_enabled: checked })}
+        />
+        <div>
+          <FieldLabel>{L(locale, "连接方式", "Connection")}</FieldLabel>
+          <SegmentedControl
+            value={settings.zotero_mode}
+            options={[
+              { value: "local", label: "Zotero Desktop" },
+              { value: "web", label: "Zotero Web" }
+            ]}
+            onChange={(value) => patch({
+              zotero_mode: value,
+              zotero_base_url: value === "local" ? "http://localhost:23119/api" : "https://api.zotero.org"
+            })}
+          />
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <label>
+            <FieldLabel>{L(locale, "文库类型", "Library type")}</FieldLabel>
+            <select
+              className={inputClass}
+              value={settings.zotero_library_type}
+              onChange={(event) => patch({ zotero_library_type: event.target.value as "users" | "groups" })}
+            >
+              <option value="users">{L(locale, "个人文库", "User library")}</option>
+              <option value="groups">{L(locale, "群组文库", "Group library")}</option>
+            </select>
+          </label>
+          <label>
+            <FieldLabel>Library ID</FieldLabel>
+            <input className={inputClass} value={settings.zotero_library_id} onChange={(event) => patch({ zotero_library_id: event.target.value })} />
+          </label>
+        </div>
+        <label className="block">
+          <FieldLabel>API URL</FieldLabel>
+          <input className={inputClass} value={settings.zotero_base_url} onChange={(event) => patch({ zotero_base_url: event.target.value })} />
+        </label>
+        <label className="block">
+          <FieldLabel>API Key {L(locale, "（Web 模式）", "(Web mode)")}</FieldLabel>
+          <input type="password" className={inputClass} value={settings.zotero_api_key ?? ""} onChange={(event) => patch({ zotero_api_key: event.target.value })} />
+        </label>
+        <label className="block">
+          <FieldLabel>Collection Key {L(locale, "（可选）", "(optional)")}</FieldLabel>
+          <input className={inputClass} value={settings.zotero_collection_key ?? ""} onChange={(event) => patch({ zotero_collection_key: event.target.value })} />
+        </label>
+        <ToggleRow
+          label={L(locale, "同步 PDF 附件", "Sync PDF attachments")}
+          description={L(locale, "优先复用已经存在的本地 PDF，不会再次生成同名副本。", "Reuse an existing local PDF instead of creating another copy.")}
+          checked={settings.zotero_download_pdfs}
+          onChange={(checked) => patch({ zotero_download_pdfs: checked })}
+        />
+        <div className="flex justify-end">
+          <button type="button" className={ghostBtn} disabled={running !== null} onClick={() => void run("zotero")}>
+            {running === "zotero" ? L(locale, "同步中…", "Syncing…") : L(locale, "保存并立即同步", "Save and sync now")}
+          </button>
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-4 text-xs leading-relaxed text-emerald-900">
+        <p className="font-medium">{L(locale, "双重同步不会创建两篇相同 Paper", "Folder + Zotero sync will not create duplicate papers")}</p>
+        <p className="mt-1 text-emerald-800/80">
+          {L(locale, "系统依次按 Zotero ID、DOI、PDF 路径、标题与年份/作者识别同一论文。匹配后只合并来源信息，并保留你的阅读状态、笔记、星级、主题和本地标签。", "Papers are matched by Zotero ID, DOI, PDF path, then title with year/author checks. Source metadata is merged while your reading status, notes, rating, theme, and local tags are preserved.")}
+        </p>
+      </section>
+
+      <div className="flex justify-end border-t border-border pt-5">
+        <button type="button" className={primaryBtn} disabled={saving || running !== null} onClick={() => void save()}>
+          {saving ? L(locale, "保存中…", "Saving…") : L(locale, "保存 Paper 设置", "Save Paper settings")}
         </button>
       </div>
     </div>

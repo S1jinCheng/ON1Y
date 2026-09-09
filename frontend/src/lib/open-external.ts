@@ -46,6 +46,19 @@ export async function openExternalUrl(url: string): Promise<void> {
   window.open(trimmed, "_blank", "noopener,noreferrer");
 }
 
+export async function openZoteroPdf(url: string): Promise<void> {
+  const trimmed = (url || "").trim();
+  if (!/^zotero:\/\/open-pdf\/(?:library\/items\/[A-Za-z0-9]+|groups\/\d+\/items\/[A-Za-z0-9]+)$/.test(trimmed)) {
+    throw new Error("Invalid Zotero reader URL");
+  }
+  const tauri = tauriGlobals();
+  if (tauri?.core?.invoke) {
+    await tauri.core.invoke("open_zotero_pdf", { url: trimmed });
+    return;
+  }
+  window.location.href = trimmed;
+}
+
 export function handleExternalLinkClick(
   event: MouseEvent<HTMLAnchorElement>,
   url: string | null | undefined
