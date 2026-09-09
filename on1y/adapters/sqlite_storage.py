@@ -42,7 +42,8 @@ def _source_meta_int(meta: dict[str, Any], *keys: str) -> int | None:
             return value
     return None
 
-SCHEMA_VERSION = 20
+
+SCHEMA_VERSION = 22
 SCHEMA_PATH = PROJECT_ROOT / "sql" / "schema.sql"
 SCHEMA_V2_PATH = PROJECT_ROOT / "sql" / "schema_v2.sql"
 SCHEMA_V3_PATH = PROJECT_ROOT / "sql" / "schema_v3.sql"
@@ -61,6 +62,8 @@ SCHEMA_V17_PATH = PROJECT_ROOT / "sql" / "schema_v17.sql"
 SCHEMA_V18_PATH = PROJECT_ROOT / "sql" / "schema_v18.sql"
 SCHEMA_V19_PATH = PROJECT_ROOT / "sql" / "schema_v19.sql"
 SCHEMA_V20_PATH = PROJECT_ROOT / "sql" / "schema_v20.sql"
+SCHEMA_V21_PATH = PROJECT_ROOT / "sql" / "schema_v21.sql"
+SCHEMA_V22_PATH = PROJECT_ROOT / "sql" / "schema_v22.sql"
 
 
 def _as_int_or_none(value: Any) -> int | None:
@@ -157,9 +160,7 @@ class SqliteStorage:
 
     def _current_schema_version(self, conn: sqlite3.Connection) -> int:
         try:
-            row = conn.execute(
-                "SELECT MAX(version) AS v FROM schema_migrations"
-            ).fetchone()
+            row = conn.execute("SELECT MAX(version) AS v FROM schema_migrations").fetchone()
             return int(row["v"]) if row and row["v"] is not None else 0
         except sqlite3.OperationalError:
             return 0
@@ -359,6 +360,27 @@ class SqliteStorage:
                 (20,),
             )
             logger.info("Applied schema version 20 to %s", self._db_path)
+            current = 20
+        if current < 21:
+            if not SCHEMA_V21_PATH.is_file():
+                raise StorageError(f"Schema file not found: {SCHEMA_V21_PATH}")
+            conn.executescript(SCHEMA_V21_PATH.read_text(encoding="utf-8"))
+            conn.execute(
+                "INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)",
+                (21,),
+            )
+            logger.info("Applied schema version 21 to %s", self._db_path)
+
+            current = 21
+        if current < 22:
+            if not SCHEMA_V22_PATH.is_file():
+                raise StorageError(f"Schema file not found: {SCHEMA_V22_PATH}")
+            conn.executescript(SCHEMA_V22_PATH.read_text(encoding="utf-8"))
+            conn.execute(
+                "INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)",
+                (22,),
+            )
+            logger.info("Applied schema version 22 to %s", self._db_path)
 
     def _table_exists(self, conn: sqlite3.Connection, name: str) -> bool:
         row = conn.execute(
@@ -397,9 +419,7 @@ class SqliteStorage:
                 """
             )
         if not self._column_exists(conn, "raw_items", "user_id"):
-            conn.execute(
-                "ALTER TABLE raw_items ADD COLUMN user_id INTEGER REFERENCES users(id)"
-            )
+            conn.execute("ALTER TABLE raw_items ADD COLUMN user_id INTEGER REFERENCES users(id)")
         conn.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_raw_items_user_id ON raw_items (user_id)
@@ -586,9 +606,7 @@ class SqliteStorage:
         day = (hotlist_date or "").strip() or date.today().isoformat()
         source = (hotlist_source or "").strip()
         if self._current_schema_version(conn) >= 8:
-            join_sql = (
-                " INNER JOIN hotlist_snapshots hs ON hs.raw_id = r.id "
-            )
+            join_sql = " INNER JOIN hotlist_snapshots hs ON hs.raw_id = r.id "
             where_suffix = " AND hs.snapshot_date = ? "
             params: list[Any] = [day]
             if source:
@@ -692,9 +710,7 @@ class SqliteStorage:
                 "COALESCE(CAST(json_extract(r.source_meta, '$.starred') AS INTEGER), 0) = 1"
             )
         if key == "unread":
-            return (
-                f"r.deleted_at IS NULL AND {is_feed_row_sql('r')} AND {unread_sql('r')}"
-            )
+            return f"r.deleted_at IS NULL AND {is_feed_row_sql('r')} AND {unread_sql('r')}"
         if key == "notes":
             from on1y.knowledge.notes import notes_collection_clause
 
@@ -812,7 +828,12 @@ class SqliteStorage:
                         source_meta = excluded.source_meta
                     WHERE pending_urls.status IN ('failed', 'pending')
                     """,
-                    (url, item.source.value, dumps_meta(item.source_meta), PendingStatus.PENDING.value),
+                    (
+                        url,
+                        item.source.value,
+                        dumps_meta(item.source_meta),
+                        PendingStatus.PENDING.value,
+                    ),
                 )
                 row = conn.execute(
                     "SELECT id FROM pending_urls WHERE url = ? AND source = ?",
@@ -1847,17 +1868,25 @@ class SqliteStorage:
             )
 
     def get_theme_id_by_slug(self, slug: str) -> int | None:
-        row = self._connect().execute(
-            "SELECT id FROM themes WHERE slug = ? AND archived_at IS NULL",
-            (slug.strip().lower(),),
-        ).fetchone()
+        row = (
+            self._connect()
+            .execute(
+                "SELECT id FROM themes WHERE slug = ? AND archived_at IS NULL",
+                (slug.strip().lower(),),
+            )
+            .fetchone()
+        )
         return int(row["id"]) if row else None
 
     def get_theme_by_id(self, theme_id: int) -> dict[str, Any] | None:
-        row = self._connect().execute(
-            "SELECT * FROM themes WHERE id = ?",
-            (theme_id,),
-        ).fetchone()
+        row = (
+            self._connect()
+            .execute(
+                "SELECT * FROM themes WHERE id = ?",
+                (theme_id,),
+            )
+            .fetchone()
+        )
         return dict(row) if row else None
 
     def list_active_themes(self) -> list[dict[str, Any]]:
@@ -1998,10 +2027,14 @@ class SqliteStorage:
     def get_theme_discovery_json(self, theme_id: int) -> dict[str, Any]:
         if not self._column_exists(self._connect(), "themes", "discovery_json"):
             return {}
-        row = self._connect().execute(
-            "SELECT discovery_json FROM themes WHERE id = ?",
-            (theme_id,),
-        ).fetchone()
+        row = (
+            self._connect()
+            .execute(
+                "SELECT discovery_json FROM themes WHERE id = ?",
+                (theme_id,),
+            )
+            .fetchone()
+        )
         if row is None:
             return {}
         return loads_meta(row["discovery_json"])
@@ -2021,8 +2054,7 @@ class SqliteStorage:
         with self.transaction() as conn:
             if reassign_to_other and other_id is not None and raw_ids:
                 cur = conn.execute(
-                    "UPDATE raw_items SET theme_id = ?, theme_source = 'remap' "
-                    "WHERE theme_id = ?",
+                    "UPDATE raw_items SET theme_id = ?, theme_source = 'remap' WHERE theme_id = ?",
                     (other_id, theme_id),
                 )
                 remapped = int(cur.rowcount or 0)
@@ -2062,9 +2094,7 @@ class SqliteStorage:
         active_ids = sorted(int(r["id"]) for r in active_rows)
         ids = [int(i) for i in theme_ids]
         if sorted(ids) != active_ids:
-            raise StorageError(
-                "theme_ids must include every active theme exactly once"
-            )
+            raise StorageError("theme_ids must include every active theme exactly once")
         with self.transaction() as conn:
             for index, theme_id in enumerate(ids):
                 conn.execute(
@@ -2097,10 +2127,14 @@ class SqliteStorage:
         return [int(r["id"]) for r in rows]
 
     def get_raw_theme_source(self, raw_id: int) -> str | None:
-        row = self._connect().execute(
-            "SELECT theme_source FROM raw_items WHERE id = ?",
-            (raw_id,),
-        ).fetchone()
+        row = (
+            self._connect()
+            .execute(
+                "SELECT theme_source FROM raw_items WHERE id = ?",
+                (raw_id,),
+            )
+            .fetchone()
+        )
         if row is None:
             return None
         return str(row["theme_source"]) if row["theme_source"] else None
@@ -2130,15 +2164,19 @@ class SqliteStorage:
         self.set_item_theme(raw_id, theme_id, source=source)
 
     def get_item_tag_names(self, raw_id: int) -> list[str]:
-        rows = self._connect().execute(
-            """
+        rows = (
+            self._connect()
+            .execute(
+                """
             SELECT t.name FROM item_tags it
             JOIN tags t ON t.id = it.tag_id
             WHERE it.raw_id = ?
             ORDER BY t.name ASC
             """,
-            (raw_id,),
-        ).fetchall()
+                (raw_id,),
+            )
+            .fetchall()
+        )
         return [str(r["name"]) for r in rows]
 
     def merge_extracted_tags(self, raw_id: int, tag_names: list[str]) -> None:
@@ -2246,8 +2284,10 @@ class SqliteStorage:
     def get_latest_absorb_operation(self, theme_id: int) -> dict[str, Any] | None:
         if not self._table_exists(self._connect(), "theme_operations"):
             return None
-        row = self._connect().execute(
-            """
+        row = (
+            self._connect()
+            .execute(
+                """
             SELECT id, op_type, source_theme_id, target_theme_ids, metadata_json,
                    status, total_items, processed_items, created_at, completed_at
             FROM theme_operations
@@ -2255,8 +2295,10 @@ class SqliteStorage:
             ORDER BY id DESC
             LIMIT 1
             """,
-            (theme_id,),
-        ).fetchone()
+                (theme_id,),
+            )
+            .fetchone()
+        )
         if row is None:
             return None
         data = dict(row)
@@ -2326,7 +2368,8 @@ class SqliteStorage:
             "obsidian_uri": str(meta.get("obsidian_uri") or "").strip() or None,
             "obsidian_source_url": str(meta.get("obsidian_source_url") or "").strip() or None,
             "obsidian_path": str(meta.get("obsidian_path") or "").strip() or None,
-            "obsidian_writeback_status": str(meta.get("obsidian_writeback_status") or "").strip() or None,
+            "obsidian_writeback_status": str(meta.get("obsidian_writeback_status") or "").strip()
+            or None,
             "transcript_kind": transcript_kind,
             "translated_body_text": translated_body_text,
             "can_translate": transcript_kind == "en" and not translated_body_text,
@@ -2768,7 +2811,7 @@ class SqliteStorage:
             f"""
             SELECT q.*
             FROM obsidian_writeback_queue q
-            WHERE {' AND '.join(where)}
+            WHERE {" AND ".join(where)}
             ORDER BY q.created_at DESC, q.id DESC
             LIMIT ?
             """,
@@ -2788,7 +2831,7 @@ class SqliteStorage:
                 f"""
                 SELECT q.*
                 FROM obsidian_writeback_queue q
-                WHERE {' AND '.join(where)}
+                WHERE {" AND ".join(where)}
                 ORDER BY q.created_at ASC, q.id ASC
                 LIMIT ?
                 """,
@@ -3061,7 +3104,9 @@ class SqliteStorage:
                         params,
                     ).fetchall()
                 }
-                ordered_rows = [row_by_id[rid] for rid in raw_ids if rid in allowed and rid in row_by_id]
+                ordered_rows = [
+                    row_by_id[rid] for rid in raw_ids if rid in allowed and rid in row_by_id
+                ]
                 total = len(ordered_rows)
         items = self._assemble_knowledge_items(ordered_rows)
         hit_map = {int(h["raw_id"]): h for h in hits}
@@ -3403,9 +3448,7 @@ class SqliteStorage:
                 item_count = int(zh.get("count", 0))
                 latest_meta = zhihu_latest_meta.get(people_url) or {}
                 name = str(zh.get("author") or latest_meta.get("author") or name).strip() or name
-                avatar = resolve_author_avatar(
-                    latest_meta or {"author_avatar": zh.get("avatar")}
-                )
+                avatar = resolve_author_avatar(latest_meta or {"author_avatar": zh.get("avatar")})
                 author_url = people_url
             elif key.startswith("twitter:"):
                 url = key[8:]
@@ -3413,9 +3456,7 @@ class SqliteStorage:
                 item_count = int(tw.get("count", 0))
                 latest_meta = twitter_latest_meta.get(url) or {}
                 name = str(tw.get("author") or latest_meta.get("author") or name).strip() or name
-                avatar = resolve_author_avatar(
-                    latest_meta or {"author_avatar": tw.get("avatar")}
-                )
+                avatar = resolve_author_avatar(latest_meta or {"author_avatar": tw.get("avatar")})
                 author_url = url
             else:
                 labels = meta.get("feed_labels") or []
@@ -3477,9 +3518,7 @@ class SqliteStorage:
             )
         return finalize_creator_sidebar_rows(creators)
 
-    def _collection_clause_for_conn(
-        self, conn: sqlite3.Connection, collection: str | None
-    ) -> str:
+    def _collection_clause_for_conn(self, conn: sqlite3.Connection, collection: str | None) -> str:
         key = (collection or "feed").strip().lower()
         if self._current_schema_version(conn) >= 8 and key == "hotlist":
             # Membership comes from hotlist_snapshots join; avoid tagging feed rows via meta.
@@ -3488,9 +3527,7 @@ class SqliteStorage:
             if key == "trash":
                 return "0"
             if key == "favorites":
-                return (
-                    "COALESCE(CAST(json_extract(r.source_meta, '$.starred') AS INTEGER), 0) = 1"
-                )
+                return "COALESCE(CAST(json_extract(r.source_meta, '$.starred') AS INTEGER), 0) = 1"
             return "1"
         return self._collection_clause(collection)
 
@@ -3737,7 +3774,9 @@ class SqliteStorage:
         items = self._assemble_knowledge_items(rows)
         if coll == "hotlist":
             for item, row in zip(items, rows, strict=False):
-                snap = row["hotlist_snapshot_date"] if "hotlist_snapshot_date" in row.keys() else None
+                snap = (
+                    row["hotlist_snapshot_date"] if "hotlist_snapshot_date" in row.keys() else None
+                )
                 if snap:
                     item["snapshot_date"] = str(snap)
                 heat = row["hotlist_heat_text"] if "hotlist_heat_text" in row.keys() else None
@@ -3829,7 +3868,9 @@ class SqliteStorage:
                     "published_at": published_at_iso(meta),
                     "duration_sec": _source_meta_int(meta, "duration_sec", "duration"),
                     "like_count": _source_meta_int(meta, "like_count", "likes", "voteup_count"),
-                    "comment_count": _source_meta_int(meta, "comment_count", "comments", "reply_count"),
+                    "comment_count": _source_meta_int(
+                        meta, "comment_count", "comments", "reply_count"
+                    ),
                     "feed_label": str(meta.get("feed_label") or "").strip() or None,
                     "hot_rank": meta.get("hot_rank"),
                     "heat_text": str(meta.get("heat_text") or "").strip() or None,
@@ -3852,15 +3893,14 @@ class SqliteStorage:
                     "clip_count": _as_int_or_none(meta.get("clip_count")),
                     "extract_strategy": str(meta.get("extract_strategy") or "").strip() or None,
                     "obsidian_uri": str(meta.get("obsidian_uri") or "").strip() or None,
-                    "obsidian_source_url": str(meta.get("obsidian_source_url") or "").strip() or None,
+                    "obsidian_source_url": str(meta.get("obsidian_source_url") or "").strip()
+                    or None,
                     "obsidian_path": str(meta.get("obsidian_path") or "").strip() or None,
                     "obsidian_writeback_status": str(
                         meta.get("obsidian_writeback_status") or ""
                     ).strip()
                     or None,
-                    "deleted_at": row["deleted_at"]
-                    if "deleted_at" in row.keys()
-                    else None,
+                    "deleted_at": row["deleted_at"] if "deleted_at" in row.keys() else None,
                 }
             )
         return items

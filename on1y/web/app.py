@@ -402,9 +402,7 @@ def _theme_rows_for_api(rows: list[dict[str, Any]], locale: str) -> list[dict[st
                 "description_zh": str(row.get("description_zh") or ""),
                 "description_en": str(row.get("description_en") or ""),
                 "label": (
-                    str(row["name_en"])
-                    if locale.lower().startswith("en")
-                    else str(row["name_zh"])
+                    str(row["name_en"]) if locale.lower().startswith("en") else str(row["name_zh"])
                 ),
                 "item_count": int(row["item_count"]),
                 "is_builtin": bool(int(row.get("is_builtin") or 0)),
@@ -436,6 +434,9 @@ def create_app() -> FastAPI:
 
     register_auth_routes(app)
     install_auth_middleware(app)
+    from on1y.papers.routes import register_paper_routes
+
+    register_paper_routes(app)
 
     @app.get("/api/overview")
     def overview() -> dict[str, Any]:
@@ -657,7 +658,9 @@ def create_app() -> FastAPI:
                     source_meta=clip_meta,
                     preferred_body_text=selected_text or None,
                     preferred_title=body.title,
-                    preferred_source_meta={"extract_strategy": "selected_text"} if selected_text else None,
+                    preferred_source_meta={"extract_strategy": "selected_text"}
+                    if selected_text
+                    else None,
                 )
             storage.merge_source_meta(raw.id, clip_meta)
             distilled_id = None
@@ -814,11 +817,15 @@ def create_app() -> FastAPI:
         if body.zhihu_follow_sync_mode is not None:
             mode = body.zhihu_follow_sync_mode.strip().lower()
             if mode not in {"api", "rss"}:
-                raise HTTPException(status_code=400, detail="zhihu_follow_sync_mode must be api or rss")
+                raise HTTPException(
+                    status_code=400, detail="zhihu_follow_sync_mode must be api or rss"
+                )
         if body.bilibili_up_poll_mode is not None:
             mode = body.bilibili_up_poll_mode.strip().lower()
             if mode not in {"dynamic", "space"}:
-                raise HTTPException(status_code=400, detail="bilibili_up_poll_mode must be dynamic or space")
+                raise HTTPException(
+                    status_code=400, detail="bilibili_up_poll_mode must be dynamic or space"
+                )
         save_sync_settings(**payload)
         return {"saved": True, **public_settings_view()}
 
@@ -858,7 +865,9 @@ def create_app() -> FastAPI:
         if body.import_mode is not None:
             mode = body.import_mode.strip().lower()
             if mode not in {"move", "keep", "delete"}:
-                raise HTTPException(status_code=400, detail="import_mode must be move, keep, or delete")
+                raise HTTPException(
+                    status_code=400, detail="import_mode must be move, keep, or delete"
+                )
             payload["import_mode"] = mode
         save_settings(**payload)
         return {"saved": True, **public_settings_view()}
@@ -1012,7 +1021,9 @@ def create_app() -> FastAPI:
         return cancel_qr_login(session_id, user_id=get_effective_user_id())
 
     @app.post("/api/telegram/auth/qr/{session_id}/password")
-    def telegram_auth_qr_password(session_id: str, body: TelegramQrPasswordRequest) -> dict[str, Any]:
+    def telegram_auth_qr_password(
+        session_id: str, body: TelegramQrPasswordRequest
+    ) -> dict[str, Any]:
         from on1y.auth.context import get_effective_user_id
         from on1y.telegram.client import TelegramClientError
         from on1y.telegram.qr_auth import complete_qr_password
@@ -1255,6 +1266,10 @@ def create_app() -> FastAPI:
 
         from on1y.auth.context import get_effective_user_id
         from on1y.books.settings_store import load_book_settings
+        from on1y.papers.settings_store import (
+            load_paper_settings,
+            resolve_paper_cache_dir,
+        )
         from on1y.user.paths import resolve_books_cache_dir
 
         raw = str(body.get("path") or "").strip()
@@ -1268,11 +1283,12 @@ def create_app() -> FastAPI:
         if not resolved.is_file():
             raise HTTPException(status_code=400, detail="not a file")
         uid = get_effective_user_id()
-        cache_root = resolve_books_cache_dir(uid, load_book_settings(uid).cache_dir).resolve()
-        try:
-            resolved.relative_to(cache_root)
-        except ValueError as exc:
-            raise HTTPException(status_code=403, detail="path not allowed") from exc
+        allowed_roots = [
+            resolve_books_cache_dir(uid, load_book_settings(uid).cache_dir).resolve(),
+            resolve_paper_cache_dir(uid, load_paper_settings(uid).cache_dir).resolve(),
+        ]
+        if not any(resolved == root or root in resolved.parents for root in allowed_roots):
+            raise HTTPException(status_code=403, detail="path not allowed")
         try:
             if sys.platform == "win32":
                 os.startfile(resolved)  # noqa: S606
@@ -1669,7 +1685,9 @@ def create_app() -> FastAPI:
 
         storage = get_storage()
         try:
-            dates = storage.list_hotlist_dates(hotlist_source=source.strip() or "zhihu", limit=limit)
+            dates = storage.list_hotlist_dates(
+                hotlist_source=source.strip() or "zhihu", limit=limit
+            )
             today = date_cls.today().isoformat()
             if today not in dates:
                 dates = [today, *dates]
@@ -2084,6 +2102,7 @@ def create_app() -> FastAPI:
 
         from on1y.auth.context import get_effective_user_id
         from on1y.books.shelf import count_shelf_items
+        from on1y.papers.shelf import count_papers
 
         storage = get_storage()
         try:
@@ -2098,6 +2117,7 @@ def create_app() -> FastAPI:
                 "unread": storage.count_collection_items("unread"),
                 "notes": storage.count_collection_items("notes"),
                 "books": count_shelf_items(storage, uid),
+                "papers": count_papers(storage, uid),
                 "chats": storage.count_collection_items("chats"),
             }
         finally:
@@ -2181,7 +2201,9 @@ def create_app() -> FastAPI:
                             location = resp.headers.get("location")
                             next_url = normalize_cover_url(urljoin(current, location or ""))
                             if not next_url or not cover_proxy_allowed(next_url):
-                                raise HTTPException(status_code=400, detail="cover redirect not allowed")
+                                raise HTTPException(
+                                    status_code=400, detail="cover redirect not allowed"
+                                )
                             current = next_url
                             continue
                         if resp.status_code >= 400:
@@ -2196,10 +2218,14 @@ def create_app() -> FastAPI:
                         for chunk in resp.iter_bytes():
                             body.extend(chunk)
                             if len(body) > max_bytes:
-                                raise HTTPException(status_code=413, detail="cover image is too large")
+                                raise HTTPException(
+                                    status_code=413, detail="cover image is too large"
+                                )
                         media = resp.headers.get("content-type") or "image/jpeg"
                         if not str(media).startswith("image/"):
-                            raise HTTPException(status_code=502, detail="cover response is not an image")
+                            raise HTTPException(
+                                status_code=502, detail="cover response is not an image"
+                            )
                         return Response(
                             content=bytes(body),
                             media_type=str(media).split(";", 1)[0],
@@ -2210,6 +2236,7 @@ def create_app() -> FastAPI:
             raise
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"cover fetch failed: {exc}") from exc
+
     @app.get("/api/books/shelf")
     def books_shelf_list(
         status: str | None = Query(default=None),
@@ -2383,6 +2410,7 @@ def create_app() -> FastAPI:
                 destination.unlink(missing_ok=True)
             logger.exception("books_upload failed for %s", filename)
             raise HTTPException(status_code=502, detail=f"电子书入库失败：{exc}") from exc
+
     @app.patch("/api/books/shelf/{item_id}")
     def books_shelf_update(item_id: int, body: dict[str, Any]) -> dict[str, Any]:
         from on1y.auth.context import get_effective_user_id
@@ -2524,6 +2552,7 @@ def create_app() -> FastAPI:
         from on1y.books.folder_sync import scan_user_folder
 
         return scan_user_folder(get_effective_user_id())
+
     @app.post("/api/books/acquire/preview")
     def books_acquire_preview(body: dict[str, Any]) -> dict[str, Any]:
         from on1y.auth.context import get_effective_user_id
@@ -2577,7 +2606,9 @@ def create_app() -> FastAPI:
             try:
                 shelf_item_id = int(shelf_item_id)
             except (TypeError, ValueError) as exc:
-                raise HTTPException(status_code=400, detail="shelf_item_id must be an integer") from exc
+                raise HTTPException(
+                    status_code=400, detail="shelf_item_id must be an integer"
+                ) from exc
         candidate = body.get("candidate")
         if candidate is not None and not isinstance(candidate, dict):
             raise HTTPException(status_code=400, detail="candidate must be an object")
@@ -2933,7 +2964,9 @@ def create_app() -> FastAPI:
             storage.close()
 
     @app.get("/api/knowledge/retrieve/context")
-    def knowledge_retrieve_context(raw_ids: str, max_chars: int = Query(default=4000, ge=500, le=10000)) -> dict[str, Any]:
+    def knowledge_retrieve_context(
+        raw_ids: str, max_chars: int = Query(default=4000, ge=500, le=10000)
+    ) -> dict[str, Any]:
         from on1y.retrieve import pack_context
 
         ids: list[int] = []
@@ -3047,7 +3080,9 @@ def create_app() -> FastAPI:
                 source_meta=prior_meta,
                 preferred_title=prior_meta.get("clip_title"),
             )
-            storage.merge_source_meta(raw_id, {"retry_extract_at": datetime.now(timezone.utc).isoformat()})
+            storage.merge_source_meta(
+                raw_id, {"retry_extract_at": datetime.now(timezone.utc).isoformat()}
+            )
             distilled_id = None
             if auto_distill:
                 distilled_id = distill_raw_item(storage, refreshed.id, force=True)
@@ -3072,7 +3107,9 @@ def create_app() -> FastAPI:
             started = perf_counter()
             distilled_id = distill_raw_item(storage, raw_id, force=force)
             elapsed_ms = int((perf_counter() - started) * 1000)
-            storage.merge_source_meta(raw_id, {"retry_distill_at": datetime.now(timezone.utc).isoformat()})
+            storage.merge_source_meta(
+                raw_id, {"retry_distill_at": datetime.now(timezone.utc).isoformat()}
+            )
             return {
                 "raw_id": raw_id,
                 "distilled_id": distilled_id,
@@ -3307,7 +3344,9 @@ def create_app() -> FastAPI:
         }
         relation_type = body.relation_type.strip().lower()
         if relation_type not in allowed:
-            raise HTTPException(status_code=400, detail=f"unsupported relation_type: {body.relation_type}")
+            raise HTTPException(
+                status_code=400, detail=f"unsupported relation_type: {body.relation_type}"
+            )
         storage = get_storage()
         try:
             raw_rows: dict[int, Any] = {}
@@ -3345,10 +3384,14 @@ def create_app() -> FastAPI:
                             int(obsidian_raw.id),
                             {"obsidian_writeback_status": "pending"},
                         )
-                    target_rel_path = str((obsidian_raw.source_meta or {}).get("obsidian_path") or "").strip()
+                    target_rel_path = str(
+                        (obsidian_raw.source_meta or {}).get("obsidian_path") or ""
+                    ).strip()
                     if not target_rel_path:
                         continue
-                    on1y_url = str(other_raw.url or "").strip() or f"on1y://knowledge/{other_raw.id}"
+                    on1y_url = (
+                        str(other_raw.url or "").strip() or f"on1y://knowledge/{other_raw.id}"
+                    )
                     summary = str((other_raw.raw_title or "").strip() or "")
                     note = (body.note or "").strip() or None
                     block_md = build_writeback_block(
@@ -3384,7 +3427,12 @@ def create_app() -> FastAPI:
                     elif int(result.get("skipped") or 0) > 0:
                         status = "skipped"
                     if touched_obsidian_ids and hasattr(storage, "merge_source_meta"):
-                        now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+                        now = (
+                            datetime.now(timezone.utc)
+                            .replace(microsecond=0)
+                            .isoformat()
+                            .replace("+00:00", "Z")
+                        )
                         for obsidian_id in touched_obsidian_ids:
                             patch: dict[str, Any] = {"obsidian_writeback_status": status}
                             if status == "applied":
@@ -3401,17 +3449,23 @@ def create_app() -> FastAPI:
             storage.close()
 
     @app.delete("/api/knowledge/relations/{relation_id}")
-    def delete_knowledge_relation(relation_id: int, raw_id: int | None = Query(default=None)) -> dict[str, Any]:
+    def delete_knowledge_relation(
+        relation_id: int, raw_id: int | None = Query(default=None)
+    ) -> dict[str, Any]:
         storage = get_storage()
         try:
-            row = storage._connect().execute(
-                """
+            row = (
+                storage._connect()
+                .execute(
+                    """
                 SELECT id, from_raw_id, to_raw_id, relation_type
                 FROM item_relations
                 WHERE id = ?
                 """,
-                (relation_id,),
-            ).fetchone()
+                    (relation_id,),
+                )
+                .fetchone()
+            )
             if row is None:
                 raise HTTPException(status_code=404, detail="relation not found")
             from_raw_id = int(row["from_raw_id"])
@@ -3434,7 +3488,9 @@ def create_app() -> FastAPI:
                 if str(to_raw.platform or "").strip().lower() == "obsidian":
                     pairs.append((to_raw, from_raw))
                 for obsidian_raw, other_raw in pairs:
-                    target_rel_path = str((obsidian_raw.source_meta or {}).get("obsidian_path") or "").strip()
+                    target_rel_path = str(
+                        (obsidian_raw.source_meta or {}).get("obsidian_path") or ""
+                    ).strip()
                     if not target_rel_path:
                         continue
                     try:
@@ -3444,7 +3500,10 @@ def create_app() -> FastAPI:
                             link_raw_id=int(other_raw.id),
                             force=True,
                         )
-                        if hasattr(storage, "merge_source_meta") and int(result.get("removed") or 0) > 0:
+                        if (
+                            hasattr(storage, "merge_source_meta")
+                            and int(result.get("removed") or 0) > 0
+                        ):
                             now = (
                                 datetime.now(timezone.utc)
                                 .replace(microsecond=0)
@@ -3453,10 +3512,15 @@ def create_app() -> FastAPI:
                             )
                             storage.merge_source_meta(
                                 int(obsidian_raw.id),
-                                {"obsidian_writeback_status": "applied", "obsidian_writeback_at": now},
+                                {
+                                    "obsidian_writeback_status": "applied",
+                                    "obsidian_writeback_at": now,
+                                },
                             )
                     except Exception:
-                        logger.exception("remove obsidian writeback failed relation_id=%s", relation_id)
+                        logger.exception(
+                            "remove obsidian writeback failed relation_id=%s", relation_id
+                        )
             return {"ok": True}
         finally:
             storage.close()
@@ -3750,6 +3814,7 @@ def run_server(*, host: str | None = None, port: int | None = None) -> None:
     import uvicorn
 
     from on1y.books.folder_sync import start_folder_sync_loop
+    from on1y.papers.local_sync import start_paper_folder_sync_loop
     from on1y.digest.evening_auto import start_evening_digest_loop
     from on1y.hotlist.economist_auto import start_economist_auto_loop
     from on1y.obsidian.auto_sync import start_obsidian_sync_loop
@@ -3760,6 +3825,7 @@ def run_server(*, host: str | None = None, port: int | None = None) -> None:
     settings = get_settings()
     settings.ensure_data_dir()
     get_storage().close()
+    start_paper_folder_sync_loop()
     start_auto_sync_loop()
     start_folder_sync_loop()
     start_collections_sync_loop()
