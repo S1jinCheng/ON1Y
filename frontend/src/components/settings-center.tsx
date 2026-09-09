@@ -94,6 +94,7 @@ import {
 } from "@/lib/open-settings";
 import { persistStoredLocale } from "@/lib/locale-preference";
 import { isDesktopShell, pickFolder } from "@/lib/pick-data-folder";
+import { pickPdfApplication } from "@/lib/pdf-application";
 import type { BookFormat } from "@/lib/book-types";
 import type { PaperSettings } from "@/lib/paper-types";
 import { buildBuiltinSourcesSave, readBuiltinToggles } from "@/lib/book-builtin";
@@ -2820,6 +2821,7 @@ function PapersTab(props: { locale: Locale; onMessage?: (message: string) => voi
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [browsing, setBrowsing] = useState(false);
+  const [browsingApplication, setBrowsingApplication] = useState(false);
   const [running, setRunning] = useState<"folder" | "zotero" | null>(null);
   const onMessageRef = useRef(onMessage);
   onMessageRef.current = onMessage;
@@ -2852,6 +2854,18 @@ function PapersTab(props: { locale: Locale; onMessage?: (message: string) => voi
       onMessage?.(error instanceof Error ? error.message : String(error));
     } finally {
       setBrowsing(false);
+    }
+  }
+
+  async function browsePdfApplication(): Promise<void> {
+    setBrowsingApplication(true);
+    try {
+      const picked = await pickPdfApplication();
+      if (picked) patch({ pdf_application_path: picked });
+    } catch (error) {
+      onMessage?.(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBrowsingApplication(false);
     }
   }
 
@@ -2902,6 +2916,55 @@ function PapersTab(props: { locale: Locale; onMessage?: (message: string) => voi
   return (
     <div className="space-y-7">
       <section className="space-y-4">
+        <div>
+          <h3 className="text-sm font-semibold text-foreground">{L(locale, "PDF 打开方式", "PDF reader")}</h3>
+          <p className="mt-1 text-xs leading-relaxed text-muted">
+            {L(locale, "选择 Paper 中 PDF 的默认阅读应用。", "Choose how PDFs are opened from Papers.")}
+          </p>
+        </div>
+        <SegmentedControl
+          value={settings.pdf_open_mode}
+          options={[
+            { value: "zotero", label: "Zotero" },
+            { value: "system", label: L(locale, "系统默认", "System default") },
+            { value: "custom", label: L(locale, "指定应用", "Custom app") }
+          ]}
+          onChange={(value) => patch({ pdf_open_mode: value })}
+        />
+        {settings.pdf_open_mode === "custom" ? (
+          <label className="block">
+            <FieldLabel>{L(locale, "PDF 阅读应用", "PDF application")}</FieldLabel>
+            <div className="flex gap-2">
+              <input
+                className={`${inputClass} min-w-0 flex-1`}
+                value={settings.pdf_application_path ?? ""}
+                readOnly
+                placeholder={L(locale, "请选择应用程序（.exe）", "Choose an application (.exe)")}
+              />
+              <button
+                type="button"
+                className={`inline-flex shrink-0 items-center gap-1.5 ${ghostBtn}`}
+                disabled={browsingApplication || !isDesktopShell()}
+                onClick={() => void browsePdfApplication()}
+              >
+                {browsingApplication ? <Loader2 className="h-4 w-4 animate-spin" /> : <FolderOpen className="h-4 w-4" />}
+                {L(locale, "选择应用…", "Choose app…")}
+              </button>
+            </div>
+            <p className="mt-1.5 text-[11px] text-muted">
+              {L(locale, "应用选择仅在桌面版可用；若应用失效，会回退到系统默认阅读器。", "Application selection is available in the desktop app. If it fails, the system reader is used.")}
+            </p>
+          </label>
+        ) : (
+          <p className="text-xs text-muted">
+            {settings.pdf_open_mode === "zotero"
+              ? L(locale, "优先使用 Zotero 阅读器；没有 Zotero 附件时使用本地 PDF。", "Prefer Zotero Reader, falling back to the local PDF when needed.")
+              : L(locale, "使用 Windows 当前为 PDF 配置的默认应用。", "Use the current Windows default application for PDFs.")}
+          </p>
+        )}
+      </section>
+
+      <section className="space-y-4 border-t border-border pt-6">
         <div>
           <h3 className="text-sm font-semibold text-foreground">{L(locale, "本地 PDF", "Local PDFs")}</h3>
           <p className="mt-1 text-xs leading-relaxed text-muted">

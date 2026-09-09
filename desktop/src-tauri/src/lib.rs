@@ -1,6 +1,6 @@
 mod boot;
 
-use std::sync::Mutex;
+use std::{path::Path, process::Command, sync::Mutex};
 
 use boot::{
     boot, find_on1y_root, prepare_portable_runtime, read_close_window_action,
@@ -30,7 +30,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             open_external_url,
             open_zotero_pdf,
+            open_pdf_with_application,
             pick_data_folder,
+            pick_pdf_application,
             save_archive_file
         ])
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
@@ -290,6 +292,40 @@ fn pick_data_folder() -> Option<String> {
 }
 
 #[tauri::command]
+fn pick_pdf_application() -> Option<String> {
+    rfd::FileDialog::new()
+        .set_title("选择 PDF 阅读应用")
+        .add_filter("Windows Applications", &["exe"])
+        .pick_file()
+        .map(|path| path.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn open_pdf_with_application(application_path: String, pdf_path: String) -> Result<(), String> {
+    let application = std::fs::canonicalize(application_path.trim())
+        .map_err(|error| format!("无法访问所选应用: {error}"))?;
+    let pdf =
+        std::fs::canonicalize(pdf_path.trim()).map_err(|error| format!("无法访问 PDF: {error}"))?;
+    if !application.is_file() || !has_extension(&application, "exe") {
+        return Err("所选路径不是有效的 Windows 应用程序".into());
+    }
+    if !pdf.is_file() || !has_extension(&pdf, "pdf") {
+        return Err("所选文件不是有效的 PDF".into());
+    }
+    Command::new(&application)
+        .arg(&pdf)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("无法用所选应用打开 PDF: {error}"))
+}
+
+fn has_extension(path: &Path, expected: &str) -> bool {
+    path.extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|value| value.eq_ignore_ascii_case(expected))
+}
+
+#[tauri::command]
 fn save_archive_file(default_name: String, data: Vec<u8>) -> Option<String> {
     let path = rfd::FileDialog::new()
         .set_title("保存知识库导出")
@@ -353,7 +389,16 @@ fn valid_zotero_key(value: &str) -> bool {
 
 #[cfg(test)]
 mod zotero_reader_tests {
-    use super::valid_zotero_reader_url;
+    use std::path::Path;
+
+    use super::{has_extension, valid_zotero_reader_url};
+
+    #[test]
+    fn recognizes_pdf_and_windows_application_extensions() {
+        assert!(has_extension(Path::new("reader.EXE"), "exe"));
+        assert!(has_extension(Path::new("paper.PdF"), "pdf"));
+        assert!(!has_extension(Path::new("reader.cmd"), "exe"));
+    }
 
     #[test]
     fn accepts_personal_and_group_pdf_links() {

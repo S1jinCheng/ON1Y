@@ -11,6 +11,7 @@
     "core:window:allow-center",
     "opener:default",
     "allow-open-zotero-pdf",
+    "allow-pdf-applications",
     "allow-pick-data-folder",
     "allow-save-archive-file"
   ]

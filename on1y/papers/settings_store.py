@@ -26,6 +26,8 @@ class PaperSettings(BaseModel):
     zotero_api_key: str | None = Field(default=None, max_length=500)
     zotero_collection_key: str | None = Field(default=None, max_length=100)
     zotero_download_pdfs: bool = True
+    pdf_open_mode: Literal["zotero", "system", "custom"] = "zotero"
+    pdf_application_path: str | None = Field(default=None, max_length=4096)
 
 
 def paper_settings_path(user_id: int) -> Path:

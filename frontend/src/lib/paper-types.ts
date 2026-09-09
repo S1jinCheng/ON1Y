@@ -48,6 +48,8 @@ export type PaperSettings = {
   zotero_api_key?: string | null;
   zotero_collection_key?: string | null;
   zotero_download_pdfs: boolean;
+  pdf_open_mode: "zotero" | "system" | "custom";
+  pdf_application_path?: string | null;
 };
 
 export type PaperSyncResult = {

@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-pdf-applications"
+description = "Choose a local PDF reader and open PDFs with it."
+commands.allow = ["pick_pdf_application", "open_pdf_with_application"]

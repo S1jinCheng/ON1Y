@@ -1,10 +1,8 @@
 "use client";
 
 import {
-  BookOpen,
   ExternalLink,
   FileText,
-  FolderOpen,
   Loader2,
   Plus,
   Search,
@@ -22,6 +20,7 @@ import {
   createPaper,
   deletePaper,
   fetchRelatedPapers,
+  fetchPaperSettings,
   getTaxonomy,
   listPapers,
   openLocalPath,
@@ -30,7 +29,8 @@ import {
   uploadPaperFile
 } from "@/lib/api";
 import { openZoteroPdf } from "@/lib/open-external";
-import type { PaperItem, PaperStatus } from "@/lib/paper-types";
+import { openPdfWithApplication } from "@/lib/pdf-application";
+import type { PaperItem, PaperSettings, PaperStatus } from "@/lib/paper-types";
 import type { KnowledgeItem, Locale } from "@/lib/types";
 
 function L(locale: Locale, zh: string, en: string): string {
@@ -47,9 +47,18 @@ const STATUSES: PaperStatus[] = ["to_read", "reading", "read"];
 
 async function openPaperDocument(
   item: PaperItem,
+  locale: Locale,
   onMessage: (message: string) => void
 ): Promise<void> {
-  if (item.zotero_reader_url) {
+  let settings: PaperSettings | null = null;
+  try {
+    settings = await fetchPaperSettings();
+  } catch {
+    // Preserve the previous Zotero-first behavior if settings cannot be loaded.
+  }
+
+  const mode = settings?.pdf_open_mode ?? "zotero";
+  if (mode === "zotero" && item.zotero_reader_url) {
     try {
       await openZoteroPdf(item.zotero_reader_url);
       return;
@@ -60,13 +69,48 @@ async function openPaperDocument(
       }
     }
   }
+
   if (item.pdf_path) {
+    if (mode === "custom") {
+      try {
+        const applicationPath = settings?.pdf_application_path?.trim();
+        if (!applicationPath) {
+          throw new Error(L(locale, "请先在设置中选择 PDF 阅读应用", "Choose a PDF application in Settings first"));
+        }
+        await openPdfWithApplication(applicationPath, item.pdf_path);
+        return;
+      } catch (error) {
+        try {
+          await openLocalPath(item.pdf_path);
+          onMessage(L(locale, "指定应用不可用，已使用系统默认阅读器", "Custom app unavailable; opened with the system reader"));
+          return;
+        } catch {
+          onMessage(error instanceof Error ? error.message : "open PDF failed");
+          return;
+        }
+      }
+    }
     try {
       await openLocalPath(item.pdf_path);
+      return;
     } catch (error) {
-      onMessage(error instanceof Error ? error.message : "open PDF failed");
+      if (!item.zotero_reader_url) {
+        onMessage(error instanceof Error ? error.message : "open PDF failed");
+        return;
+      }
     }
   }
+
+  if (item.zotero_reader_url) {
+    try {
+      await openZoteroPdf(item.zotero_reader_url);
+      return;
+    } catch (error) {
+      onMessage(error instanceof Error ? error.message : "open Zotero failed");
+      return;
+    }
+  }
+  onMessage(L(locale, "这篇 Paper 没有可打开的 PDF", "This paper has no PDF to open"));
 }
 
 type ListProps = {
@@ -142,7 +186,7 @@ export function PapersListColumn(props: ListProps): JSX.Element {
               </button>
               <div className="flex w-9 shrink-0 flex-col items-center justify-center border-l border-border">
                 <button type="button" title={starred ? L(locale, "取消收藏", "Unfavorite") : L(locale, "收藏", "Favorite")} onClick={() => void updatePaper(item.id, { importance: starred ? null : 4 }).then(() => { void refresh(); onChanged(); })} className="p-2 text-muted hover:text-foreground"><Star className={`h-4 w-4 ${starred ? "fill-amber-400 text-amber-500" : ""}`} /></button>
-                {item.zotero_reader_url || item.pdf_path ? <button type="button" title={item.zotero_reader_url ? L(locale, "在 Zotero 中阅读", "Read in Zotero") : L(locale, "打开 PDF", "Open PDF")} onClick={() => void openPaperDocument(item, onMessage)} className="p-2 text-muted hover:text-foreground">{item.zotero_reader_url ? <BookOpen className="h-4 w-4" /> : <FolderOpen className="h-4 w-4" />}</button> : null}
+                {item.zotero_reader_url || item.pdf_path ? <button type="button" title={L(locale, "打开 PDF", "Open PDF")} onClick={() => void openPaperDocument(item, locale, onMessage)} className="p-2 text-muted hover:text-foreground"><FileText className="h-4 w-4" /></button> : null}
                 <button type="button" title={L(locale, "删除", "Delete")} onClick={() => void deletePaper(item.id).then(() => { setItems((rows) => rows.filter((row) => row.id !== item.id)); onRemoved(item.id); })} className="p-2 text-muted hover:text-red-500"><Trash2 className="h-4 w-4" /></button>
               </div>
             </div>
@@ -235,7 +279,7 @@ export function PapersDetailColumn(props: DetailProps): JSX.Element {
   return <div className="h-full overflow-y-auto p-4"><div className="mx-auto max-w-3xl space-y-5">
     <div><div className="flex items-start justify-between gap-3"><div><h2 className="text-xl font-semibold leading-snug">{item.title}</h2><div className="mt-2 flex flex-wrap gap-x-2 gap-y-1 text-sm">{item.authors.map((author, index) => <span key={`${author.name}-${index}`}><a href={author.google_scholar_url} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">{author.name}</a>{index < item.authors.length - 1 ? "," : ""}</span>)}</div></div><ImportanceStars value={item.importance ?? null} onChange={(value) => void patch({ importance: value })} /></div>
       <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted">{item.venue ? <span>{item.venue}</span> : null}{item.year ? <span>· {item.year}</span> : null}{item.doi ? <a href={`https://doi.org/${item.doi.replace("https://doi.org/", "")}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 hover:underline">DOI <ExternalLink className="h-3 w-3" /></a> : null}<a href={item.google_scholar_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 hover:underline">Google Scholar <ExternalLink className="h-3 w-3" /></a>{item.zotero_key ? <span>· Zotero {item.zotero_key}</span> : null}</div>
-      <div className="mt-3 flex gap-2"><select value={item.status} onChange={(e) => void patch({ status: e.target.value as PaperStatus })} className="rounded-md border border-border bg-surface px-2 py-1 text-xs">{STATUSES.map((value) => <option key={value} value={value}>{statusLabel(locale, value)}</option>)}</select>{item.zotero_reader_url || item.pdf_path ? <button type="button" onClick={() => void openPaperDocument(item, onMessage)} className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs hover:bg-soft">{item.zotero_reader_url ? <BookOpen className="h-3.5 w-3.5" /> : <FolderOpen className="h-3.5 w-3.5" />}{item.zotero_reader_url ? L(locale, "在 Zotero 中阅读", "Read in Zotero") : L(locale, "打开 PDF", "Open PDF")}</button> : null}{item.url && !item.url.startsWith("file:") ? <a href={item.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs hover:bg-soft">{L(locale, "原文", "Source")}<ExternalLink className="h-3.5 w-3.5" /></a> : null}</div>
+      <div className="mt-3 flex gap-2"><select value={item.status} onChange={(e) => void patch({ status: e.target.value as PaperStatus })} className="rounded-md border border-border bg-surface px-2 py-1 text-xs">{STATUSES.map((value) => <option key={value} value={value}>{statusLabel(locale, value)}</option>)}</select>{item.zotero_reader_url || item.pdf_path ? <button type="button" onClick={() => void openPaperDocument(item, locale, onMessage)} className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs hover:bg-soft"><FileText className="h-3.5 w-3.5" />{L(locale, "打开 PDF", "Open PDF")}</button> : null}{item.url && !item.url.startsWith("file:") ? <a href={item.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs hover:bg-soft">{L(locale, "原文", "Source")}<ExternalLink className="h-3.5 w-3.5" /></a> : null}</div>
     </div>
     {item.abstract ? <section><h3 className="mb-2 text-xs font-medium uppercase tracking-wider text-muted">{L(locale, "摘要", "Abstract")}</h3><p className="whitespace-pre-wrap text-sm leading-relaxed text-muted">{item.abstract}</p></section> : null}
     <section><h3 className="mb-2 text-xs font-medium uppercase tracking-wider text-muted">{L(locale, "标签", "Tags")}</h3><TagChipEditor tags={tags} suggestions={tagSuggestions} locale={locale} onChange={(next) => { setTags(next); void patch({ tags: next }); }} /></section>

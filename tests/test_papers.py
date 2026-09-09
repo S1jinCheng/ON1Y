@@ -124,6 +124,33 @@ def test_zotero_item_mapping() -> None:
     assert _tags(data) == ["compilers"]
 
 
+def test_paper_pdf_open_settings_roundtrip(tmp_path, monkeypatch) -> None:
+    from on1y.papers.settings_store import (
+        PaperSettings,
+        load_paper_settings,
+        save_paper_settings,
+    )
+
+    path = tmp_path / "paper-settings.json"
+    monkeypatch.setattr(
+        "on1y.papers.settings_store.paper_settings_path",
+        lambda _uid: path,
+    )
+
+    defaults = PaperSettings()
+    assert defaults.pdf_open_mode == "zotero"
+    assert defaults.pdf_application_path is None
+
+    selected = PaperSettings(
+        pdf_open_mode="custom",
+        pdf_application_path=r"C:\Program Files\Reader\reader.exe",
+    )
+    save_paper_settings(1, selected)
+    loaded = load_paper_settings(1)
+    assert loaded.pdf_open_mode == "custom"
+    assert loaded.pdf_application_path == selected.pdf_application_path
+
+
 def test_zotero_local_pdf_copy(tmp_path) -> None:
     from on1y.papers.settings_store import PaperSettings
     from on1y.papers.zotero import _download_pdf

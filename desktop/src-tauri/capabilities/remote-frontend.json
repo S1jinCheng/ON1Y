@@ -10,6 +10,7 @@
     "opener:default",
     "allow-open-external-url",
     "allow-open-zotero-pdf",
+    "allow-pdf-applications",
     "allow-pick-data-folder",
     "allow-save-archive-file"
   ]
