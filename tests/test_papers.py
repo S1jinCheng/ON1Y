@@ -502,6 +502,54 @@ def test_paper_note_syncs_to_notes_collection(storage, monkeypatch) -> None:
     assert storage.count_collection_items("notes") == 0
 
 
+def test_paper_figure_endpoint_supports_inline_preview_and_download(
+    storage, tmp_path, monkeypatch
+) -> None:
+    from fastapi.testclient import TestClient
+    from on1y.papers.models import PaperCreate
+    from on1y.papers.shelf import create_paper
+    from on1y.utils.json_util import dumps_json
+
+    paper = create_paper(storage, 1, PaperCreate(title="Figure viewer"))
+    figure_path = tmp_path / "figure-01.png"
+    figure_path.write_bytes(b"\x89PNG\r\n\x1a\npreview")
+    storage._connect().execute(
+        "UPDATE paper_items SET figures_json = ? WHERE id = ?",
+        (
+            dumps_json(
+                [
+                    {
+                        "filename": figure_path.name,
+                        "page": 2,
+                        "caption": "Figure 1. Result",
+                        "kind": "figure",
+                        "width": 800,
+                        "height": 600,
+                    }
+                ]
+            ),
+            paper.id,
+        ),
+    )
+    storage._connect().commit()
+    monkeypatch.setattr(
+        "on1y.papers.summary.paper_figure_dir",
+        lambda _user_id, _item_id: tmp_path,
+    )
+    monkeypatch.setattr("on1y.adapters.sqlite_storage.get_storage", lambda: storage)
+    from on1y.web.app import create_app
+
+    client = TestClient(create_app())
+    inline = client.get(f"/api/papers/{paper.id}/figures/{figure_path.name}")
+    assert inline.status_code == 200
+    assert "attachment" not in inline.headers.get("content-disposition", "")
+    download = client.get(
+        f"/api/papers/{paper.id}/figures/{figure_path.name}",
+        params={"download": "1"},
+    )
+    assert download.status_code == 200
+    assert "attachment" in download.headers["content-disposition"]
+
 def test_extract_paper_pdf_text_and_figure(tmp_path) -> None:
     import pymupdf
     from on1y.papers.summary import extract_paper_pdf
@@ -523,6 +571,44 @@ def test_extract_paper_pdf_text_and_figure(tmp_path) -> None:
     assert figures[0].page == 1
     assert (tmp_path / "figures" / figures[0].filename).is_file()
 
+
+def test_extract_paper_figures_respects_columns_and_tables(tmp_path) -> None:
+    import pymupdf
+    from on1y.papers.summary import extract_paper_pdf
+
+    pdf_path = tmp_path / "layout-paper.pdf"
+    document = pymupdf.open()
+    figure_page = document.new_page()
+    figure_page.insert_text((55, 155), "This paragraph belongs to the left column.")
+    figure_page.insert_text((55, 175), "It must not appear inside the figure crop.")
+    figure_page.draw_rect(
+        pymupdf.Rect(325, 130, 545, 330),
+        color=(0.15, 0.25, 0.45),
+        fill=(0.9, 0.95, 1),
+    )
+    figure_page.draw_line((350, 295), (510, 175), color=(0.1, 0.4, 0.8), width=3)
+    figure_page.insert_text((350, 190), "Accuracy +12%")
+    figure_page.insert_text((325, 355), "Figure 1. Evaluation on the held-out test set.")
+
+    table_page = document.new_page()
+    table_page.insert_text((60, 90), "Table 1. Main benchmark results.")
+    for x in (60, 220, 380, 535):
+        table_page.draw_line((x, 120), (x, 300), color=(0, 0, 0))
+    for y in (120, 165, 210, 255, 300):
+        table_page.draw_line((60, y), (535, y), color=(0, 0, 0))
+    table_page.insert_text((80, 150), "Model")
+    table_page.insert_text((245, 150), "Accuracy")
+    table_page.insert_text((405, 150), "Latency")
+    table_page.insert_text((60, 340), "This paragraph follows the table and must stay outside.")
+    document.save(pdf_path)
+    document.close()
+
+    text, figures = extract_paper_pdf(pdf_path, tmp_path / "layout-figures")
+    assert "left column" in text
+    assert [figure.kind for figure in figures] == ["figure", "table"]
+    assert all(figure.width and figure.height for figure in figures)
+    assert figures[0].width is not None and figures[0].width < 700
+    assert figures[1].width is not None and figures[1].width > 900
 
 def test_generate_paper_summary_updates_tags_and_search_body(
     storage, tmp_path, monkeypatch

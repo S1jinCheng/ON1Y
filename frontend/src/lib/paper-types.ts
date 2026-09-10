@@ -29,6 +29,9 @@ export type PaperFigure = {
   filename: string;
   page: number;
   caption: string;
+  kind: "figure" | "table";
+  width?: number | null;
+  height?: number | null;
 };
 
 export type PaperItem = {

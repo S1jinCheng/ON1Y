@@ -2114,9 +2114,12 @@ export function summarizePaper(id: number): Promise<PaperItem> {
   return request<PaperItem>(`/api/papers/${id}/summary`, { method: "POST", direct: true });
 }
 
-export function paperFigureUrl(id: number, filename: string): string {
+export function paperFigureUrl(id: number, filename: string, download = false): string {
+  const query = new URLSearchParams();
   const token = getAuthToken();
-  const suffix = token ? `?access_token=${encodeURIComponent(token)}` : "";
+  if (token) query.set("access_token", token);
+  if (download) query.set("download", "1");
+  const suffix = query.size ? `?${query.toString()}` : "";
   return resolveApiUrl(`/api/papers/${id}/figures/${encodeURIComponent(filename)}${suffix}`, true);
 }
 export function fetchPaperSettings(): Promise<PaperSettings> {

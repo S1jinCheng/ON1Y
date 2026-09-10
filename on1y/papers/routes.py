@@ -129,7 +129,11 @@ def register_paper_routes(app: FastAPI) -> None:
             storage.close()
 
     @app.get("/api/papers/{item_id}/figures/{filename}")
-    def papers_figure(item_id: int, filename: str) -> FileResponse:
+    def papers_figure(
+        item_id: int,
+        filename: str,
+        download: bool = Query(default=False),
+    ) -> FileResponse:
         from on1y.papers.shelf import get_paper
         from on1y.papers.summary import paper_figure_dir
 
@@ -143,7 +147,12 @@ def register_paper_routes(app: FastAPI) -> None:
             path = paper_figure_dir(uid, item_id) / filename
             if not path.is_file():
                 raise HTTPException(status_code=404, detail="figure not found")
-            return FileResponse(path, media_type="image/png", filename=filename)
+            return FileResponse(
+                path,
+                media_type="image/png",
+                filename=filename if download else None,
+                content_disposition_type="attachment" if download else "inline",
+            )
         finally:
             storage.close()
 

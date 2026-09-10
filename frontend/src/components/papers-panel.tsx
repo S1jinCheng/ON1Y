@@ -1,16 +1,19 @@
 "use client";
 
 import {
+  Download,
   ExternalLink,
   FileText,
   FolderTree,
   Loader2,
+  Maximize2,
   Plus,
   Search,
   Sparkles,
   Star,
   Trash2,
-  Upload
+  Upload,
+  X
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -35,7 +38,7 @@ import {
 } from "@/lib/api";
 import { openZoteroPdf } from "@/lib/open-external";
 import { openPdfWithApplication } from "@/lib/pdf-application";
-import type { PaperCollection, PaperItem, PaperSettings, PaperStatus } from "@/lib/paper-types";
+import type { PaperCollection, PaperFigure, PaperItem, PaperSettings, PaperStatus } from "@/lib/paper-types";
 import type { KnowledgeItem, Locale } from "@/lib/types";
 
 function L(locale: Locale, zh: string, en: string): string {
@@ -266,6 +269,7 @@ export function PapersDetailColumn(props: DetailProps): JSX.Element {
   const [tags, setTags] = useState<string[]>(item?.tags ?? []);
   const [tagSuggestions, setTagSuggestions] = useState<string[]>([]);
   const [related, setRelated] = useState<KnowledgeItem[]>([]);
+  const [previewFigure, setPreviewFigure] = useState<PaperFigure | null>(null);
 
   useEffect(() => setTags(manualAdd ? [] : item?.tags ?? []), [manualAdd, item?.id, item?.tags]);
   useEffect(() => { void getTaxonomy(locale).then((value) => setTagSuggestions(value.tags.map((row) => row.name))).catch(() => undefined); }, [locale]);
@@ -290,6 +294,15 @@ export function PapersDetailColumn(props: DetailProps): JSX.Element {
     if (!itemId) { setRelated([]); return; }
     void fetchRelatedPapers(itemId).then((value) => setRelated(value.items)).catch(() => setRelated([]));
   }, [itemId, itemTagsKey]);
+  useEffect(() => setPreviewFigure(null), [itemId]);
+  useEffect(() => {
+    if (!previewFigure) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setPreviewFigure(null);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [previewFigure]);
 
   useEffect(() => {
     if (
@@ -400,7 +413,32 @@ export function PapersDetailColumn(props: DetailProps): JSX.Element {
       </div> : <p className="text-sm text-muted">{item.pdf_path ? aiSummaryMode === "auto" ? L(locale, "自动模式已开启，正在准备首次速览；生成过的论文不会重复调用 AI。", "Automatic mode is on. The first brief will be generated once; existing briefs are not regenerated.") : L(locale, "点击生成后，将从本地 PDF 提炼研究问题、方法、结果和效果指标。", "Generate a brief from the local PDF: question, method, findings, and metrics.") : L(locale, "请先附加 PDF，或在 Paper 设置中从 Zotero 下载 PDF。", "Attach a PDF or enable Zotero PDF downloads in Paper settings.")}</p>}
       {item.ai_summary_status === "error" && item.ai_summary_error ? <p className="mt-3 rounded-md bg-red-50 p-2 text-xs text-red-700 dark:bg-red-950/30 dark:text-red-300">{item.ai_summary_error}</p> : null}
     </section>
-    {(item.figures ?? []).length ? <section><h3 className="mb-2 text-xs font-medium uppercase tracking-wider text-muted">{L(locale, "论文关键图表", "Key figures")}</h3><div className="grid gap-3 sm:grid-cols-2">{item.figures.map((figure) => <figure key={figure.filename} className="overflow-hidden rounded-lg border border-border bg-surface"><a href={paperFigureUrl(item.id, figure.filename)} target="_blank" rel="noreferrer"><img src={paperFigureUrl(item.id, figure.filename)} alt={figure.caption || L(locale, "论文图表", "Paper figure") + " " + figure.page} loading="lazy" className="max-h-72 w-full object-contain" /></a><figcaption className="border-t border-border px-3 py-2 text-xs text-muted">{figure.caption || L(locale, "论文图表", "Paper figure")} · {L(locale, "第", "Page")} {figure.page} {L(locale, "页", "")}</figcaption></figure>)}</div></section> : null}
+    {(item.figures ?? []).length ? <section className="rounded-2xl border border-border bg-gradient-to-b from-panel/80 to-surface p-4 shadow-sm">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div><h3 className="text-sm font-semibold">{L(locale, "论文图表 Collection", "Paper figure collection")}</h3><p className="mt-0.5 text-xs text-muted">{L(locale, "点击卡片，在 On1y 中沉浸查看", "Open a card in the On1y viewer")}</p></div>
+        <span className="rounded-full border border-border bg-surface px-2.5 py-1 text-xs text-muted">{item.figures.length} {L(locale, "张", "items")}</span>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        {item.figures.map((figure, index) => <article key={figure.filename} className="group relative overflow-hidden rounded-xl border border-border bg-surface shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
+          <button type="button" onClick={() => setPreviewFigure(figure)} className="block w-full text-left">
+            <div className="relative flex aspect-[4/3] items-center justify-center overflow-hidden bg-[radial-gradient(circle_at_top,#f8fafc,#eef2f7)] p-3 dark:bg-[radial-gradient(circle_at_top,#202631,#11151c)]">
+              <img src={paperFigureUrl(item.id, figure.filename)} alt={figure.caption || L(locale, "论文图表", "Paper figure") + " " + (index + 1)} loading="lazy" className="max-h-full max-w-full object-contain transition duration-300 group-hover:scale-[1.02]" />
+              <span className="absolute left-2 top-2 rounded-full bg-black/65 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-white">{figure.kind === "table" ? "Table" : "Figure"} {String(index + 1).padStart(2, "0")}</span>
+              <span className="absolute bottom-2 right-2 flex items-center gap-1 rounded-full bg-black/65 px-2 py-1 text-[10px] text-white opacity-0 transition group-hover:opacity-100"><Maximize2 className="h-3 w-3" />{L(locale, "查看", "View")}</span>
+            </div>
+            <div className="min-h-[74px] border-t border-border px-3 py-2.5"><p className="line-clamp-2 text-xs font-medium leading-relaxed">{figure.caption || L(locale, "未识别图注", "Caption unavailable")}</p><p className="mt-1 text-[11px] text-muted">{L(locale, "第", "Page")} {figure.page} {L(locale, "页", "")}{figure.width && figure.height ? ` · ${figure.width}×${figure.height}` : ""}</p></div>
+          </button>
+          <a href={paperFigureUrl(item.id, figure.filename, true)} download={figure.filename} title={L(locale, "下载原图", "Download image")} className="absolute right-2 top-2 rounded-full bg-surface/90 p-1.5 text-muted opacity-0 shadow transition hover:text-foreground group-hover:opacity-100"><Download className="h-3.5 w-3.5" /></a>
+        </article>)}
+      </div>
+    </section> : null}
+    {previewFigure ? <div role="dialog" aria-modal="true" aria-label={L(locale, "论文图表预览", "Paper figure preview")} onClick={() => setPreviewFigure(null)} className="fixed inset-0 z-[90] flex flex-col bg-black/85 backdrop-blur-sm">
+      <div className="flex shrink-0 items-center justify-between gap-3 border-b border-white/15 px-4 py-3 text-white">
+        <div className="min-w-0"><p className="truncate text-sm font-medium">{previewFigure.caption || L(locale, "论文图表", "Paper figure")}</p><p className="text-xs text-white/60">{previewFigure.kind === "table" ? "Table" : "Figure"} · {L(locale, "第", "Page")} {previewFigure.page} {L(locale, "页", "")}</p></div>
+        <div className="flex shrink-0 items-center gap-2"><a href={paperFigureUrl(item.id, previewFigure.filename, true)} download={previewFigure.filename} onClick={(event) => event.stopPropagation()} className="inline-flex items-center gap-1.5 rounded-lg border border-white/20 bg-white/10 px-3 py-2 text-xs hover:bg-white/20"><Download className="h-4 w-4" />{L(locale, "下载", "Download")}</a><button type="button" onClick={() => setPreviewFigure(null)} className="rounded-lg border border-white/20 bg-white/10 p-2 hover:bg-white/20" aria-label={L(locale, "关闭", "Close")}><X className="h-4 w-4" /></button></div>
+      </div>
+      <div className="min-h-0 flex-1 p-4 sm:p-6" onClick={(event) => event.stopPropagation()}><img src={paperFigureUrl(item.id, previewFigure.filename)} alt={previewFigure.caption || L(locale, "论文图表", "Paper figure")} className="h-full w-full object-contain" /></div>
+    </div> : null}
     {item.abstract ? <section><h3 className="mb-2 text-xs font-medium uppercase tracking-wider text-muted">{L(locale, "摘要", "Abstract")}</h3><p className="whitespace-pre-wrap text-sm leading-relaxed text-muted">{item.abstract}</p></section> : null}
     {item.zotero_collections.length ? <section><h3 className="mb-2 text-xs font-medium uppercase tracking-wider text-muted">{L(locale, "Zotero 分类", "Zotero collections")}</h3><div className="flex flex-wrap gap-2">{item.zotero_collections.map((collection) => <span key={collection.key} className="inline-flex items-center gap-1.5 rounded-md bg-violet-50 px-2.5 py-1 text-xs text-violet-700 dark:bg-violet-950/40 dark:text-violet-300"><FolderTree className="h-3.5 w-3.5" />{collection.path}</span>)}</div></section> : null}
     <section><h3 className="mb-2 text-xs font-medium uppercase tracking-wider text-muted">{L(locale, "标签", "Tags")}</h3><TagChipEditor tags={tags} suggestions={tagSuggestions} locale={locale} onChange={(next) => { setTags(next); void patch({ tags: next }); }} /></section>

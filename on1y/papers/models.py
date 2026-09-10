@@ -24,6 +24,9 @@ class PaperFigure(BaseModel):
     filename: str
     page: int = Field(ge=1)
     caption: str = ""
+    kind: Literal["figure", "table"] = "figure"
+    width: int | None = Field(default=None, ge=1)
+    height: int | None = Field(default=None, ge=1)
 
 
 class PaperCollection(BaseModel):
