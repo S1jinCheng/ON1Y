@@ -2875,6 +2875,7 @@ function PapersTab(props: { locale: Locale; onMessage?: (message: string) => voi
     try {
       const saved = await savePaperSettings(settings);
       setSettings(saved);
+      window.dispatchEvent(new CustomEvent("on1y-paper-settings-changed", { detail: saved }));
       onMessage?.(L(locale, "Paper 设置已保存", "Paper settings saved"));
       return saved;
     } catch (error) {
@@ -2891,6 +2892,7 @@ function PapersTab(props: { locale: Locale; onMessage?: (message: string) => voi
     try {
       const saved = await savePaperSettings(settings);
       setSettings(saved);
+      window.dispatchEvent(new CustomEvent("on1y-paper-settings-changed", { detail: saved }));
       const result = kind === "folder" ? await scanPaperFolder() : await syncZoteroPapers();
       if (!result.enabled) {
         onMessage?.(L(locale, "请先启用对应的同步开关", "Enable this sync first"));
@@ -2915,6 +2917,28 @@ function PapersTab(props: { locale: Locale; onMessage?: (message: string) => voi
 
   return (
     <div className="space-y-7">
+      <section className="space-y-4">
+        <div>
+          <h3 className="text-sm font-semibold text-foreground">{L(locale, "AI 中文速览", "AI Chinese brief")}</h3>
+          <p className="mt-1 text-xs leading-relaxed text-muted">
+            {L(locale, "选择速览在打开论文时自动生成，还是由你手动触发。", "Choose whether a brief is generated when a paper is opened or only on demand.")}
+          </p>
+        </div>
+        <SegmentedControl
+          value={settings.ai_summary_mode}
+          options={[
+            { value: "manual", label: L(locale, "手动生成", "Manual") },
+            { value: "auto", label: L(locale, "自动生成", "Automatic") }
+          ]}
+          onChange={(value) => patch({ ai_summary_mode: value })}
+        />
+        <p className="text-xs leading-relaxed text-muted">
+          {settings.ai_summary_mode === "auto"
+            ? L(locale, "首次打开带本地 PDF、尚无速览的论文时自动生成；不会重复生成，避免额外消耗。", "Generate once when opening a paper that has a local PDF and no brief. Existing briefs are not regenerated automatically.")
+            : L(locale, "在 Paper 第三栏点击“生成速览”后才会调用 AI。", "AI is called only when you click Generate brief in the Paper detail column.")}
+        </p>
+      </section>
+
       <section className="space-y-4">
         <div>
           <h3 className="text-sm font-semibold text-foreground">{L(locale, "PDF 打开方式", "PDF reader")}</h3>

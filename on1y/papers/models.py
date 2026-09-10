@@ -10,6 +10,29 @@ from pydantic import BaseModel, Field, field_validator
 PaperStatus = Literal["to_read", "reading", "read"]
 
 
+class PaperAiSummary(BaseModel):
+    overview: str = ""
+    research_question: str = ""
+    method: str = ""
+    key_findings: list[str] = Field(default_factory=list)
+    effects: list[str] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
+    keywords: list[str] = Field(default_factory=list)
+
+
+class PaperFigure(BaseModel):
+    filename: str
+    page: int = Field(ge=1)
+    caption: str = ""
+
+
+class PaperCollection(BaseModel):
+    key: str = Field(min_length=1, max_length=100)
+    name: str = Field(min_length=1, max_length=500)
+    path: str = Field(min_length=1, max_length=2000)
+    parent_key: str | None = Field(default=None, max_length=100)
+
+
 class PaperAuthor(BaseModel):
     name: str = Field(min_length=1, max_length=300)
     scholar_id: str | None = Field(default=None, max_length=200)
@@ -46,6 +69,7 @@ class PaperItemBase(BaseModel):
 
 
 class PaperCreate(PaperItemBase):
+    zotero_collections: list[PaperCollection] = Field(default_factory=list)
     zotero_key: str | None = Field(default=None, max_length=100)
     zotero_library_id: str | None = Field(default=None, max_length=100)
     zotero_attachment_key: str | None = Field(default=None, max_length=100)
@@ -73,6 +97,7 @@ class PaperUpdate(BaseModel):
     zotero_attachment_key: str | None = Field(default=None, max_length=100)
     zotero_library_type: Literal["users", "groups"] | None = None
     zotero_version: int | None = None
+    zotero_collections: list[PaperCollection] | None = None
 
 
 class PaperItem(PaperItemBase):
@@ -83,16 +108,24 @@ class PaperItem(PaperItemBase):
     zotero_attachment_key: str | None = None
     zotero_library_type: Literal["users", "groups"] | None = None
     zotero_version: int | None = None
+    zotero_collections: list[PaperCollection] = Field(default_factory=list)
     user_note_html: str | None = None
     importance: int | None = None
     theme_slug: str | None = None
+    ai_summary: PaperAiSummary | None = None
+    ai_summary_status: Literal["idle", "running", "ok", "error"] = "idle"
+    ai_summary_error: str | None = None
+    ai_summary_model: str | None = None
+    ai_summary_updated_at: str | None = None
+    figures: list[PaperFigure] = Field(default_factory=list)
     created_at: str
     updated_at: str
 
 
 def paper_from_row(row: Any) -> PaperItem:
-    from on1y.utils.json_util import loads_json_list
+    from on1y.utils.json_util import loads_json_list, loads_meta
 
+    keys = set(row.keys())
     authors = [
         PaperAuthor.model_validate(value)
         for value in loads_json_list(row["authors_json"] or "[]")
@@ -102,6 +135,23 @@ def paper_from_row(row: Any) -> PaperItem:
         str(value).strip()
         for value in loads_json_list(row["tags_json"] or "[]")
         if str(value).strip()
+    ]
+    collections = [
+        PaperCollection.model_validate(value)
+        for value in (
+            loads_json_list(row["zotero_collections_json"] or "[]")
+            if "zotero_collections_json" in keys
+            else []
+        )
+        if isinstance(value, dict)
+    ]
+    summary_value = loads_meta(row["ai_summary_json"]) if "ai_summary_json" in keys else {}
+    figures = [
+        PaperFigure.model_validate(value)
+        for value in (
+            loads_json_list(row["figures_json"] or "[]") if "figures_json" in keys else []
+        )
+        if isinstance(value, dict)
     ]
     return PaperItem(
         id=int(row["id"]),
@@ -124,11 +174,32 @@ def paper_from_row(row: Any) -> PaperItem:
             str(row["zotero_library_type"]) if row["zotero_library_type"] else None
         ),
         zotero_version=int(row["zotero_version"]) if row["zotero_version"] is not None else None,
+        zotero_collections=collections,
         citation_count=int(row["citation_count"]) if row["citation_count"] is not None else None,
         user_note_html=str(row["user_note_html"]) if row["user_note_html"] else None,
         importance=int(row["importance"]) if row["importance"] is not None else None,
         theme_slug=str(row["theme_slug"]) if row["theme_slug"] else None,
         tags=tags,
+        ai_summary=PaperAiSummary.model_validate(summary_value) if summary_value else None,
+        ai_summary_status=(
+            str(row["ai_summary_status"]) if "ai_summary_status" in keys else "idle"
+        ),
+        ai_summary_error=(
+            str(row["ai_summary_error"])
+            if "ai_summary_error" in keys and row["ai_summary_error"]
+            else None
+        ),
+        ai_summary_model=(
+            str(row["ai_summary_model"])
+            if "ai_summary_model" in keys and row["ai_summary_model"]
+            else None
+        ),
+        ai_summary_updated_at=(
+            str(row["ai_summary_updated_at"])
+            if "ai_summary_updated_at" in keys and row["ai_summary_updated_at"]
+            else None
+        ),
+        figures=figures,
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
     )

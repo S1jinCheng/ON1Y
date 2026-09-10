@@ -10,6 +10,8 @@ root = Path(SPECPATH).resolve().parent
 
 entry = str(root / "packaging" / "pyinstaller_entry.py")
 
+binaries: list[tuple[str, str]] = []
+
 datas: list[tuple[str, str]] = [
     (str(root / "sql"), "sql"),
 ]
@@ -29,6 +31,7 @@ for pkg in (
     "feedparser",
     "yt_dlp",
     "multipart",
+    "pymupdf",
     "bcrypt",
     "jwt",
     "tzdata",
@@ -36,6 +39,7 @@ for pkg in (
     try:
         pkg_datas, pkg_binaries, pkg_hidden = collect_all(pkg)
         datas += pkg_datas
+        binaries += pkg_binaries
         hiddenimports += pkg_hidden
     except Exception:
         hiddenimports.append(pkg)
@@ -45,7 +49,7 @@ block_cipher = None
 a = Analysis(
     [entry],
     pathex=[str(root)],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],

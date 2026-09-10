@@ -13,7 +13,13 @@ import httpx
 from on1y.adapters.sqlite_storage import SqliteStorage
 from on1y.papers.knowledge_sync import prepare_paper
 from on1y.papers.local_sync import safe_pdf_name, validate_pdf
-from on1y.papers.models import PaperAuthor, PaperCreate, PaperItem, PaperUpdate
+from on1y.papers.models import (
+    PaperAuthor,
+    PaperCollection,
+    PaperCreate,
+    PaperItem,
+    PaperUpdate,
+)
 from on1y.papers.settings_store import PaperSettings, resolve_paper_cache_dir
 from on1y.papers.shelf import create_paper, find_matching_paper, update_paper
 from on1y.papers.sync_lock import paper_sync_lock
@@ -169,20 +175,24 @@ def _download_pdf(
     return _download_pdf_by_key(client, settings, user_id, attachment_key, title)
 
 
-def _fetch_items(client: httpx.Client, base_path: str) -> list[dict[str, Any]]:
+def _fetch_pages(
+    client: httpx.Client,
+    base_path: str,
+    *,
+    item_type: str | None = None,
+) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     start = 0
     page_size = 100
     while start < 5000:
-        response = client.get(
-            base_path,
-            params={
-                "format": "json",
-                "limit": page_size,
-                "start": start,
-                "itemType": "-attachment",
-            },
-        )
+        params: dict[str, Any] = {
+            "format": "json",
+            "limit": page_size,
+            "start": start,
+        }
+        if item_type:
+            params["itemType"] = item_type
+        response = client.get(base_path, params=params)
         response.raise_for_status()
         page = response.json()
         if not isinstance(page, list):
@@ -192,6 +202,64 @@ def _fetch_items(client: httpx.Client, base_path: str) -> list[dict[str, Any]]:
             break
         start += page_size
     return rows
+
+
+def _fetch_items(client: httpx.Client, base_path: str) -> list[dict[str, Any]]:
+    return _fetch_pages(client, base_path, item_type="-attachment")
+
+
+def _collection_index(rows: list[dict[str, Any]]) -> dict[str, PaperCollection]:
+    raw: dict[str, tuple[str, str | None]] = {}
+    for row in rows:
+        data = row.get("data") or {}
+        key = str(row.get("key") or data.get("key") or "").strip()
+        if not key:
+            continue
+        name = str(data.get("name") or key).strip() or key
+        parent_value = data.get("parentCollection")
+        parent_key = str(parent_value).strip() if isinstance(parent_value, str) else None
+        raw[key] = (name, parent_key or None)
+
+    result: dict[str, PaperCollection] = {}
+
+    def resolve(key: str, visiting: set[str]) -> PaperCollection:
+        if key in result:
+            return result[key]
+        name, parent_key = raw.get(key, (key, None))
+        path = name
+        safe_parent = parent_key if parent_key and parent_key != key else None
+        if safe_parent and safe_parent not in visiting:
+            parent = resolve(safe_parent, {*visiting, key})
+            path = f"{parent.path} / {name}"
+        collection = PaperCollection(
+            key=key,
+            name=name,
+            path=path,
+            parent_key=safe_parent,
+        )
+        result[key] = collection
+        return collection
+
+    for key in raw:
+        resolve(key, set())
+    return result
+
+
+def _collections_for_item(
+    data: dict[str, Any], collection_index: dict[str, PaperCollection]
+) -> list[PaperCollection]:
+    result: list[PaperCollection] = []
+    seen: set[str] = set()
+    for value in data.get("collections") or []:
+        key = str(value or "").strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        result.append(
+            collection_index.get(key)
+            or PaperCollection(key=key, name=key, path=key)
+        )
+    return sorted(result, key=lambda row: (row.path.casefold(), row.key))
 
 
 def _merge_payload(
@@ -206,28 +274,32 @@ def _merge_payload(
     url: str | None,
     pdf_path: str | None,
     tags: list[str],
+    zotero_collections: list[PaperCollection] | None,
     zotero_key: str,
     zotero_library_id: str,
     zotero_attachment_key: str | None,
     zotero_library_type: str,
     zotero_version: int | None,
 ) -> PaperUpdate:
-    return PaperUpdate(
-        title=title or existing.title,
-        authors=authors or existing.authors,
-        abstract=abstract or existing.abstract,
-        year=year or existing.year,
-        venue=venue or existing.venue,
-        doi=doi or existing.doi,
-        url=url or existing.url,
-        pdf_path=pdf_path or existing.pdf_path,
-        tags=_merge_tags(existing.tags, tags),
-        zotero_key=zotero_key,
-        zotero_library_id=zotero_library_id,
-        zotero_attachment_key=zotero_attachment_key,
-        zotero_library_type=zotero_library_type,
-        zotero_version=zotero_version,
-    )
+    values: dict[str, Any] = {
+        "title": title or existing.title,
+        "authors": authors or existing.authors,
+        "abstract": abstract or existing.abstract,
+        "year": year or existing.year,
+        "venue": venue or existing.venue,
+        "doi": doi or existing.doi,
+        "url": url or existing.url,
+        "pdf_path": pdf_path or existing.pdf_path,
+        "tags": _merge_tags(existing.tags, tags),
+        "zotero_key": zotero_key,
+        "zotero_library_id": zotero_library_id,
+        "zotero_attachment_key": zotero_attachment_key,
+        "zotero_library_type": zotero_library_type,
+        "zotero_version": zotero_version,
+    }
+    if zotero_collections is not None:
+        values["zotero_collections"] = zotero_collections
+    return PaperUpdate.model_validate(values)
 
 
 def sync_zotero(
@@ -261,6 +333,17 @@ def sync_zotero(
             follow_redirects=True,
         ) as client,
     ):
+        collections_loaded = True
+        collection_index: dict[str, PaperCollection] = {}
+        try:
+            collection_rows = _fetch_pages(
+                client,
+                f"{_base(settings)}/{_prefix(settings)}/collections",
+            )
+            collection_index = _collection_index(collection_rows)
+        except Exception as exc:
+            collections_loaded = False
+            errors.append(f"Zotero 分类读取失败（已保留原分类）: {exc}")
         rows = _fetch_items(client, base_path)
         for row in rows:
             data = row.get("data") or {}
@@ -303,6 +386,11 @@ def sync_zotero(
                 venue = _venue(data)
                 url = str(data.get("url") or "").strip() or None
                 tags = _tags(data)
+                zotero_collections = (
+                    _collections_for_item(data, collection_index)
+                    if collections_loaded
+                    else None
+                )
                 version = int(row.get("version") or data.get("version") or 0) or None
                 if existing:
                     item = update_paper(
@@ -320,6 +408,7 @@ def sync_zotero(
                             url=url,
                             pdf_path=pdf_path,
                             tags=tags,
+                            zotero_collections=zotero_collections,
                             zotero_key=key,
                             zotero_library_id=settings.zotero_library_id,
                             zotero_attachment_key=attachment_key,
@@ -342,6 +431,7 @@ def sync_zotero(
                             url=url,
                             pdf_path=pdf_path,
                             tags=tags,
+                            zotero_collections=zotero_collections or [],
                             zotero_version=version,
                             zotero_key=key,
                             zotero_library_id=settings.zotero_library_id,

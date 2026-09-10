@@ -29,4 +29,10 @@ def has_note_sql(alias: str = "r") -> str:
 
 
 def notes_collection_clause(alias: str = "r") -> str:
-    return f"{alias}.deleted_at IS NULL AND {is_feed_row_sql(alias)} AND {has_note_sql(alias)}"
+    # Paper library entries are intentionally absent from the main feed, but their
+    # reading notes still belong in the shared Notes collection.
+    visible_source = (
+        f"({is_feed_row_sql(alias)} OR "
+        f"COALESCE(json_extract({alias}.source_meta, '$.paper_library'), 0) = 1)"
+    )
+    return f"{alias}.deleted_at IS NULL AND {visible_source} AND {has_note_sql(alias)}"

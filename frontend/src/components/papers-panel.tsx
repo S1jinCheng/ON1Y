@@ -3,14 +3,16 @@
 import {
   ExternalLink,
   FileText,
+  FolderTree,
   Loader2,
   Plus,
   Search,
+  Sparkles,
   Star,
   Trash2,
   Upload
 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ImportanceStars } from "@/components/importance-stars";
 import { RelatedItemsSection } from "@/components/related-items-section";
@@ -24,13 +26,16 @@ import {
   getTaxonomy,
   listPapers,
   openLocalPath,
+  paperFigureUrl,
   postRelatedLessRelevant,
+  summarizePaper,
+  syncZoteroPapers,
   updatePaper,
   uploadPaperFile
 } from "@/lib/api";
 import { openZoteroPdf } from "@/lib/open-external";
 import { openPdfWithApplication } from "@/lib/pdf-application";
-import type { PaperItem, PaperSettings, PaperStatus } from "@/lib/paper-types";
+import type { PaperCollection, PaperItem, PaperSettings, PaperStatus } from "@/lib/paper-types";
 import type { KnowledgeItem, Locale } from "@/lib/types";
 
 function L(locale: Locale, zh: string, en: string): string {
@@ -129,24 +134,40 @@ export function PapersListColumn(props: ListProps): JSX.Element {
   const [items, setItems] = useState<PaperItem[]>([]);
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<PaperStatus | "all">("all");
+  const [collectionKey, setCollectionKey] = useState("all");
+  const [collections, setCollections] = useState<PaperCollection[]>([]);
   const [loading, setLoading] = useState(false);
+  const zoteroSyncStarted = useRef(false);
 
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const response = await listPapers({ status: status === "all" ? undefined : status, query: query.trim() || undefined });
+      const response = await listPapers({
+        status: status === "all" ? undefined : status,
+        query: query.trim() || undefined,
+        collectionKey: collectionKey === "all" ? undefined : collectionKey
+      });
       setItems(response.items);
+      setCollections(response.collections ?? []);
     } catch (error) {
       onMessage(error instanceof Error ? error.message : "load papers failed");
     } finally {
       setLoading(false);
     }
-  }, [onMessage, query, status]);
+  }, [collectionKey, onMessage, query, status]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void refresh(), query ? 250 : 0);
     return () => window.clearTimeout(timer);
   }, [query, refresh, refreshKey]);
+
+  useEffect(() => {
+    if (zoteroSyncStarted.current) return;
+    zoteroSyncStarted.current = true;
+    void syncZoteroPapers()
+      .then((result) => { if (result.enabled) void refresh(); })
+      .catch(() => undefined);
+  }, [refresh]);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -170,6 +191,22 @@ export function PapersListColumn(props: ListProps): JSX.Element {
             {STATUSES.map((value) => <option key={value} value={value}>{statusLabel(locale, value)}</option>)}
           </select>
         </div>
+        <label className="flex items-center gap-2 rounded-md border border-border px-2 py-1.5">
+          <FolderTree className="h-3.5 w-3.5 shrink-0 text-muted" />
+          <select
+            value={collectionKey}
+            onChange={(event) => setCollectionKey(event.target.value)}
+            className="min-w-0 flex-1 bg-surface text-xs outline-none"
+            title={L(locale, "按 Zotero 分类筛选", "Filter by Zotero collection")}
+          >
+            <option value="all">{L(locale, "全部 Zotero 分类", "All Zotero collections")}</option>
+            {collections.map((collection) => (
+              <option key={collection.key} value={collection.key}>
+                {collection.path} ({collection.paper_count ?? 0})
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
 
 
@@ -182,7 +219,7 @@ export function PapersListColumn(props: ListProps): JSX.Element {
               <button type="button" onClick={() => onSelect(item)} className="min-w-0 flex-1 p-3 text-left">
                 <p className="line-clamp-2 text-sm font-medium leading-snug">{item.title}</p>
                 <p className="mt-1 line-clamp-1 text-xs text-muted">{item.authors.map((author) => author.name).join(", ") || L(locale, "作者未知", "Unknown authors")}</p>
-                <div className="mt-2 flex flex-wrap gap-1 text-[10px] text-muted"><span className="rounded bg-soft px-1.5 py-0.5">{statusLabel(locale, item.status)}</span>{item.year ? <span className="rounded bg-soft px-1.5 py-0.5">{item.year}</span> : null}{item.zotero_key ? <span className="rounded bg-soft px-1.5 py-0.5">Zotero</span> : null}{item.pdf_path ? <span className="rounded bg-soft px-1.5 py-0.5">PDF</span> : null}</div>
+                <div className="mt-2 flex flex-wrap gap-1 text-[10px] text-muted"><span className="rounded bg-soft px-1.5 py-0.5">{statusLabel(locale, item.status)}</span>{item.year ? <span className="rounded bg-soft px-1.5 py-0.5">{item.year}</span> : null}{item.zotero_key ? <span className="rounded bg-soft px-1.5 py-0.5">Zotero</span> : null}{item.pdf_path ? <span className="rounded bg-soft px-1.5 py-0.5">PDF</span> : null}{item.zotero_collections.slice(0, 2).map((collection) => <span key={collection.key} title={collection.path} className="max-w-full truncate rounded bg-violet-50 px-1.5 py-0.5 text-violet-700 dark:bg-violet-950/40 dark:text-violet-300">{collection.path}</span>)}{item.tags.slice(0, 3).map((tag) => <span key={tag} className="rounded bg-blue-50 px-1.5 py-0.5 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300">#{tag}</span>)}</div>
               </button>
               <div className="flex w-9 shrink-0 flex-col items-center justify-center border-l border-border">
                 <button type="button" title={starred ? L(locale, "取消收藏", "Unfavorite") : L(locale, "收藏", "Favorite")} onClick={() => void updatePaper(item.id, { importance: starred ? null : 4 }).then(() => { void refresh(); onChanged(); })} className="p-2 text-muted hover:text-foreground"><Star className={`h-4 w-4 ${starred ? "fill-amber-400 text-amber-500" : ""}`} /></button>
@@ -221,12 +258,32 @@ export function PapersDetailColumn(props: DetailProps): JSX.Element {
   const [status, setStatus] = useState<PaperStatus>("to_read");
   const [file, setFile] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
+  const [summarizing, setSummarizing] = useState(false);
+  const [aiSummaryMode, setAiSummaryMode] = useState<"manual" | "auto">("manual");
+  const autoSummaryStarted = useRef(new Set<number>());
+  const activeItemId = useRef<number | null>(item?.id ?? null);
+  activeItemId.current = item?.id ?? null;
   const [tags, setTags] = useState<string[]>(item?.tags ?? []);
   const [tagSuggestions, setTagSuggestions] = useState<string[]>([]);
   const [related, setRelated] = useState<KnowledgeItem[]>([]);
 
-  useEffect(() => setTags(item?.tags ?? []), [item?.id, item?.tags]);
+  useEffect(() => setTags(manualAdd ? [] : item?.tags ?? []), [manualAdd, item?.id, item?.tags]);
   useEffect(() => { void getTaxonomy(locale).then((value) => setTagSuggestions(value.tags.map((row) => row.name))).catch(() => undefined); }, [locale]);
+  useEffect(() => {
+    let cancelled = false;
+    void fetchPaperSettings()
+      .then((value) => { if (!cancelled) setAiSummaryMode(value.ai_summary_mode ?? "manual"); })
+      .catch(() => undefined);
+    const onSettingsChanged = (event: Event) => {
+      const value = (event as CustomEvent<PaperSettings>).detail;
+      if (value?.ai_summary_mode) setAiSummaryMode(value.ai_summary_mode);
+    };
+    window.addEventListener("on1y-paper-settings-changed", onSettingsChanged);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("on1y-paper-settings-changed", onSettingsChanged);
+    };
+  }, []);
   const itemId = item?.id;
   const itemTagsKey = (item?.tags ?? []).join("\0");
   useEffect(() => {
@@ -234,14 +291,41 @@ export function PapersDetailColumn(props: DetailProps): JSX.Element {
     void fetchRelatedPapers(itemId).then((value) => setRelated(value.items)).catch(() => setRelated([]));
   }, [itemId, itemTagsKey]);
 
+  useEffect(() => {
+    if (
+      aiSummaryMode !== "auto" || manualAdd || !itemId || !item?.pdf_path ||
+      item.ai_summary || item.ai_summary_status !== "idle" || summarizing ||
+      autoSummaryStarted.current.has(itemId)
+    ) return;
+    autoSummaryStarted.current.add(itemId);
+    setSummarizing(true);
+    void summarizePaper(itemId)
+      .then((saved) => {
+        if (activeItemId.current === saved.id) onSaved(saved);
+        onMessage(L(locale, "AI 中文速览已自动生成", "AI paper brief generated automatically"));
+      })
+      .catch((error) => onMessage(error instanceof Error ? error.message : "summary failed"))
+      .finally(() => setSummarizing(false));
+  }, [aiSummaryMode, itemId, item?.pdf_path, item?.ai_summary, item?.ai_summary_status, locale, manualAdd, onMessage, onSaved, summarizing]);
+
   async function submitNew(): Promise<void> {
     if (!title.trim() && !file) return;
     setSaving(true);
     try {
       const names = authors.replace("；", ";").split(";").map((name) => name.trim()).filter(Boolean);
-      const created = file
+      let created = file
         ? (await uploadPaperFile(file, { title, authors, status })).paper
-        : await createPaper({ title, authors: names.map((name) => ({ name })), abstract, venue, year: year ? Number(year) : undefined, doi, url, status });
+        : await createPaper({ title, authors: names.map((name) => ({ name })), abstract, venue, year: year ? Number(year) : undefined, doi, url, status, tags });
+      if (file) {
+        created = await updatePaper(created.id, {
+          abstract: abstract.trim() || null,
+          venue: venue.trim() || null,
+          year: year ? Number(year) : null,
+          doi: doi.trim() || null,
+          url: url.trim() || null,
+          tags
+        });
+      }
       onSaved(created);
       onMessage(L(locale, "Paper 已保存", "Paper saved"));
     } catch (error) {
@@ -258,6 +342,7 @@ export function PapersDetailColumn(props: DetailProps): JSX.Element {
       <div className="grid grid-cols-2 gap-3"><label><span className="text-xs text-muted">{L(locale, "期刊 / 会议", "Venue")}</span><input value={venue} onChange={(e) => setVenue(e.target.value)} className="mt-1 w-full rounded-md border border-border bg-surface px-3 py-2" /></label><label><span className="text-xs text-muted">{L(locale, "年份", "Year")}</span><input inputMode="numeric" value={year} onChange={(e) => setYear(e.target.value)} className="mt-1 w-full rounded-md border border-border bg-surface px-3 py-2" /></label></div>
       <div className="grid grid-cols-2 gap-3"><label><span className="text-xs text-muted">DOI</span><input value={doi} onChange={(e) => setDoi(e.target.value)} className="mt-1 w-full rounded-md border border-border bg-surface px-3 py-2" /></label><label><span className="text-xs text-muted">URL</span><input value={url} onChange={(e) => setUrl(e.target.value)} className="mt-1 w-full rounded-md border border-border bg-surface px-3 py-2" /></label></div>
       <label className="block"><span className="text-xs text-muted">{L(locale, "摘要", "Abstract")}</span><textarea value={abstract} onChange={(e) => setAbstract(e.target.value)} rows={7} className="mt-1 w-full rounded-md border border-border bg-surface px-3 py-2" /></label>
+      <div><span className="mb-1 block text-xs text-muted">{L(locale, "标签", "Tags")}</span><TagChipEditor tags={tags} suggestions={tagSuggestions} locale={locale} onChange={setTags} /></div>
       <div className="flex flex-wrap items-center gap-3"><select value={status} onChange={(e) => setStatus(e.target.value as PaperStatus)} className="rounded-md border border-border bg-surface px-2 py-1.5">{STATUSES.map((value) => <option key={value} value={value}>{statusLabel(locale, value)}</option>)}</select><label className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-border px-3 py-1.5 hover:bg-soft"><Upload className="h-4 w-4" />{file?.name ?? L(locale, "附加 PDF（可选）", "Attach PDF (optional)")}<input type="file" accept="application/pdf,.pdf" className="hidden" onChange={(e) => setFile(e.target.files?.[0] ?? null)} /></label></div>
       <div className="flex gap-2"><button type="button" disabled={saving || (!title.trim() && !file)} onClick={() => void submitNew()} className="rounded-md bg-inverse px-4 py-2 text-inverse-foreground disabled:opacity-50">{saving ? L(locale, "保存中…", "Saving…") : L(locale, "保存", "Save")}</button><button type="button" onClick={onCancelManual} className="rounded-md border border-border px-4 py-2">{L(locale, "取消", "Cancel")}</button></div>
     </div></div>;
@@ -267,6 +352,19 @@ export function PapersDetailColumn(props: DetailProps): JSX.Element {
 
   async function patch(input: Parameters<typeof updatePaper>[1]): Promise<void> {
     try { onSaved(await updatePaper(item!.id, input)); } catch (error) { onMessage(error instanceof Error ? error.message : "update failed"); }
+  }
+
+  async function generateSummary(): Promise<void> {
+    setSummarizing(true);
+    try {
+      const saved = await summarizePaper(item!.id);
+      onSaved(saved);
+      onMessage(L(locale, "AI 中文速览已生成", "AI paper brief generated"));
+    } catch (error) {
+      onMessage(error instanceof Error ? error.message : "summary failed");
+    } finally {
+      setSummarizing(false);
+    }
   }
 
   function handleRelatedSelect(rawId: number): void {
@@ -281,7 +379,30 @@ export function PapersDetailColumn(props: DetailProps): JSX.Element {
       <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted">{item.venue ? <span>{item.venue}</span> : null}{item.year ? <span>· {item.year}</span> : null}{item.doi ? <a href={`https://doi.org/${item.doi.replace("https://doi.org/", "")}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 hover:underline">DOI <ExternalLink className="h-3 w-3" /></a> : null}<a href={item.google_scholar_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 hover:underline">Google Scholar <ExternalLink className="h-3 w-3" /></a>{item.zotero_key ? <span>· Zotero {item.zotero_key}</span> : null}</div>
       <div className="mt-3 flex gap-2"><select value={item.status} onChange={(e) => void patch({ status: e.target.value as PaperStatus })} className="rounded-md border border-border bg-surface px-2 py-1 text-xs">{STATUSES.map((value) => <option key={value} value={value}>{statusLabel(locale, value)}</option>)}</select>{item.zotero_reader_url || item.pdf_path ? <button type="button" onClick={() => void openPaperDocument(item, locale, onMessage)} className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs hover:bg-soft"><FileText className="h-3.5 w-3.5" />{L(locale, "打开 PDF", "Open PDF")}</button> : null}{item.url && !item.url.startsWith("file:") ? <a href={item.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs hover:bg-soft">{L(locale, "原文", "Source")}<ExternalLink className="h-3.5 w-3.5" /></a> : null}</div>
     </div>
+    <section className="rounded-xl border border-blue-200 bg-blue-50/60 p-4 dark:border-blue-900 dark:bg-blue-950/20">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h3 className="flex items-center gap-2 text-sm font-semibold"><Sparkles className="h-4 w-4 text-blue-600" />{L(locale, "AI 中文速览", "AI Chinese brief")}</h3>
+        {aiSummaryMode === "manual" || item.ai_summary || item.ai_summary_status === "error" ? <button type="button" disabled={summarizing || !item.pdf_path} title={!item.pdf_path ? L(locale, "请先附加或同步本地 PDF", "Attach or sync a local PDF first") : undefined} onClick={() => void generateSummary()} className="inline-flex items-center gap-1.5 rounded-md border border-blue-200 bg-surface px-2.5 py-1.5 text-xs hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-blue-800 dark:hover:bg-blue-950">
+          {summarizing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+          {summarizing ? L(locale, "正在阅读论文…", "Reading paper…") : item.ai_summary ? L(locale, "重新生成", "Regenerate") : item.ai_summary_status === "error" ? L(locale, "重试", "Retry") : L(locale, "生成速览", "Generate brief")}
+        </button> : <span className="inline-flex items-center gap-1.5 rounded-full bg-blue-100 px-2.5 py-1 text-xs text-blue-700 dark:bg-blue-950 dark:text-blue-300">{summarizing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}{summarizing ? L(locale, "自动生成中…", "Generating automatically…") : L(locale, "自动模式", "Automatic")}</span>}
+      </div>
+      {item.ai_summary ? <div className="space-y-4 text-sm leading-relaxed">
+        <p className="font-medium text-foreground">{item.ai_summary.overview}</p>
+        <div className="grid gap-3 md:grid-cols-2">
+          {item.ai_summary.research_question ? <div className="rounded-lg bg-surface/80 p-3"><p className="mb-1 text-xs font-medium text-muted">{L(locale, "研究问题", "Research question")}</p><p>{item.ai_summary.research_question}</p></div> : null}
+          {item.ai_summary.method ? <div className="rounded-lg bg-surface/80 p-3"><p className="mb-1 text-xs font-medium text-muted">{L(locale, "方法", "Method")}</p><p>{item.ai_summary.method}</p></div> : null}
+        </div>
+        {item.ai_summary.key_findings.length ? <div><p className="mb-1 text-xs font-medium text-muted">{L(locale, "关键发现", "Key findings")}</p><ul className="list-disc space-y-1 pl-5">{item.ai_summary.key_findings.map((value, index) => <li key={index}>{value}</li>)}</ul></div> : null}
+        {item.ai_summary.effects.length ? <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-900 dark:bg-amber-950/20"><p className="mb-1 text-xs font-semibold text-amber-800 dark:text-amber-300">{L(locale, "效果 / 指标", "Effects / metrics")}</p><ul className="list-disc space-y-1 pl-5">{item.ai_summary.effects.map((value, index) => <li key={index}>{value}</li>)}</ul></div> : null}
+        {item.ai_summary.limitations.length ? <div><p className="mb-1 text-xs font-medium text-muted">{L(locale, "局限与边界", "Limitations")}</p><ul className="list-disc space-y-1 pl-5 text-muted">{item.ai_summary.limitations.map((value, index) => <li key={index}>{value}</li>)}</ul></div> : null}
+        <p className="text-[11px] text-muted">{item.ai_summary_model ? item.ai_summary_model + " · " : ""}{item.ai_summary_updated_at ?? ""}</p>
+      </div> : <p className="text-sm text-muted">{item.pdf_path ? aiSummaryMode === "auto" ? L(locale, "自动模式已开启，正在准备首次速览；生成过的论文不会重复调用 AI。", "Automatic mode is on. The first brief will be generated once; existing briefs are not regenerated.") : L(locale, "点击生成后，将从本地 PDF 提炼研究问题、方法、结果和效果指标。", "Generate a brief from the local PDF: question, method, findings, and metrics.") : L(locale, "请先附加 PDF，或在 Paper 设置中从 Zotero 下载 PDF。", "Attach a PDF or enable Zotero PDF downloads in Paper settings.")}</p>}
+      {item.ai_summary_status === "error" && item.ai_summary_error ? <p className="mt-3 rounded-md bg-red-50 p-2 text-xs text-red-700 dark:bg-red-950/30 dark:text-red-300">{item.ai_summary_error}</p> : null}
+    </section>
+    {(item.figures ?? []).length ? <section><h3 className="mb-2 text-xs font-medium uppercase tracking-wider text-muted">{L(locale, "论文关键图表", "Key figures")}</h3><div className="grid gap-3 sm:grid-cols-2">{item.figures.map((figure) => <figure key={figure.filename} className="overflow-hidden rounded-lg border border-border bg-surface"><a href={paperFigureUrl(item.id, figure.filename)} target="_blank" rel="noreferrer"><img src={paperFigureUrl(item.id, figure.filename)} alt={figure.caption || L(locale, "论文图表", "Paper figure") + " " + figure.page} loading="lazy" className="max-h-72 w-full object-contain" /></a><figcaption className="border-t border-border px-3 py-2 text-xs text-muted">{figure.caption || L(locale, "论文图表", "Paper figure")} · {L(locale, "第", "Page")} {figure.page} {L(locale, "页", "")}</figcaption></figure>)}</div></section> : null}
     {item.abstract ? <section><h3 className="mb-2 text-xs font-medium uppercase tracking-wider text-muted">{L(locale, "摘要", "Abstract")}</h3><p className="whitespace-pre-wrap text-sm leading-relaxed text-muted">{item.abstract}</p></section> : null}
+    {item.zotero_collections.length ? <section><h3 className="mb-2 text-xs font-medium uppercase tracking-wider text-muted">{L(locale, "Zotero 分类", "Zotero collections")}</h3><div className="flex flex-wrap gap-2">{item.zotero_collections.map((collection) => <span key={collection.key} className="inline-flex items-center gap-1.5 rounded-md bg-violet-50 px-2.5 py-1 text-xs text-violet-700 dark:bg-violet-950/40 dark:text-violet-300"><FolderTree className="h-3.5 w-3.5" />{collection.path}</span>)}</div></section> : null}
     <section><h3 className="mb-2 text-xs font-medium uppercase tracking-wider text-muted">{L(locale, "标签", "Tags")}</h3><TagChipEditor tags={tags} suggestions={tagSuggestions} locale={locale} onChange={(next) => { setTags(next); void patch({ tags: next }); }} /></section>
     <section><h3 className="mb-2 text-xs font-medium uppercase tracking-wider text-muted">{L(locale, "阅读笔记", "Reading notes")}</h3><RichNoteEditor value={item.user_note_html ?? ""} placeholder={L(locale, "记录方法、结论、引用与想法…", "Methods, findings, quotes, and ideas…")} onSave={(html) => updatePaper(item.id, { user_note_html: html }).then((saved) => { onSaved(saved); })} /></section>
     <section className="border-t border-border pt-4">{related.length ? <RelatedItemsSection items={related} locale={locale} titleLabel={L(locale, "相关内容", "Related") } lessRelevantLabel={L(locale, "不太相关", "Less relevant")} onSelect={handleRelatedSelect} onLessRelevant={(rawId) => { if (item.raw_id != null) void postRelatedLessRelevant(item.raw_id, rawId).then(() => setRelated((rows) => rows.filter((row) => row.raw_id !== rawId))); }} /> : <p className="text-sm text-muted">{L(locale, "添加标签后可发现库内相关论文、文章与视频。", "Add tags to discover related papers, articles, and videos.")}</p>}</section>

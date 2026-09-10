@@ -148,6 +148,7 @@ def list_papers(
     *,
     status: str | None = None,
     query: str | None = None,
+    collection_key: str | None = None,
     limit: int = 200,
     offset: int = 0,
 ) -> list[PaperItem]:
@@ -163,6 +164,12 @@ def list_papers(
             "OR COALESCE(doi, '') LIKE ? OR COALESCE(venue, '') LIKE ?)"
         )
         params.extend([needle] * 5)
+    if collection_key and collection_key.strip():
+        where.append(
+            "EXISTS (SELECT 1 FROM json_each(paper_items.zotero_collections_json) "
+            "WHERE json_extract(value, '$.key') = ?)"
+        )
+        params.append(collection_key.strip())
     params.extend([limit, offset])
     rows = (
         storage._connect()
@@ -176,6 +183,39 @@ def list_papers(
         .fetchall()
     )
     return [paper_from_row(row) for row in rows]
+
+
+def list_paper_collections(storage: SqliteStorage, user_id: int) -> list[dict[str, Any]]:
+    rows = (
+        storage._connect()
+        .execute(
+            """
+            SELECT
+                json_extract(collection.value, '$.key') AS key,
+                json_extract(collection.value, '$.name') AS name,
+                json_extract(collection.value, '$.path') AS path,
+                json_extract(collection.value, '$.parent_key') AS parent_key,
+                COUNT(DISTINCT paper_items.id) AS paper_count
+            FROM paper_items, json_each(paper_items.zotero_collections_json) AS collection
+            WHERE paper_items.user_id = ?
+              AND COALESCE(json_extract(collection.value, '$.key'), '') <> ''
+            GROUP BY key, name, path, parent_key
+            ORDER BY path COLLATE NOCASE, key
+            """,
+            (user_id,),
+        )
+        .fetchall()
+    )
+    return [
+        {
+            "key": str(row["key"]),
+            "name": str(row["name"] or row["key"]),
+            "path": str(row["path"] or row["name"] or row["key"]),
+            "parent_key": str(row["parent_key"]) if row["parent_key"] else None,
+            "paper_count": int(row["paper_count"]),
+        }
+        for row in rows
+    ]
 
 
 def get_paper(storage: SqliteStorage, user_id: int, item_id: int) -> PaperItem | None:
@@ -208,8 +248,9 @@ def create_paper(storage: SqliteStorage, user_id: int, payload: PaperCreate) -> 
         INSERT INTO paper_items (
             user_id, title, authors_json, abstract, status, year, venue, doi, url,
             pdf_path, zotero_key, zotero_library_id, zotero_attachment_key,
-            zotero_library_type, zotero_version, citation_count, tags_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            zotero_library_type, zotero_version, citation_count, tags_json,
+            zotero_collections_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             user_id,
@@ -229,6 +270,7 @@ def create_paper(storage: SqliteStorage, user_id: int, payload: PaperCreate) -> 
             payload.zotero_version,
             payload.citation_count,
             dumps_json(_tags(payload.tags)),
+            dumps_json([row.model_dump() for row in payload.zotero_collections]),
         ),
     )
     storage._connect().commit()
@@ -251,6 +293,7 @@ def update_paper(
 
     authors = choose("authors", existing.authors) or []
     tags = _tags(choose("tags", existing.tags) or [])
+    zotero_collections = choose("zotero_collections", existing.zotero_collections) or []
     values = {
         "title": choose("title", existing.title),
         "abstract": choose("abstract", existing.abstract),
@@ -294,7 +337,7 @@ def update_paper(
             year = ?, venue = ?, doi = ?, url = ?, pdf_path = ?, citation_count = ?,
             user_note_html = ?, importance = ?, theme_slug = ?, tags_json = ?,
             zotero_key = ?, zotero_library_id = ?, zotero_attachment_key = ?,
-            zotero_library_type = ?, zotero_version = ?,
+            zotero_library_type = ?, zotero_version = ?, zotero_collections_json = ?,
             updated_at = datetime('now')
         WHERE user_id = ? AND id = ?
         """,
@@ -318,6 +361,7 @@ def update_paper(
             values["zotero_attachment_key"],
             values["zotero_library_type"],
             values["zotero_version"],
+            dumps_json([row.model_dump() for row in zotero_collections]),
             user_id,
             item_id,
         ),

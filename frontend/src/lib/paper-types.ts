@@ -1,10 +1,34 @@
 export type PaperStatus = "to_read" | "reading" | "read";
 
+export type PaperCollection = {
+  key: string;
+  name: string;
+  path: string;
+  parent_key?: string | null;
+  paper_count?: number;
+};
+
 export type PaperAuthor = {
   name: string;
   scholar_id?: string | null;
   scholar_url?: string | null;
   google_scholar_url: string;
+};
+
+export type PaperAiSummary = {
+  overview: string;
+  research_question: string;
+  method: string;
+  key_findings: string[];
+  effects: string[];
+  limitations: string[];
+  keywords: string[];
+};
+
+export type PaperFigure = {
+  filename: string;
+  page: number;
+  caption: string;
 };
 
 export type PaperItem = {
@@ -25,11 +49,18 @@ export type PaperItem = {
   zotero_library_type?: "users" | "groups" | null;
   zotero_reader_url?: string | null;
   zotero_version?: number | null;
+  zotero_collections: PaperCollection[];
   citation_count?: number | null;
   google_scholar_url: string;
   user_note_html?: string | null;
   importance?: number | null;
   theme_slug?: string | null;
+  ai_summary?: PaperAiSummary | null;
+  ai_summary_status: "idle" | "running" | "ok" | "error";
+  ai_summary_error?: string | null;
+  ai_summary_model?: string | null;
+  ai_summary_updated_at?: string | null;
+  figures: PaperFigure[];
   tags: string[];
   created_at: string;
   updated_at: string;
@@ -48,6 +79,7 @@ export type PaperSettings = {
   zotero_api_key?: string | null;
   zotero_collection_key?: string | null;
   zotero_download_pdfs: boolean;
+  ai_summary_mode: "manual" | "auto";
   pdf_open_mode: "zotero" | "system" | "custom";
   pdf_application_path?: string | null;
 };

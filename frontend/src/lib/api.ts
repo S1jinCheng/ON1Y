@@ -33,7 +33,7 @@ import type {
   BookStatus,
   BookWorkDetail
 } from "@/lib/book-types";
-import type { PaperItem, PaperSettings, PaperStatus, PaperSyncResult } from "@/lib/paper-types";
+import type { PaperCollection, PaperItem, PaperSettings, PaperStatus, PaperSyncResult } from "@/lib/paper-types";
 import {
   clearAuth,
   getAuthToken,
@@ -2053,12 +2053,13 @@ export function deleteBookShelfItem(id: number): Promise<{ ok: boolean }> {
   return request<{ ok: boolean }>(`/api/books/shelf/${id}`, { method: "DELETE" });
 }
 
-export function listPapers(params: { status?: PaperStatus; query?: string } = {}): Promise<{ items: PaperItem[]; total: number }> {
+export function listPapers(params: { status?: PaperStatus; query?: string; collectionKey?: string } = {}): Promise<{ items: PaperItem[]; total: number; collections: PaperCollection[] }> {
   const query = new URLSearchParams();
   if (params.status) query.set("status", params.status);
   if (params.query) query.set("query", params.query);
+  if (params.collectionKey) query.set("collection_key", params.collectionKey);
   const suffix = query.toString() ? `?${query.toString()}` : "";
-  return request<{ items: PaperItem[]; total: number }>(`/api/papers${suffix}`);
+  return request<{ items: PaperItem[]; total: number; collections: PaperCollection[] }>(`/api/papers${suffix}`);
 }
 
 export function fetchPaper(id: number): Promise<PaperItem> {
@@ -2109,6 +2110,15 @@ export function fetchRelatedPapers(id: number): Promise<{ items: KnowledgeItem[]
   return request(`/api/papers/${id}/related`);
 }
 
+export function summarizePaper(id: number): Promise<PaperItem> {
+  return request<PaperItem>(`/api/papers/${id}/summary`, { method: "POST", direct: true });
+}
+
+export function paperFigureUrl(id: number, filename: string): string {
+  const token = getAuthToken();
+  const suffix = token ? `?access_token=${encodeURIComponent(token)}` : "";
+  return resolveApiUrl(`/api/papers/${id}/figures/${encodeURIComponent(filename)}${suffix}`, true);
+}
 export function fetchPaperSettings(): Promise<PaperSettings> {
   return request<PaperSettings>("/api/papers/settings");
 }

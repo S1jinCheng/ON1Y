@@ -8,6 +8,7 @@ from uuid import uuid4
 
 import httpx
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse
 
 
 def register_paper_routes(app: FastAPI) -> None:
@@ -18,21 +19,29 @@ def register_paper_routes(app: FastAPI) -> None:
     def papers_list(
         status: str | None = Query(default=None),
         query: str | None = Query(default=None),
+        collection_key: str | None = Query(default=None),
         limit: int = Query(default=200, ge=1, le=500),
         offset: int = Query(default=0, ge=0),
     ) -> dict[str, Any]:
         from on1y.papers.models import paper_dump
-        from on1y.papers.shelf import count_papers, list_papers
+        from on1y.papers.shelf import count_papers, list_paper_collections, list_papers
 
         uid = get_effective_user_id()
         storage = get_storage()
         try:
             items = list_papers(
-                storage, uid, status=status, query=query, limit=limit, offset=offset
+                storage,
+                uid,
+                status=status,
+                query=query,
+                collection_key=collection_key,
+                limit=limit,
+                offset=offset,
             )
             return {
                 "items": [paper_dump(item) for item in items],
                 "total": count_papers(storage, uid),
+                "collections": list_paper_collections(storage, uid),
             }
         finally:
             storage.close()
@@ -72,7 +81,7 @@ def register_paper_routes(app: FastAPI) -> None:
 
     @app.patch("/api/papers/{item_id}")
     def papers_update(item_id: int, body: dict[str, Any]) -> dict[str, Any]:
-        from on1y.papers.knowledge_sync import prepare_paper, sync_paper_tags
+        from on1y.papers.knowledge_sync import prepare_paper, sync_paper_note, sync_paper_tags
         from on1y.papers.models import PaperUpdate, paper_dump
         from on1y.papers.shelf import get_paper, update_paper
 
@@ -88,13 +97,53 @@ def register_paper_routes(app: FastAPI) -> None:
                 raise HTTPException(status_code=404, detail="paper not found")
             if payload.tags is not None:
                 item = sync_paper_tags(storage, uid, item_id, payload.tags) or item
-            elif payload.model_fields_set.intersection(
+            if "user_note_html" in payload.model_fields_set:
+                item = sync_paper_note(storage, uid, item)
+            if payload.model_fields_set.intersection(
                 {"title", "authors", "abstract", "doi", "url", "venue", "year"}
             ):
                 item = prepare_paper(storage, uid, item)
-            else:
+            elif payload.tags is None and "user_note_html" not in payload.model_fields_set:
                 item = get_paper(storage, uid, item_id) or item
             return paper_dump(item)
+        finally:
+            storage.close()
+
+    @app.post("/api/papers/{item_id}/summary")
+    def papers_generate_summary(item_id: int) -> dict[str, Any]:
+        from on1y.papers.models import paper_dump
+        from on1y.papers.summary import generate_paper_summary
+
+        uid = get_effective_user_id()
+        storage = get_storage()
+        try:
+            try:
+                return paper_dump(generate_paper_summary(storage, uid, item_id))
+            except LookupError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            except (FileNotFoundError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            except Exception as exc:
+                raise HTTPException(status_code=502, detail=f"AI 速览生成失败：{exc}") from exc
+        finally:
+            storage.close()
+
+    @app.get("/api/papers/{item_id}/figures/{filename}")
+    def papers_figure(item_id: int, filename: str) -> FileResponse:
+        from on1y.papers.shelf import get_paper
+        from on1y.papers.summary import paper_figure_dir
+
+        uid = get_effective_user_id()
+        storage = get_storage()
+        try:
+            item = get_paper(storage, uid, item_id)
+            allowed = {figure.filename for figure in item.figures} if item else set()
+            if filename not in allowed or Path(filename).name != filename:
+                raise HTTPException(status_code=404, detail="figure not found")
+            path = paper_figure_dir(uid, item_id) / filename
+            if not path.is_file():
+                raise HTTPException(status_code=404, detail="figure not found")
+            return FileResponse(path, media_type="image/png", filename=filename)
         finally:
             storage.close()
 
