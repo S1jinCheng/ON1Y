@@ -8,6 +8,25 @@ function Get-On1yRoot {
 }
 
 function Initialize-On1yConda {
+    # Prefer direct environment activation. This avoids conda shell output being
+    # decoded with the legacy Windows code page when the user profile is non-ASCII.
+    $directCandidates = @()
+    if ($env:CONDA_EXE) {
+        $condaRoot = Split-Path (Split-Path $env:CONDA_EXE -Parent) -Parent
+        $directCandidates += (Join-Path $condaRoot "envs\on1y")
+    }
+    $directCandidates += @(
+        "D:\anaconda\envs\on1y",
+        "$env:USERPROFILE\anaconda3\envs\on1y",
+        "$env:USERPROFILE\miniconda3\envs\on1y"
+    )
+    foreach ($candidate in ($directCandidates | Select-Object -Unique)) {
+        if (-not (Test-Path (Join-Path $candidate "python.exe"))) { continue }
+        $env:CONDA_DEFAULT_ENV = "on1y"
+        $env:CONDA_PREFIX = $candidate
+        $env:PATH = "$candidate;$candidate\Scripts;$candidate\Library\bin;$env:PATH"
+        return
+    }
     if (Get-Command conda -ErrorAction SilentlyContinue) {
         conda activate on1y
         if ($LASTEXITCODE -ne 0) {
