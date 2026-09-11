@@ -4,7 +4,13 @@
 import sys
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_all, collect_submodules
+from PyInstaller.utils.hooks import (
+    collect_all,
+    collect_data_files,
+    collect_dynamic_libs,
+    collect_submodules,
+    copy_metadata,
+)
 
 root = Path(SPECPATH).resolve().parent
 
@@ -44,6 +50,21 @@ for pkg in (
     except Exception:
         hiddenimports.append(pkg)
 
+# Paddle's runtime uses native libraries and model metadata, while collecting every
+# submodule also pulls training, serving, tests, and unrelated document pipelines.
+for pkg in ("paddle", "paddleocr", "paddlex"):
+    datas += collect_data_files(pkg)
+    binaries += collect_dynamic_libs(pkg)
+
+hiddenimports += collect_submodules("paddlex.inference.models.object_detection")
+for distribution in (
+    "opencv-contrib-python",
+    "pypdfium2",
+    "paddleocr",
+    "paddlepaddle",
+    "paddlex",
+):
+    datas += copy_metadata(distribution)
 block_cipher = None
 
 a = Analysis(

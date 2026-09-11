@@ -48,6 +48,14 @@ Copy-Item -Recurse -Force $pyOut (Join-Path $backendDir "on1y")
 
 Copy-Item -Recurse -Force (Join-Path $root "frontend\out") (Join-Path $appDir "frontend\out")
 Copy-Item -Recurse -Force (Join-Path $root "sql") (Join-Path $appDir "sql")
+$modelSource = Join-Path $root "data\models\PP-DocLayout-M"
+if ((Test-Path (Join-Path $modelSource "inference.json")) -and (Test-Path (Join-Path $modelSource "inference.pdiparams"))) {
+    New-Item -ItemType Directory -Path (Join-Path $appDir "models") -Force | Out-Null
+    Copy-Item -Recurse -Force $modelSource (Join-Path $appDir "models\PP-DocLayout-M")
+}
+else {
+    Write-Warning "PP-DocLayout-M was not found; the desktop app will download it on first use."
+}
 Copy-Item -Force (Join-Path $root ".env.example") (Join-Path $appDir ".env.example")
 foreach ($name in @("feeds.yaml.example", "zhihu_follows.txt.example", "youtube_channels.txt.example", "user_profile.json.example")) {
     $src = Join-Path $root "config\$name"
