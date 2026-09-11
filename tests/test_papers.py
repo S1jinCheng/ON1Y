@@ -659,6 +659,37 @@ def test_extract_paper_figures_respects_columns_and_tables(tmp_path, monkeypatch
     assert figures[1].width is not None and figures[1].width > 900
 
 
+def test_visual_color_filter_keeps_real_figures_and_rejects_blank_regions() -> None:
+    from on1y.papers.figures import _keep_visual_crop, _visual_features
+    from PIL import Image, ImageDraw
+
+    color = Image.new("RGB", (160, 100), (245, 245, 245))
+    draw = ImageDraw.Draw(color)
+    draw.rectangle((12, 12, 70, 88), fill=(30, 120, 220))
+    draw.rectangle((82, 18, 145, 42), fill=(220, 80, 70))
+    color_features = _visual_features(color)
+    assert color_features["color_ratio"] > 0.008
+    assert _keep_visual_crop(color_features, kind="figure", has_caption=False)
+
+    monochrome = Image.new("RGB", (160, 100), "white")
+    draw = ImageDraw.Draw(monochrome)
+    for x in range(10, 151, 28):
+        draw.line((x, 10, x, 90), fill="black", width=2)
+    for y in range(10, 91, 20):
+        draw.line((10, y, 150, y), fill="black", width=2)
+    mono_features = _visual_features(monochrome)
+    assert mono_features["color_ratio"] < 0.008
+    assert _keep_visual_crop(mono_features, kind="figure", has_caption=True)
+
+    low_content = {
+        "color_ratio": 0.0,
+        "ink_ratio": 0.02,
+        "edge_ratio": 0.01,
+        "luminance_stddev": 5.0,
+    }
+    assert not _keep_visual_crop(low_content, kind="figure", has_caption=False)
+
+
 def test_generate_paper_summary_updates_tags_and_search_body(
     storage, tmp_path, monkeypatch
 ) -> None:

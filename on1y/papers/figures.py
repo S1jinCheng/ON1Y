@@ -407,6 +407,53 @@ def _difference_hash(image: Any) -> str:
     return f"{value:016x}"
 
 
+def _image_samples(image: Any) -> list[tuple[int, int, int]]:
+    sample = image.convert("RGB").resize((64, 64))
+    flattened = getattr(sample, "get_flattened_data", None)
+    values = list(flattened() if flattened is not None else sample.getdata())
+    return [tuple(int(channel) for channel in value) for value in values]
+
+
+def _visual_features(image: Any) -> dict[str, float]:
+    """Return hidden visual signals used to reject text-like layout boxes."""
+    from PIL import ImageStat
+
+    samples = _image_samples(image)
+    luminance = [0.299 * red + 0.587 * green + 0.114 * blue for red, green, blue in samples]
+    colorful = sum(
+        max(red, green, blue) - min(red, green, blue) >= 18 and max(red, green, blue) < 250
+        for red, green, blue in samples
+    )
+    ink = sum(value < 245 for value in luminance)
+    edges = 0
+    for row in range(64):
+        for column in range(64):
+            index = row * 64 + column
+            if column and abs(luminance[index] - luminance[index - 1]) >= 24:
+                edges += 1
+            if row and abs(luminance[index] - luminance[index - 64]) >= 24:
+                edges += 1
+    return {
+        "color_ratio": colorful / len(samples),
+        "ink_ratio": ink / len(samples),
+        "edge_ratio": edges / (64 * 64 * 2),
+        "luminance_stddev": ImageStat.Stat(image.convert("L")).stddev[0],
+    }
+
+
+def _keep_visual_crop(features: dict[str, float], *, kind: str, has_caption: bool) -> bool:
+    """Keep colorful or structurally rich crops, including legitimate monochrome figures."""
+    if features["ink_ratio"] < 0.008 or features["luminance_stddev"] < 2.5:
+        return False
+    if features["color_ratio"] >= 0.008:
+        return True
+    if kind == "table":
+        return features["edge_ratio"] >= 0.012
+    if has_caption:
+        return features["edge_ratio"] >= 0.008 or features["ink_ratio"] >= 0.16
+    return features["edge_ratio"] >= 0.022 and features["ink_ratio"] >= 0.04
+
+
 def _hash_distance(first: str, second: str) -> int:
     return (int(first, 16) ^ int(second, 16)).bit_count()
 
@@ -458,7 +505,7 @@ def _extract_to_directory(
 ) -> tuple[list[PaperFigure], dict[str, Any]]:
     try:
         import pymupdf
-        from PIL import Image, ImageStat
+        from PIL import Image
     except ImportError as exc:  # pragma: no cover - packaging guard
         raise RuntimeError("本地图表识别组件未安装，请重新安装桌面版") from exc
 
@@ -491,8 +538,12 @@ def _extract_to_directory(
                             break
                         crop_box = _expand_box(region.box, rendered.width, rendered.height)
                         crop = rendered.crop(crop_box).convert("RGB")
-                        grayscale = crop.convert("L")
-                        if ImageStat.Stat(grayscale).stddev[0] < 2.5:
+                        features = _visual_features(crop)
+                        if not _keep_visual_crop(
+                            features,
+                            kind=_region_kind(region.label),
+                            has_caption=region.caption_index is not None,
+                        ):
                             continue
                         perceptual_hash = _difference_hash(crop)
                         content_hash = hashlib.sha256(crop.tobytes()).hexdigest()
@@ -540,6 +591,9 @@ def _extract_to_directory(
                                 ),
                                 "content_sha256": content_hash,
                                 "difference_hash": perceptual_hash,
+                                "color_ratio": round(features["color_ratio"], 6),
+                                "ink_ratio": round(features["ink_ratio"], 6),
+                                "edge_ratio": round(features["edge_ratio"], 6),
                             }
                         )
     finally:
