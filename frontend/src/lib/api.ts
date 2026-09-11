@@ -2110,6 +2110,9 @@ export function fetchRelatedPapers(id: number): Promise<{ items: KnowledgeItem[]
   return request(`/api/papers/${id}/related`);
 }
 
+export function extractPaperFigures(id: number): Promise<PaperItem> {
+  return request<PaperItem>(`/api/papers/${id}/figures/extract`, { method: "POST", direct: true });
+}
 export function summarizePaper(id: number): Promise<PaperItem> {
   return request<PaperItem>(`/api/papers/${id}/summary`, { method: "POST", direct: true });
 }

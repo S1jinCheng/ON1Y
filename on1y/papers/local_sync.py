@@ -43,19 +43,14 @@ def import_pdf(
 ) -> dict[str, Any]:
     from on1y.adapters.sqlite_storage import get_storage
     from on1y.auth.context import user_context
+    from on1y.papers.figures import extract_figures_for_paper
     from on1y.papers.knowledge_sync import prepare_paper
     from on1y.papers.shelf import create_paper, find_matching_paper, update_paper
 
     validate_pdf(path)
     resolved = path.resolve()
-    paper_title = (
-        title or path.stem.replace("_", " ").replace("-", " ")
-    ).strip() or "未命名论文"
-    paper_authors = [
-        PaperAuthor(name=name)
-        for name in authors or []
-        if name.strip()
-    ]
+    paper_title = (title or path.stem.replace("_", " ").replace("-", " ")).strip() or "未命名论文"
+    paper_authors = [PaperAuthor(name=name) for name in authors or [] if name.strip()]
     with paper_sync_lock(user_id), user_context(user_id):
         storage = get_storage()
         try:
@@ -85,6 +80,10 @@ def import_pdf(
                 )
                 assert item is not None
                 item = prepare_paper(storage, user_id, item)
+                try:
+                    item = extract_figures_for_paper(storage, user_id, item.id)
+                except Exception:
+                    logger.exception("Paper %s figure extraction failed after import", item.id)
                 return {
                     "ok": True,
                     "created": False,
@@ -98,16 +97,16 @@ def import_pdf(
                 PaperCreate(
                     title=paper_title,
                     authors=paper_authors,
-                    status=(
-                        status
-                        if status in {"to_read", "reading", "read"}
-                        else "to_read"
-                    ),
+                    status=(status if status in {"to_read", "reading", "read"} else "to_read"),
                     pdf_path=str(resolved),
                     url=resolved.as_uri(),
                 ),
             )
             item = prepare_paper(storage, user_id, item)
+            try:
+                item = extract_figures_for_paper(storage, user_id, item.id)
+            except Exception:
+                logger.exception("Paper %s figure extraction failed after import", item.id)
             return {
                 "ok": True,
                 "created": True,
@@ -116,6 +115,7 @@ def import_pdf(
             }
         finally:
             storage.close()
+
 
 def scan_paper_folder(user_id: int) -> dict[str, Any]:
     from on1y.adapters.sqlite_storage import get_storage

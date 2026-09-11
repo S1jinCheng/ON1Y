@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import shutil
 from pathlib import Path
@@ -11,6 +12,7 @@ from urllib.parse import unquote, urlparse
 import httpx
 
 from on1y.adapters.sqlite_storage import SqliteStorage
+from on1y.papers.figures import extract_figures_for_paper
 from on1y.papers.knowledge_sync import prepare_paper
 from on1y.papers.local_sync import safe_pdf_name, validate_pdf
 from on1y.papers.models import (
@@ -23,6 +25,8 @@ from on1y.papers.models import (
 from on1y.papers.settings_store import PaperSettings, resolve_paper_cache_dir
 from on1y.papers.shelf import create_paper, find_matching_paper, update_paper
 from on1y.papers.sync_lock import paper_sync_lock
+
+logger = logging.getLogger(__name__)
 
 PAPER_ITEM_TYPES = {
     "journalArticle",
@@ -255,10 +259,7 @@ def _collections_for_item(
         if not key or key in seen:
             continue
         seen.add(key)
-        result.append(
-            collection_index.get(key)
-            or PaperCollection(key=key, name=key, path=key)
-        )
+        result.append(collection_index.get(key) or PaperCollection(key=key, name=key, path=key))
     return sorted(result, key=lambda row: (row.path.casefold(), row.key))
 
 
@@ -367,7 +368,8 @@ def sync_zotero(
                     year=year,
                     authors=authors,
                 )
-                pdf_path = existing.pdf_path if existing else None
+                previous_pdf_path = existing.pdf_path if existing else None
+                pdf_path = previous_pdf_path
                 attachment_key = existing.zotero_attachment_key if existing else None
                 if not attachment_key:
                     try:
@@ -387,9 +389,7 @@ def sync_zotero(
                 url = str(data.get("url") or "").strip() or None
                 tags = _tags(data)
                 zotero_collections = (
-                    _collections_for_item(data, collection_index)
-                    if collections_loaded
-                    else None
+                    _collections_for_item(data, collection_index) if collections_loaded else None
                 )
                 version = int(row.get("version") or data.get("version") or 0) or None
                 if existing:
@@ -441,7 +441,15 @@ def sync_zotero(
                     )
                     imported += 1
                 if item:
-                    prepare_paper(storage, user_id, item)
+                    item = prepare_paper(storage, user_id, item)
+                    if item.pdf_path and item.pdf_path != previous_pdf_path:
+                        try:
+                            extract_figures_for_paper(storage, user_id, item.id)
+                        except Exception:
+                            logger.exception(
+                                "Paper %s figure extraction failed after Zotero sync",
+                                item.id,
+                            )
             except Exception as exc:
                 errors.append(f"{title}: {exc}")
     return {

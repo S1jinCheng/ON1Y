@@ -470,6 +470,7 @@ def test_paper_schema_v22_upgrade_preserves_existing_data(tmp_path) -> None:
     finally:
         upgraded.close()
 
+
 def test_paper_note_syncs_to_notes_collection(storage, monkeypatch) -> None:
     from fastapi.testclient import TestClient
 
@@ -533,7 +534,7 @@ def test_paper_figure_endpoint_supports_inline_preview_and_download(
     )
     storage._connect().commit()
     monkeypatch.setattr(
-        "on1y.papers.summary.paper_figure_dir",
+        "on1y.papers.figures.paper_figure_dir",
         lambda _user_id, _item_id: tmp_path,
     )
     monkeypatch.setattr("on1y.adapters.sqlite_storage.get_storage", lambda: storage)
@@ -549,32 +550,57 @@ def test_paper_figure_endpoint_supports_inline_preview_and_download(
     )
     assert download.status_code == 200
     assert "attachment" in download.headers["content-disposition"]
+    assert client.get(f"/api/papers/{paper.id}/figures/manifest.json").status_code == 404
 
-def test_extract_paper_pdf_text_and_figure(tmp_path) -> None:
+
+def test_extract_paper_pdf_text_and_figure(tmp_path, monkeypatch) -> None:
     import pymupdf
-    from on1y.papers.summary import extract_paper_pdf
+    from on1y.papers.figures import _extract_to_directory, _pdf_fingerprint
+    from on1y.papers.summary import extract_paper_text
 
     pdf_path = tmp_path / "figure-paper.pdf"
     document = pymupdf.open()
     page = document.new_page()
     page.insert_text((72, 72), "A Reliable Evaluation")
-    page.draw_rect(pymupdf.Rect(90, 180, 500, 420), color=(0, 0, 0), fill=(0.9, 0.95, 1))
+    page.draw_rect(
+        pymupdf.Rect(90, 180, 500, 420),
+        color=(0, 0, 0),
+        fill=(0.9, 0.95, 1),
+    )
     page.insert_text((110, 250), "Accuracy: 92% vs 80%")
     page.insert_text((90, 450), "Figure 1. Accuracy improves by 12 percentage points.")
     page.insert_text((72, 520), "Results show a substantial improvement over the baseline.")
     document.save(pdf_path)
     document.close()
 
-    text, figures = extract_paper_pdf(pdf_path, tmp_path / "figures")
-    assert "substantial improvement" in text
-    assert figures
+    monkeypatch.setattr(
+        "on1y.papers.figures._predict_layout",
+        lambda _path: [
+            {
+                "label": "image",
+                "score": 0.95,
+                "coordinate": [180, 360, 1000, 840],
+            }
+        ],
+    )
+    output = tmp_path / "figures"
+    figures, manifest = _extract_to_directory(
+        pdf_path,
+        output,
+        _pdf_fingerprint(pdf_path),
+    )
+    assert "substantial improvement" in extract_paper_text(pdf_path)
+    assert len(figures) == 1
     assert figures[0].page == 1
-    assert (tmp_path / "figures" / figures[0].filename).is_file()
+    assert figures[0].caption.startswith("Figure 1")
+    assert (output / figures[0].filename).is_file()
+    assert manifest["model"] == "PP-DocLayout-M"
+    assert manifest["figures"][0]["confidence"] == 0.95
 
 
-def test_extract_paper_figures_respects_columns_and_tables(tmp_path) -> None:
+def test_extract_paper_figures_respects_columns_and_tables(tmp_path, monkeypatch) -> None:
     import pymupdf
-    from on1y.papers.summary import extract_paper_pdf
+    from on1y.papers.figures import _extract_to_directory, _pdf_fingerprint
 
     pdf_path = tmp_path / "layout-paper.pdf"
     document = pymupdf.open()
@@ -603,12 +629,35 @@ def test_extract_paper_figures_respects_columns_and_tables(tmp_path) -> None:
     document.save(pdf_path)
     document.close()
 
-    text, figures = extract_paper_pdf(pdf_path, tmp_path / "layout-figures")
-    assert "left column" in text
+    def fake_layout(path):
+        if "0001" in path.name:
+            return [
+                {
+                    "label": "chart",
+                    "score": 0.93,
+                    "coordinate": [650, 260, 1090, 660],
+                }
+            ]
+        return [
+            {
+                "label": "table",
+                "score": 0.96,
+                "coordinate": [120, 240, 1070, 600],
+            }
+        ]
+
+    monkeypatch.setattr("on1y.papers.figures._predict_layout", fake_layout)
+    output = tmp_path / "layout-figures"
+    figures, _manifest = _extract_to_directory(
+        pdf_path,
+        output,
+        _pdf_fingerprint(pdf_path),
+    )
     assert [figure.kind for figure in figures] == ["figure", "table"]
     assert all(figure.width and figure.height for figure in figures)
     assert figures[0].width is not None and figures[0].width < 700
     assert figures[1].width is not None and figures[1].width > 900
+
 
 def test_generate_paper_summary_updates_tags_and_search_body(
     storage, tmp_path, monkeypatch
@@ -617,8 +666,9 @@ def test_generate_paper_summary_updates_tags_and_search_body(
 
     from on1y.auth.context import user_context
     from on1y.papers.models import PaperCreate, PaperFigure
-    from on1y.papers.shelf import create_paper
+    from on1y.papers.shelf import create_paper, get_paper
     from on1y.papers.summary import generate_paper_summary
+    from on1y.utils.json_util import dumps_json
 
     pdf_path = tmp_path / "paper.pdf"
     pdf_path.write_bytes(b"%PDF-1.7\n")
@@ -640,12 +690,29 @@ def test_generate_paper_summary_updates_tags_and_search_body(
                 "keywords": ["效率", "existing"],
             }
 
-    monkeypatch.setattr(
-        "on1y.papers.summary.extract_paper_pdf",
-        lambda *_args, **_kwargs: (
-            "Introduction. Results: accuracy improved from 80% to 92%. Conclusion.",
-            [PaperFigure(filename="figure-01.png", page=2, caption="Figure 1. Results")],
+    storage._connect().execute(
+        "UPDATE paper_items SET figures_json = ? WHERE id = ?",
+        (
+            dumps_json(
+                [
+                    PaperFigure(
+                        filename="figure-01.png",
+                        page=2,
+                        caption="Figure 1. Results",
+                    ).model_dump()
+                ]
+            ),
+            paper.id,
         ),
+    )
+    storage._connect().commit()
+    monkeypatch.setattr(
+        "on1y.papers.summary.extract_figures_for_paper",
+        lambda *_args, **_kwargs: get_paper(storage, 1, paper.id),
+    )
+    monkeypatch.setattr(
+        "on1y.papers.summary.extract_paper_text",
+        lambda _path: ("Introduction. Results: accuracy improved from 80% to 92%. Conclusion."),
     )
     monkeypatch.setattr("on1y.papers.summary.get_llm_client", lambda: Client())
     monkeypatch.setattr(

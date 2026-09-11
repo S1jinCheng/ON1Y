@@ -128,14 +128,33 @@ def register_paper_routes(app: FastAPI) -> None:
         finally:
             storage.close()
 
+    @app.post("/api/papers/{item_id}/figures/extract")
+    def papers_extract_figures(item_id: int) -> dict[str, Any]:
+        from on1y.papers.figures import extract_figures_for_paper
+        from on1y.papers.models import paper_dump
+
+        uid = get_effective_user_id()
+        storage = get_storage()
+        try:
+            try:
+                return paper_dump(extract_figures_for_paper(storage, uid, item_id))
+            except LookupError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            except (FileNotFoundError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            except Exception as exc:
+                raise HTTPException(status_code=502, detail="图表识别失败，请稍后重试") from exc
+        finally:
+            storage.close()
+
     @app.get("/api/papers/{item_id}/figures/{filename}")
     def papers_figure(
         item_id: int,
         filename: str,
         download: bool = Query(default=False),
     ) -> FileResponse:
+        from on1y.papers.figures import paper_figure_dir
         from on1y.papers.shelf import get_paper
-        from on1y.papers.summary import paper_figure_dir
 
         uid = get_effective_user_id()
         storage = get_storage()

@@ -25,6 +25,7 @@ import { TagChipEditor } from "@/components/tag-chip-editor";
 import {
   createPaper,
   deletePaper,
+  extractPaperFigures,
   fetchRelatedPapers,
   fetchPaperSettings,
   getTaxonomy,
@@ -263,8 +264,10 @@ export function PapersDetailColumn(props: DetailProps): JSX.Element {
   const [file, setFile] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
   const [summarizing, setSummarizing] = useState(false);
+  const [extractingFigures, setExtractingFigures] = useState(false);
   const [aiSummaryMode, setAiSummaryMode] = useState<"manual" | "auto">("manual");
   const autoSummaryStarted = useRef(new Set<number>());
+  const figureExtractionStarted = useRef(new Set<number>());
   const activeItemId = useRef<number | null>(item?.id ?? null);
   activeItemId.current = item?.id ?? null;
   const [tags, setTags] = useState<string[]>(item?.tags ?? []);
@@ -326,6 +329,21 @@ export function PapersDetailColumn(props: DetailProps): JSX.Element {
       .finally(() => setSummarizing(false));
   }, [aiSummaryMode, itemId, item?.pdf_path, item?.ai_summary, item?.ai_summary_status, locale, manualAdd, onMessage, onSaved, summarizing]);
 
+
+  useEffect(() => {
+    if (
+      manualAdd || !itemId || !item?.pdf_path || item.figures.length > 0 ||
+      extractingFigures || figureExtractionStarted.current.has(itemId)
+    ) return;
+    figureExtractionStarted.current.add(itemId);
+    setExtractingFigures(true);
+    void extractPaperFigures(itemId)
+      .then((saved) => {
+        if (activeItemId.current === saved.id) onSaved(saved);
+      })
+      .catch(() => onMessage(L(locale, "论文图表识别失败，请稍后重试", "Figure recognition failed. Try again later.")))
+      .finally(() => setExtractingFigures(false));
+  }, [extractingFigures, item?.figures.length, item?.pdf_path, itemId, locale, manualAdd, onMessage, onSaved]);
   async function submitNew(): Promise<void> {
     if (!title.trim() && !file) return;
     setSaving(true);
@@ -419,6 +437,9 @@ export function PapersDetailColumn(props: DetailProps): JSX.Element {
       </div> : <p className="text-sm text-muted">{item.pdf_path ? aiSummaryMode === "auto" ? L(locale, "自动模式已开启，正在准备首次速览；生成过的论文不会重复调用 AI。", "Automatic mode is on. The first brief will be generated once; existing briefs are not regenerated.") : L(locale, "点击生成后，将从本地 PDF 提炼研究问题、方法、结果和效果指标。", "Generate a brief from the local PDF: question, method, findings, and metrics.") : L(locale, "请先附加 PDF，或在 Paper 设置中从 Zotero 下载 PDF。", "Attach a PDF or enable Zotero PDF downloads in Paper settings.")}</p>}
       {item.ai_summary_status === "error" && item.ai_summary_error ? <p className="mt-3 rounded-md bg-red-50 p-2 text-xs text-red-700 dark:bg-red-950/30 dark:text-red-300">{item.ai_summary_error}</p> : null}
     </section>
+    {extractingFigures && !(item.figures ?? []).length ? <section className="rounded-xl border border-border bg-soft/50 p-4">
+      <div className="flex items-center gap-2 text-sm text-muted"><Loader2 className="h-4 w-4 animate-spin" />{L(locale, "正在识别论文图表…", "Recognizing paper figures…")}</div>
+    </section> : null}
     {(item.figures ?? []).length ? <section className="rounded-2xl border border-border bg-gradient-to-b from-panel/80 to-surface p-4 shadow-sm">
       <div className="mb-3 flex items-center justify-between gap-3">
         <div><h3 className="text-sm font-semibold">{L(locale, "论文图表 Collection", "Paper figure collection")}</h3><p className="mt-0.5 text-xs text-muted">{figuresExpanded ? L(locale, "点击单张图，在 On1y 中沉浸查看", "Open a figure in the On1y viewer") : L(locale, "点击整叠展开图表", "Open the stack to browse figures")}</p></div>
