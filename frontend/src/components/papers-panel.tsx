@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  ChevronUp,
   Download,
   ExternalLink,
   FileText,
@@ -270,6 +271,7 @@ export function PapersDetailColumn(props: DetailProps): JSX.Element {
   const [tagSuggestions, setTagSuggestions] = useState<string[]>([]);
   const [related, setRelated] = useState<KnowledgeItem[]>([]);
   const [previewFigure, setPreviewFigure] = useState<PaperFigure | null>(null);
+  const [figuresExpanded, setFiguresExpanded] = useState(false);
 
   useEffect(() => setTags(manualAdd ? [] : item?.tags ?? []), [manualAdd, item?.id, item?.tags]);
   useEffect(() => { void getTaxonomy(locale).then((value) => setTagSuggestions(value.tags.map((row) => row.name))).catch(() => undefined); }, [locale]);
@@ -294,7 +296,10 @@ export function PapersDetailColumn(props: DetailProps): JSX.Element {
     if (!itemId) { setRelated([]); return; }
     void fetchRelatedPapers(itemId).then((value) => setRelated(value.items)).catch(() => setRelated([]));
   }, [itemId, itemTagsKey]);
-  useEffect(() => setPreviewFigure(null), [itemId]);
+  useEffect(() => {
+    setPreviewFigure(null);
+    setFiguresExpanded(false);
+  }, [itemId]);
   useEffect(() => {
     if (!previewFigure) return;
     const closeOnEscape = (event: KeyboardEvent) => {
@@ -416,10 +421,10 @@ export function PapersDetailColumn(props: DetailProps): JSX.Element {
     </section>
     {(item.figures ?? []).length ? <section className="rounded-2xl border border-border bg-gradient-to-b from-panel/80 to-surface p-4 shadow-sm">
       <div className="mb-3 flex items-center justify-between gap-3">
-        <div><h3 className="text-sm font-semibold">{L(locale, "论文图表 Collection", "Paper figure collection")}</h3><p className="mt-0.5 text-xs text-muted">{L(locale, "点击卡片，在 On1y 中沉浸查看", "Open a card in the On1y viewer")}</p></div>
-        <span className="rounded-full border border-border bg-surface px-2.5 py-1 text-xs text-muted">{item.figures.length} {L(locale, "张", "items")}</span>
+        <div><h3 className="text-sm font-semibold">{L(locale, "论文图表 Collection", "Paper figure collection")}</h3><p className="mt-0.5 text-xs text-muted">{figuresExpanded ? L(locale, "点击单张图，在 On1y 中沉浸查看", "Open a figure in the On1y viewer") : L(locale, "点击整叠展开图表", "Open the stack to browse figures")}</p></div>
+        {figuresExpanded ? <button type="button" onClick={() => setFiguresExpanded(false)} className="inline-flex items-center gap-1 rounded-full border border-border bg-surface px-2.5 py-1 text-xs text-muted transition hover:text-foreground"><ChevronUp className="h-3.5 w-3.5" />{L(locale, "收起", "Collapse")}</button> : <span className="rounded-full border border-border bg-surface px-2.5 py-1 text-xs text-muted">{item.figures.length} {L(locale, "张", "items")}</span>}
       </div>
-      <div className="grid gap-3 sm:grid-cols-2">
+      {figuresExpanded ? <div className="grid gap-3 sm:grid-cols-2">
         {item.figures.map((figure, index) => <article key={figure.filename} className="group relative overflow-hidden rounded-xl border border-border bg-surface shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
           <button type="button" onClick={() => setPreviewFigure(figure)} className="block w-full text-left">
             <div className="relative flex aspect-[4/3] items-center justify-center overflow-hidden bg-[radial-gradient(circle_at_top,#f8fafc,#eef2f7)] p-3 dark:bg-[radial-gradient(circle_at_top,#202631,#11151c)]">
@@ -429,9 +434,23 @@ export function PapersDetailColumn(props: DetailProps): JSX.Element {
             </div>
             <div className="min-h-[74px] border-t border-border px-3 py-2.5"><p className="line-clamp-2 text-xs font-medium leading-relaxed">{figure.caption || L(locale, "未识别图注", "Caption unavailable")}</p><p className="mt-1 text-[11px] text-muted">{L(locale, "第", "Page")} {figure.page} {L(locale, "页", "")}{figure.width && figure.height ? ` · ${figure.width}×${figure.height}` : ""}</p></div>
           </button>
-          <a href={paperFigureUrl(item.id, figure.filename, true)} download={figure.filename} title={L(locale, "下载原图", "Download image")} className="absolute right-2 top-2 rounded-full bg-surface/90 p-1.5 text-muted opacity-0 shadow transition hover:text-foreground group-hover:opacity-100"><Download className="h-3.5 w-3.5" /></a>
+          <a href={paperFigureUrl(item.id, figure.filename, true)} download={figure.filename} title={L(locale, "下载原图", "Download image")} className="absolute right-2 top-2 rounded-full bg-surface/90 p-1.5 text-muted opacity-80 shadow transition hover:text-foreground sm:opacity-0 sm:group-hover:opacity-100"><Download className="h-3.5 w-3.5" /></a>
         </article>)}
-      </div>
+      </div> : <button type="button" aria-expanded="false" aria-label={L(locale, `展开 ${item.figures.length} 张论文图表`, `Expand ${item.figures.length} paper figures`)} onClick={() => setFiguresExpanded(true)} className="group relative block h-[190px] w-full overflow-hidden rounded-xl border border-border bg-soft/60 text-left transition hover:border-foreground/20 hover:bg-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">
+        <span aria-hidden="true" className="absolute inset-x-0 top-3 h-[145px]">
+          {item.figures.slice(0, 5).map((figure, index, visibleFigures) => {
+            const cardCount = visibleFigures.length;
+            const left = cardCount === 1 ? 21 : 8 + index * (26 / (cardCount - 1));
+            const rotation = (index - (cardCount - 1) / 2) * 2.4;
+            return <span key={figure.filename} style={{ left: `${left}%`, transform: `rotate(${rotation}deg)`, zIndex: index + 1 }} className="absolute top-1 h-[132px] w-[58%] origin-bottom overflow-hidden rounded-xl border-2 border-white/90 bg-surface shadow-lg transition duration-300 group-hover:-translate-y-1 dark:border-slate-700">
+              <img src={paperFigureUrl(item.id, figure.filename)} alt="" loading="lazy" className="h-full w-full object-cover" />
+              <span className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/75 to-transparent px-2 pb-1.5 pt-5 text-[10px] font-medium uppercase tracking-wide text-white">{figure.kind === "table" ? "Table" : "Figure"} {String(index + 1).padStart(2, "0")}</span>
+            </span>;
+          })}
+          {item.figures.length > 5 ? <span className="absolute right-3 top-3 z-10 rounded-full bg-inverse px-2 py-1 text-[10px] font-semibold text-inverse-foreground shadow">+{item.figures.length - 5}</span> : null}
+        </span>
+        <span className="absolute inset-x-0 bottom-0 z-20 flex items-center justify-center gap-1.5 bg-gradient-to-t from-surface via-surface/95 to-transparent pb-3 pt-7 text-xs font-medium"><Maximize2 className="h-3.5 w-3.5 transition group-hover:scale-110" />{L(locale, `展开全部 ${item.figures.length} 张`, `Expand all ${item.figures.length}`)}</span>
+      </button>}
     </section> : null}
     {previewFigure ? <div role="dialog" aria-modal="true" aria-label={L(locale, "论文图表预览", "Paper figure preview")} onClick={() => setPreviewFigure(null)} className="fixed inset-0 z-[90] flex flex-col bg-black/85 backdrop-blur-sm">
       <div className="flex shrink-0 items-center justify-between gap-3 border-b border-white/15 px-4 py-3 text-white">
