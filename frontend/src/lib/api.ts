@@ -33,7 +33,7 @@ import type {
   BookStatus,
   BookWorkDetail
 } from "@/lib/book-types";
-import type { PaperCollection, PaperItem, PaperSettings, PaperStatus, PaperSyncResult } from "@/lib/paper-types";
+import type { PaperFolder, PaperItem, PaperSettings, PaperStatus, PaperSyncResult } from "@/lib/paper-types";
 import {
   clearAuth,
   getAuthToken,
@@ -2053,13 +2053,13 @@ export function deleteBookShelfItem(id: number): Promise<{ ok: boolean }> {
   return request<{ ok: boolean }>(`/api/books/shelf/${id}`, { method: "DELETE" });
 }
 
-export function listPapers(params: { status?: PaperStatus; query?: string; collectionKey?: string } = {}): Promise<{ items: PaperItem[]; total: number; collections: PaperCollection[] }> {
+export function listPapers(params: { status?: PaperStatus; query?: string; folderKey?: string } = {}): Promise<{ items: PaperItem[]; total: number; folders: PaperFolder[] }> {
   const query = new URLSearchParams();
   if (params.status) query.set("status", params.status);
   if (params.query) query.set("query", params.query);
-  if (params.collectionKey) query.set("collection_key", params.collectionKey);
+  if (params.folderKey) query.set("folder_key", params.folderKey);
   const suffix = query.toString() ? `?${query.toString()}` : "";
-  return request<{ items: PaperItem[]; total: number; collections: PaperCollection[] }>(`/api/papers${suffix}`);
+  return request<{ items: PaperItem[]; total: number; folders: PaperFolder[] }>(`/api/papers${suffix}`);
 }
 
 export function fetchPaper(id: number): Promise<PaperItem> {
@@ -2102,6 +2102,20 @@ export function updatePaper(
   return request<PaperItem>(`/api/papers/${id}`, { method: "PATCH", body: JSON.stringify(input) });
 }
 
+export function bulkUpdatePaperStatus(input: {
+  item_ids?: number[];
+  literature_paper_ids?: string[];
+  status: PaperStatus;
+}): Promise<{
+  status: PaperStatus;
+  updated: number;
+  item_ids: number[];
+  literature_paper_ids: string[];
+  affected_batches: string[];
+}> {
+  return request("/api/papers/bulk-status", { method: "POST", body: JSON.stringify(input) });
+}
+
 export function deletePaper(id: number): Promise<{ ok: boolean }> {
   return request<{ ok: boolean }>(`/api/papers/${id}`, { method: "DELETE" });
 }
@@ -2113,9 +2127,6 @@ export function fetchRelatedPapers(id: number): Promise<{ items: KnowledgeItem[]
 export function extractPaperFigures(id: number): Promise<PaperItem> {
   return request<PaperItem>(`/api/papers/${id}/figures/extract`, { method: "POST", direct: true });
 }
-export function summarizePaper(id: number): Promise<PaperItem> {
-  return request<PaperItem>(`/api/papers/${id}/summary`, { method: "POST", direct: true });
-}
 
 export function paperFigureUrl(id: number, filename: string, download = false): string {
   const query = new URLSearchParams();
@@ -2125,6 +2136,107 @@ export function paperFigureUrl(id: number, filename: string, download = false): 
   const suffix = query.size ? `?${query.toString()}` : "";
   return resolveApiUrl(`/api/papers/${id}/figures/${encodeURIComponent(filename)}${suffix}`, true);
 }
+
+
+export function initializeLiteratureVault(): Promise<{ path: string; db_path: string; initialized: boolean }> {
+  return request("/api/papers/literature/init", { method: "POST" });
+}
+
+export function validateLiteraturePapers(papers: import("@/lib/paper-types").LiteraturePaperInput[]): Promise<{
+  accepted: import("@/lib/paper-types").LiteraturePaperInput[];
+  duplicates: Array<Record<string, unknown>>;
+  errors: Array<Record<string, unknown>>;
+}> {
+  return request("/api/papers/literature/validate", { method: "POST", body: JSON.stringify({ papers }) });
+}
+
+export function listLiteratureBatches(): Promise<{ items: import("@/lib/paper-types").LiteratureBatch[] }> {
+  return request("/api/papers/literature/batches");
+}
+
+export function fetchLiteratureBatch(id: string): Promise<import("@/lib/paper-types").LiteratureBatch> {
+  return request(`/api/papers/literature/batches/${id}`);
+}
+
+export function fetchLiteratureConfig(): Promise<{ version: number; daily_target: number; source: string }> {
+  return request("/api/papers/literature/config");
+}
+
+export function saveLiteratureConfig(dailyTarget: number): Promise<{ version: number; daily_target: number; source: string }> {
+  return request("/api/papers/literature/config", {
+    method: "PUT",
+    body: JSON.stringify({ daily_target: dailyTarget })
+  });
+}
+
+export function fetchLiteratureDailyPlan(
+  targetDate: string,
+  field: string
+): Promise<import("@/lib/paper-types").LiteratureDailyPlan> {
+  const query = new URLSearchParams({ date: targetDate, field });
+  return request(`/api/papers/literature/daily-plan?${query.toString()}`);
+}
+
+export function createLiteratureBatch(input: {
+  field: string;
+  field_code: string;
+  batch_date: string;
+  papers: import("@/lib/paper-types").LiteraturePaperInput[];
+}): Promise<{
+  created: boolean;
+  batch_id?: string;
+  accepted: unknown[];
+  duplicates: unknown[];
+  errors: unknown[];
+  carryover_count?: number;
+  new_count?: number;
+  daily_target?: number;
+  remaining_slots?: number;
+  plan?: import("@/lib/paper-types").LiteratureDailyPlan;
+}> {
+  return request("/api/papers/literature/batches", { method: "POST", body: JSON.stringify(input) });
+}
+
+export function publishLiteratureBatch(id: string): Promise<import("@/lib/paper-types").LiteratureBatch> {
+  return request(`/api/papers/literature/batches/${id}/publish`, { method: "POST", direct: true });
+}
+
+export function fetchLiteratureTranslationStatus(id: string): Promise<{
+  batch_id: string;
+  summary: import("@/lib/paper-types").LiteratureTranslationSummary;
+  jobs: import("@/lib/paper-types").LiteratureTranslationJob[];
+}> {
+  return request(`/api/papers/literature/batches/${id}/translations`);
+}
+
+export function enqueueLiteratureTranslations(id: string, force = false): Promise<{
+  batch_id: string;
+  summary: import("@/lib/paper-types").LiteratureTranslationSummary;
+  jobs: import("@/lib/paper-types").LiteratureTranslationJob[];
+  queued_now: number;
+  skipped: number;
+}> {
+  return request(`/api/papers/literature/batches/${id}/translations`, {
+    method: "POST",
+    body: JSON.stringify({ force })
+  });
+}
+
+export function retryLiteratureTranslation(jobId: string): Promise<{
+  batch_id: string;
+  summary: import("@/lib/paper-types").LiteratureTranslationSummary;
+  jobs: import("@/lib/paper-types").LiteratureTranslationJob[];
+}> {
+  return request(`/api/papers/literature/translations/${jobId}/retry`, { method: "POST" });
+}
+
+export function rebuildLiteratureFeedback(id: string): Promise<{
+  batch_id: string; read: number; total: number; dismissed: number; pending: number;
+  carried: number; changed_notes: number; path: string;
+}> {
+  return request(`/api/papers/literature/batches/${id}/feedback`, { method: "POST" });
+}
+
 export function fetchPaperSettings(): Promise<PaperSettings> {
   return request<PaperSettings>("/api/papers/settings");
 }

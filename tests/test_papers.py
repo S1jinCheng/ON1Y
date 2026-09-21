@@ -6,11 +6,18 @@ from __future__ import annotations
 def test_paper_crud_and_knowledge_shadow(storage) -> None:
     from on1y.auth.context import user_context
     from on1y.papers.knowledge_sync import prepare_paper, sync_paper_tags
-    from on1y.papers.models import PaperAuthor, PaperCollection, PaperCreate, PaperUpdate
+    from on1y.papers.models import (
+        PaperAuthor,
+        PaperCollection,
+        PaperCreate,
+        PaperFolder,
+        PaperUpdate,
+    )
     from on1y.papers.shelf import (
         create_paper,
         get_paper,
         list_paper_collections,
+        list_paper_folders,
         list_papers,
         update_paper,
     )
@@ -28,6 +35,13 @@ def test_paper_crud_and_knowledge_shadow(storage) -> None:
                 doi="10.5555/3295222.3295349",
                 zotero_collections=[
                     PaperCollection(key="TRANSFORMERS", name="Transformer", path="AI / Transformer")
+                ],
+                folders=[
+                    PaperFolder(
+                        key="vault:human-ai/2026-09-20",
+                        name="2026-09-20",
+                        path="Human-AI-Interaction/2026-09-20",
+                    )
                 ],
             ),
         )
@@ -47,6 +61,9 @@ def test_paper_crud_and_knowledge_shadow(storage) -> None:
         assert list_papers(storage, 1, collection_key="TRANSFORMERS")[0].id == item.id
         assert list_papers(storage, 1, collection_key="MISSING") == []
         assert list_paper_collections(storage, 1)[0]["paper_count"] == 1
+        assert list_papers(storage, 1, folder_key="vault:human-ai/2026-09-20")[0].id == item.id
+        assert list_papers(storage, 1, folder_key="vault:missing") == []
+        assert list_paper_folders(storage, 1)[0]["paper_count"] == 1
         assert get_paper(storage, 1, item.id) is not None
 
 
@@ -90,6 +107,10 @@ def test_papers_api_roundtrip(storage, monkeypatch) -> None:
     from fastapi.testclient import TestClient
 
     monkeypatch.setattr("on1y.adapters.sqlite_storage.get_storage", lambda: storage)
+    monkeypatch.setattr(
+        "on1y.papers.literature.sync_published_to_shelf",
+        lambda *_args, **_kwargs: {"created": 0, "updated": 0, "unchanged": 0},
+    )
     from on1y.web.app import create_app
 
     client = TestClient(create_app())
@@ -111,6 +132,13 @@ def test_papers_api_roundtrip(storage, monkeypatch) -> None:
     assert listing.json()["total"] == 1
 
     item_id = payload["id"]
+    bulk = client.post(
+        "/api/papers/bulk-status",
+        json={"item_ids": [item_id], "status": "dismissed"},
+    )
+    assert bulk.status_code == 200
+    assert bulk.json()["updated"] == 1
+    assert client.get(f"/api/papers/item/{item_id}").json()["status"] == "dismissed"
     updated = client.patch(f"/api/papers/{item_id}", json={"status": "read", "importance": 5})
     assert updated.status_code == 200
     assert updated.json()["status"] == "read"
@@ -169,18 +197,15 @@ def test_paper_pdf_open_settings_roundtrip(tmp_path, monkeypatch) -> None:
     )
 
     defaults = PaperSettings()
-    assert defaults.ai_summary_mode == "manual"
     assert defaults.pdf_open_mode == "zotero"
     assert defaults.pdf_application_path is None
 
     selected = PaperSettings(
-        ai_summary_mode="auto",
         pdf_open_mode="custom",
         pdf_application_path=r"C:\Program Files\Reader\reader.exe",
     )
     save_paper_settings(1, selected)
     loaded = load_paper_settings(1)
-    assert loaded.ai_summary_mode == "auto"
     assert loaded.pdf_open_mode == "custom"
     assert loaded.pdf_application_path == selected.pdf_application_path
 
@@ -272,7 +297,12 @@ def test_zotero_merges_existing_local_paper(storage, monkeypatch) -> None:
             tags=["local-note"],
         ),
     )
-    update_paper(storage, 1, local.id, PaperUpdate(importance=5, user_note_html="keep me"))
+    update_paper(
+        storage,
+        1,
+        local.id,
+        PaperUpdate(importance=5, user_note_html="keep me"),
+    )
 
     class Response:
         def raise_for_status(self) -> None:
@@ -439,6 +469,7 @@ def test_paper_schema_v22_upgrade_preserves_existing_data(tmp_path) -> None:
     initial.close()
 
     with sqlite3.connect(db_path) as conn:
+        conn.execute("DROP INDEX IF EXISTS idx_paper_items_user_literature")
         conn.execute("ALTER TABLE paper_items DROP COLUMN zotero_attachment_key")
         conn.execute("ALTER TABLE paper_items DROP COLUMN zotero_library_type")
         conn.execute("ALTER TABLE paper_items DROP COLUMN ai_summary_json")
@@ -448,6 +479,8 @@ def test_paper_schema_v22_upgrade_preserves_existing_data(tmp_path) -> None:
         conn.execute("ALTER TABLE paper_items DROP COLUMN ai_summary_updated_at")
         conn.execute("ALTER TABLE paper_items DROP COLUMN figures_json")
         conn.execute("ALTER TABLE paper_items DROP COLUMN zotero_collections_json")
+        conn.execute("ALTER TABLE paper_items DROP COLUMN folders_json")
+        conn.execute("ALTER TABLE paper_items DROP COLUMN literature_paper_id")
         conn.execute("DELETE FROM schema_migrations WHERE version >= 22")
 
     upgraded = SqliteStorage(db_path)
@@ -463,6 +496,8 @@ def test_paper_schema_v22_upgrade_preserves_existing_data(tmp_path) -> None:
             "ai_summary_json",
             "figures_json",
             "zotero_collections_json",
+            "folders_json",
+            "literature_paper_id",
         } <= columns
         assert len(items) == 1
         assert items[0].title == "Preserved Paper"
@@ -471,10 +506,77 @@ def test_paper_schema_v22_upgrade_preserves_existing_data(tmp_path) -> None:
         upgraded.close()
 
 
+def test_paper_schema_v26_upgrade_preserves_data_and_allows_dismissed(tmp_path) -> None:
+    import sqlite3
+
+    from on1y.adapters.sqlite_storage import SqliteStorage
+    from on1y.papers.models import PaperCreate, PaperUpdate
+    from on1y.papers.shelf import create_paper, get_paper, update_paper
+
+    db_path = tmp_path / "paper-v25-upgrade.db"
+    initial = SqliteStorage(db_path)
+    initial.initialize()
+    paper = create_paper(
+        initial,
+        1,
+        PaperCreate(
+            title="Preserved through v26",
+            status="reading",
+            tags=["migration"],
+            literature_paper_id="lit-v26-test",
+        ),
+    )
+    initial.close()
+
+    # Recreate the current table with the v25 status constraint, then let the
+    # normal initializer perform the real v25 -> v26 migration.
+    with sqlite3.connect(db_path) as conn:
+        schema_row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'paper_items'"
+        ).fetchone()
+        assert schema_row and schema_row[0]
+        old_schema = str(schema_row[0]).replace(
+            "('to_read', 'reading', 'read', 'dismissed')",
+            "('to_read', 'reading', 'read')",
+        )
+        conn.execute("ALTER TABLE paper_items RENAME TO paper_items_v26_current")
+        conn.execute(old_schema)
+        column_names = [
+            str(row[1]) for row in conn.execute("PRAGMA table_info(paper_items)")
+        ]
+        columns_sql = ", ".join(f'"{name}"' for name in column_names)
+        conn.execute(
+            f"INSERT INTO paper_items ({columns_sql}) "
+            f"SELECT {columns_sql} FROM paper_items_v26_current"
+        )
+        conn.execute("DROP TABLE paper_items_v26_current")
+        conn.execute("DELETE FROM schema_migrations WHERE version = 26")
+
+    upgraded = SqliteStorage(db_path)
+    upgraded.initialize()
+    try:
+        preserved = get_paper(upgraded, 1, paper.id)
+        assert preserved.title == "Preserved through v26"
+        assert preserved.tags == ["migration"]
+        assert preserved.literature_paper_id == "lit-v26-test"
+        assert preserved.status == "reading"
+
+        dismissed = update_paper(upgraded, 1, paper.id, PaperUpdate(status="dismissed"))
+        assert dismissed is not None
+        assert dismissed.status == "dismissed"
+        assert upgraded._current_schema_version(upgraded._connect()) == 26
+    finally:
+        upgraded.close()
+
+
 def test_paper_note_syncs_to_notes_collection(storage, monkeypatch) -> None:
     from fastapi.testclient import TestClient
 
     monkeypatch.setattr("on1y.adapters.sqlite_storage.get_storage", lambda: storage)
+    monkeypatch.setattr(
+        "on1y.papers.literature.sync_published_to_shelf",
+        lambda *_args, **_kwargs: {"created": 0, "updated": 0, "unchanged": 0},
+    )
     from on1y.web.app import create_app
 
     client = TestClient(create_app())
@@ -487,6 +589,7 @@ def test_paper_note_syncs_to_notes_collection(storage, monkeypatch) -> None:
         json={"user_note_html": "<p>experiment note</p>"},
     )
     assert saved.status_code == 200
+    assert saved.json()["user_note_html"] == "<p>experiment note</p>"
     raw = storage.get_raw_by_id(item["raw_id"])
     assert raw is not None
     assert raw.source_meta["user_note_html"] == "<p>experiment note</p>"
@@ -500,6 +603,7 @@ def test_paper_note_syncs_to_notes_collection(storage, monkeypatch) -> None:
         json={"user_note_html": ""},
     )
     assert cleared.status_code == 200
+    assert cleared.json()["user_note_html"] is None
     assert storage.count_collection_items("notes") == 0
 
 
@@ -688,78 +792,3 @@ def test_visual_color_filter_keeps_real_figures_and_rejects_blank_regions() -> N
         "luminance_stddev": 5.0,
     }
     assert not _keep_visual_crop(low_content, kind="figure", has_caption=False)
-
-
-def test_generate_paper_summary_updates_tags_and_search_body(
-    storage, tmp_path, monkeypatch
-) -> None:
-    from types import SimpleNamespace
-
-    from on1y.auth.context import user_context
-    from on1y.papers.models import PaperCreate, PaperFigure
-    from on1y.papers.shelf import create_paper, get_paper
-    from on1y.papers.summary import generate_paper_summary
-    from on1y.utils.json_util import dumps_json
-
-    pdf_path = tmp_path / "paper.pdf"
-    pdf_path.write_bytes(b"%PDF-1.7\n")
-    paper = create_paper(
-        storage,
-        1,
-        PaperCreate(title="Efficient Models", pdf_path=str(pdf_path), tags=["existing"]),
-    )
-
-    class Client:
-        def chat_json(self, *_args, **_kwargs):
-            return {
-                "overview": "研究提出了更高效的模型，并在基准上获得提升。",
-                "research_question": "如何降低计算成本？",
-                "method": "采用稀疏结构并进行对照实验。",
-                "key_findings": ["计算量下降"],
-                "effects": ["准确率由 80% 提升至 92%"],
-                "limitations": ["只测试了一个数据集"],
-                "keywords": ["效率", "existing"],
-            }
-
-    storage._connect().execute(
-        "UPDATE paper_items SET figures_json = ? WHERE id = ?",
-        (
-            dumps_json(
-                [
-                    PaperFigure(
-                        filename="figure-01.png",
-                        page=2,
-                        caption="Figure 1. Results",
-                    ).model_dump()
-                ]
-            ),
-            paper.id,
-        ),
-    )
-    storage._connect().commit()
-    monkeypatch.setattr(
-        "on1y.papers.summary.extract_figures_for_paper",
-        lambda *_args, **_kwargs: get_paper(storage, 1, paper.id),
-    )
-    monkeypatch.setattr(
-        "on1y.papers.summary.extract_paper_text",
-        lambda _path: ("Introduction. Results: accuracy improved from 80% to 92%. Conclusion."),
-    )
-    monkeypatch.setattr("on1y.papers.summary.get_llm_client", lambda: Client())
-    monkeypatch.setattr(
-        "on1y.papers.summary.resolve_llm_settings",
-        lambda **_kwargs: SimpleNamespace(model="test-model"),
-    )
-
-    with user_context(1):
-        summarized = generate_paper_summary(storage, 1, paper.id)
-
-    assert summarized.ai_summary is not None
-    assert summarized.ai_summary.effects == ["准确率由 80% 提升至 92%"]
-    assert summarized.ai_summary_status == "ok"
-    assert summarized.ai_summary_model == "test-model"
-    assert summarized.tags == ["existing", "效率"]
-    assert len(summarized.figures) == 1
-    raw = storage.get_raw_by_id(summarized.raw_id)
-    assert raw is not None
-    assert "accuracy improved" in raw.body_text

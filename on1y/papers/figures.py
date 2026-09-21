@@ -19,8 +19,8 @@ from uuid import uuid4
 from on1y.adapters.sqlite_storage import SqliteStorage
 from on1y.config import PROJECT_ROOT, get_settings
 from on1y.papers.models import PaperFigure, PaperItem
+from on1y.papers.settings_store import resolve_literature_vault
 from on1y.papers.shelf import get_paper
-from on1y.user.paths import user_dir
 from on1y.utils.json_util import dumps_json
 
 logger = logging.getLogger(__name__)
@@ -67,8 +67,8 @@ class _Caption:
 
 
 def paper_figure_dir(user_id: int, item_id: int) -> Path:
-    """Return the private per-paper figure directory."""
-    return user_dir(user_id) / "papers" / "figures" / str(item_id)
+    """Return the rebuildable per-paper figure cache inside the Literature Vault."""
+    return resolve_literature_vault(user_id) / "_system" / "cache" / "figures" / str(item_id)
 
 
 def _package_version(package: str) -> str:
@@ -452,6 +452,64 @@ def _keep_visual_crop(features: dict[str, float], *, kind: str, has_caption: boo
     if has_caption:
         return features["edge_ratio"] >= 0.008 or features["ink_ratio"] >= 0.16
     return features["edge_ratio"] >= 0.022 and features["ink_ratio"] >= 0.04
+
+
+def detect_translation_visual_regions(
+    pdf_path: Path,
+    render_dir: Path,
+) -> dict[int, list[tuple[float, float, float, float]]]:
+    """Locate figure/table regions that must stay visually identical during translation.
+
+    Coordinates are returned in PDF points using PyMuPDF's top-left coordinate system.
+    Captions are deliberately excluded so they can still be translated as normal text.
+    """
+
+    try:
+        import pymupdf
+        from PIL import Image
+    except ImportError as exc:  # pragma: no cover - packaging guard
+        raise RuntimeError("本地图表保护组件未安装，请重新安装桌面版") from exc
+
+    render_dir.mkdir(parents=True, exist_ok=True)
+    detected: dict[int, list[tuple[float, float, float, float]]] = {}
+    document = pymupdf.open(pdf_path)
+    try:
+        for page in document:
+            text_lines = page.get_text("text").splitlines()
+            has_caption = any(_CAPTION_RE.match(line) for line in text_lines)
+            if not page.get_images(full=True) and not page.get_drawings() and not has_caption:
+                continue
+
+            pixmap = page.get_pixmap(
+                matrix=pymupdf.Matrix(RENDER_SCALE, RENDER_SCALE), alpha=False
+            )
+            page_path = render_dir / f"page-{page.number + 1:04d}.png"
+            pixmap.save(page_path)
+            rows = _predict_layout(page_path)
+            regions, _captions = _prepare_page_regions(
+                page, rows, pixmap.width, pixmap.height, RENDER_SCALE
+            )
+            page_regions: list[tuple[float, float, float, float]] = []
+            with Image.open(page_path) as rendered:
+                rendered.load()
+                for region in regions:
+                    crop_box = _expand_box(region.box, rendered.width, rendered.height)
+                    crop = rendered.crop(crop_box).convert("RGB")
+                    features = _visual_features(crop)
+                    if not _keep_visual_crop(
+                        features,
+                        kind=_region_kind(region.label),
+                        has_caption=region.caption_index is not None,
+                    ):
+                        continue
+                    page_regions.append(
+                        tuple(float(value) / RENDER_SCALE for value in crop_box)
+                    )
+            if page_regions:
+                detected[page.number] = page_regions
+    finally:
+        document.close()
+    return detected
 
 
 def _hash_distance(first: str, second: str) -> int:

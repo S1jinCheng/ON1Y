@@ -9,7 +9,7 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from on1y.papers.models import PaperAuthor, PaperCreate, PaperUpdate
+from on1y.papers.models import PaperAuthor, PaperCreate, PaperFolder, PaperUpdate
 from on1y.papers.settings_store import load_paper_settings, resolve_paper_cache_dir
 from on1y.papers.sync_lock import paper_sync_lock
 
@@ -33,6 +33,34 @@ def validate_pdf(path: Path) -> None:
             raise ValueError("文件不是有效的 PDF")
 
 
+def folders_for_local_pdf(path: Path, root: Path) -> list[PaperFolder]:
+    """Build parent-folder memberships for a PDF below a watched local root."""
+
+    try:
+        relative_parent = path.resolve().relative_to(root.resolve()).parent
+    except (OSError, ValueError):
+        return []
+    if relative_parent == Path("."):
+        return []
+    folders: list[PaperFolder] = []
+    parent_key: str | None = None
+    parts: list[str] = []
+    for part in relative_parent.parts:
+        parts.append(part)
+        display_path = "/".join(parts)
+        key = "local:" + display_path.casefold()
+        folders.append(
+            PaperFolder(
+                key=key,
+                name=part,
+                path=display_path,
+                parent_key=parent_key,
+            )
+        )
+        parent_key = key
+    return folders
+
+
 def import_pdf(
     user_id: int,
     path: Path,
@@ -49,6 +77,11 @@ def import_pdf(
 
     validate_pdf(path)
     resolved = path.resolve()
+    settings = load_paper_settings(user_id)
+    folders = folders_for_local_pdf(
+        resolved,
+        resolve_paper_cache_dir(user_id, settings.cache_dir),
+    )
     paper_title = (title or path.stem.replace("_", " ").replace("-", " ")).strip() or "未命名论文"
     paper_authors = [PaperAuthor(name=name) for name in authors or [] if name.strip()]
     with paper_sync_lock(user_id), user_context(user_id):
@@ -68,6 +101,10 @@ def import_pdf(
                     changes["url"] = resolved.as_uri()
                 if paper_authors and not existing.authors:
                     changes["authors"] = paper_authors
+                if folders and [row.model_dump() for row in existing.folders] != [
+                    row.model_dump() for row in folders
+                ]:
+                    changes["folders"] = folders
                 item = (
                     update_paper(
                         storage,
@@ -100,6 +137,7 @@ def import_pdf(
                     status=(status if status in {"to_read", "reading", "read"} else "to_read"),
                     pdf_path=str(resolved),
                     url=resolved.as_uri(),
+                    folders=folders,
                 ),
             )
             item = prepare_paper(storage, user_id, item)
