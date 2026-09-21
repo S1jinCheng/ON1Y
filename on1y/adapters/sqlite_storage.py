@@ -43,7 +43,7 @@ def _source_meta_int(meta: dict[str, Any], *keys: str) -> int | None:
     return None
 
 
-SCHEMA_VERSION = 24
+SCHEMA_VERSION = 26
 SCHEMA_PATH = PROJECT_ROOT / "sql" / "schema.sql"
 SCHEMA_V2_PATH = PROJECT_ROOT / "sql" / "schema_v2.sql"
 SCHEMA_V3_PATH = PROJECT_ROOT / "sql" / "schema_v3.sql"
@@ -66,6 +66,8 @@ SCHEMA_V21_PATH = PROJECT_ROOT / "sql" / "schema_v21.sql"
 SCHEMA_V22_PATH = PROJECT_ROOT / "sql" / "schema_v22.sql"
 SCHEMA_V23_PATH = PROJECT_ROOT / "sql" / "schema_v23.sql"
 SCHEMA_V24_PATH = PROJECT_ROOT / "sql" / "schema_v24.sql"
+SCHEMA_V25_PATH = PROJECT_ROOT / "sql" / "schema_v25.sql"
+SCHEMA_V26_PATH = PROJECT_ROOT / "sql" / "schema_v26.sql"
 
 
 def _as_int_or_none(value: Any) -> int | None:
@@ -403,6 +405,26 @@ class SqliteStorage:
                 (24,),
             )
             logger.info("Applied schema version 24 to %s", self._db_path)
+            current = 24
+        if current < 25:
+            if not SCHEMA_V25_PATH.is_file():
+                raise StorageError(f"Schema file not found: {SCHEMA_V25_PATH}")
+            conn.executescript(SCHEMA_V25_PATH.read_text(encoding="utf-8"))
+            conn.execute(
+                "INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)",
+                (25,),
+            )
+            logger.info("Applied schema version 25 to %s", self._db_path)
+            current = 25
+        if current < 26:
+            if not SCHEMA_V26_PATH.is_file():
+                raise StorageError(f"Schema file not found: {SCHEMA_V26_PATH}")
+            conn.executescript(SCHEMA_V26_PATH.read_text(encoding="utf-8"))
+            conn.execute(
+                "INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)",
+                (26,),
+            )
+            logger.info("Applied schema version 26 to %s", self._db_path)
 
     def _table_exists(self, conn: sqlite3.Connection, name: str) -> bool:
         row = conn.execute(

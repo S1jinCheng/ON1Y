@@ -149,12 +149,13 @@ def list_papers(
     status: str | None = None,
     query: str | None = None,
     collection_key: str | None = None,
+    folder_key: str | None = None,
     limit: int = 200,
     offset: int = 0,
 ) -> list[PaperItem]:
     where = ["user_id = ?"]
     params: list[Any] = [user_id]
-    if status in {"to_read", "reading", "read"}:
+    if status in {"to_read", "reading", "read", "dismissed"}:
         where.append("status = ?")
         params.append(status)
     if query and query.strip():
@@ -170,6 +171,12 @@ def list_papers(
             "WHERE json_extract(value, '$.key') = ?)"
         )
         params.append(collection_key.strip())
+    if folder_key and folder_key.strip():
+        where.append(
+            "EXISTS (SELECT 1 FROM json_each(paper_items.folders_json) "
+            "WHERE json_extract(value, '$.key') = ?)"
+        )
+        params.append(folder_key.strip())
     params.extend([limit, offset])
     rows = (
         storage._connect()
@@ -218,6 +225,41 @@ def list_paper_collections(storage: SqliteStorage, user_id: int) -> list[dict[st
     ]
 
 
+def list_paper_folders(storage: SqliteStorage, user_id: int) -> list[dict[str, Any]]:
+    """Return the real local-folder hierarchy, independent of Zotero."""
+
+    rows = (
+        storage._connect()
+        .execute(
+            """
+            SELECT
+                json_extract(folder.value, '$.key') AS key,
+                json_extract(folder.value, '$.name') AS name,
+                json_extract(folder.value, '$.path') AS path,
+                json_extract(folder.value, '$.parent_key') AS parent_key,
+                COUNT(DISTINCT paper_items.id) AS paper_count
+            FROM paper_items, json_each(paper_items.folders_json) AS folder
+            WHERE paper_items.user_id = ?
+              AND COALESCE(json_extract(folder.value, '$.key'), '') <> ''
+            GROUP BY key, name, path, parent_key
+            ORDER BY path COLLATE NOCASE, key
+            """,
+            (user_id,),
+        )
+        .fetchall()
+    )
+    return [
+        {
+            "key": str(row["key"]),
+            "name": str(row["name"] or row["key"]),
+            "path": str(row["path"] or row["name"] or row["key"]),
+            "parent_key": str(row["parent_key"]) if row["parent_key"] else None,
+            "paper_count": int(row["paper_count"]),
+        }
+        for row in rows
+    ]
+
+
 def get_paper(storage: SqliteStorage, user_id: int, item_id: int) -> PaperItem | None:
     row = (
         storage._connect()
@@ -242,6 +284,21 @@ def get_paper_by_zotero(
     return paper_from_row(row) if row else None
 
 
+def get_paper_by_literature_id(
+    storage: SqliteStorage, user_id: int, literature_paper_id: str
+) -> PaperItem | None:
+    row = (
+        storage._connect()
+        .execute(
+            """SELECT * FROM paper_items
+            WHERE user_id = ? AND literature_paper_id = ?""",
+            (user_id, literature_paper_id),
+        )
+        .fetchone()
+    )
+    return paper_from_row(row) if row else None
+
+
 def create_paper(storage: SqliteStorage, user_id: int, payload: PaperCreate) -> PaperItem:
     cur = storage._connect().execute(
         """
@@ -249,8 +306,8 @@ def create_paper(storage: SqliteStorage, user_id: int, payload: PaperCreate) -> 
             user_id, title, authors_json, abstract, status, year, venue, doi, url,
             pdf_path, zotero_key, zotero_library_id, zotero_attachment_key,
             zotero_library_type, zotero_version, citation_count, tags_json,
-            zotero_collections_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            zotero_collections_json, folders_json, literature_paper_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             user_id,
@@ -271,6 +328,8 @@ def create_paper(storage: SqliteStorage, user_id: int, payload: PaperCreate) -> 
             payload.citation_count,
             dumps_json(_tags(payload.tags)),
             dumps_json([row.model_dump() for row in payload.zotero_collections]),
+            dumps_json([row.model_dump() for row in payload.folders]),
+            (payload.literature_paper_id or "").strip() or None,
         ),
     )
     storage._connect().commit()
@@ -293,6 +352,7 @@ def update_paper(
 
     authors = choose("authors", existing.authors) or []
     tags = _tags(choose("tags", existing.tags) or [])
+    folders = choose("folders", existing.folders) or []
     zotero_collections = choose("zotero_collections", existing.zotero_collections) or []
     values = {
         "title": choose("title", existing.title),
@@ -312,6 +372,9 @@ def update_paper(
         "zotero_attachment_key": choose("zotero_attachment_key", existing.zotero_attachment_key),
         "zotero_library_type": choose("zotero_library_type", existing.zotero_library_type),
         "zotero_version": choose("zotero_version", existing.zotero_version),
+        "literature_paper_id": choose(
+            "literature_paper_id", existing.literature_paper_id
+        ),
     }
     for key in (
         "title",
@@ -326,6 +389,7 @@ def update_paper(
         "zotero_library_id",
         "zotero_attachment_key",
         "zotero_library_type",
+        "literature_paper_id",
     ):
         if isinstance(values[key], str):
             values[key] = values[key].strip() or None
@@ -338,6 +402,7 @@ def update_paper(
             user_note_html = ?, importance = ?, theme_slug = ?, tags_json = ?,
             zotero_key = ?, zotero_library_id = ?, zotero_attachment_key = ?,
             zotero_library_type = ?, zotero_version = ?, zotero_collections_json = ?,
+            folders_json = ?, literature_paper_id = ?,
             updated_at = datetime('now')
         WHERE user_id = ? AND id = ?
         """,
@@ -362,12 +427,53 @@ def update_paper(
             values["zotero_library_type"],
             values["zotero_version"],
             dumps_json([row.model_dump() for row in zotero_collections]),
+            dumps_json([row.model_dump() for row in folders]),
+            values["literature_paper_id"],
             user_id,
             item_id,
         ),
     )
     conn.commit()
     return get_paper(storage, user_id, item_id)
+
+
+def bulk_update_paper_status(
+    storage: SqliteStorage,
+    user_id: int,
+    item_ids: list[int],
+    status: str,
+) -> list[PaperItem]:
+    """Update a bounded selection of shelf rows in one transaction."""
+
+    if status not in {"to_read", "reading", "read", "dismissed"}:
+        raise ValueError("invalid paper status")
+    unique_ids = list(dict.fromkeys(int(value) for value in item_ids))
+    if not unique_ids:
+        return []
+    if len(unique_ids) > 500:
+        raise ValueError("at most 500 papers can be updated at once")
+    placeholders = ",".join("?" for _value in unique_ids)
+    conn = storage._connect()
+    found = conn.execute(
+        f"SELECT id FROM paper_items WHERE user_id=? AND id IN ({placeholders})",
+        (user_id, *unique_ids),
+    ).fetchall()
+    if len(found) != len(unique_ids):
+        found_ids = {int(row["id"]) for row in found}
+        missing = [str(value) for value in unique_ids if value not in found_ids]
+        raise LookupError("paper not found: " + ", ".join(missing))
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        conn.execute(
+            f"""UPDATE paper_items SET status=?,updated_at=datetime('now')
+            WHERE user_id=? AND id IN ({placeholders})""",
+            (status, user_id, *unique_ids),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return [item for item_id in unique_ids if (item := get_paper(storage, user_id, item_id))]
 
 
 def delete_paper(storage: SqliteStorage, user_id: int, item_id: int) -> bool:

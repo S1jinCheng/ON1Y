@@ -3814,10 +3814,12 @@ def run_server(*, host: str | None = None, port: int | None = None) -> None:
     import uvicorn
 
     from on1y.books.folder_sync import start_folder_sync_loop
-    from on1y.papers.local_sync import start_paper_folder_sync_loop
     from on1y.digest.evening_auto import start_evening_digest_loop
     from on1y.hotlist.economist_auto import start_economist_auto_loop
     from on1y.obsidian.auto_sync import start_obsidian_sync_loop
+    from on1y.papers.literature import start_literature_feedback_loop
+    from on1y.papers.local_sync import start_paper_folder_sync_loop
+    from on1y.papers.translation import start_literature_translation_loop
     from on1y.subscriptions.auto_sync import start_auto_sync_loop
     from on1y.subscriptions.collections_auto_sync import start_collections_sync_loop
     from on1y.telegram.auto_sync import start_telegram_sync_loop
@@ -3826,6 +3828,8 @@ def run_server(*, host: str | None = None, port: int | None = None) -> None:
     settings.ensure_data_dir()
     get_storage().close()
     start_paper_folder_sync_loop()
+    start_literature_feedback_loop()
+    start_literature_translation_loop()
     start_auto_sync_loop()
     start_folder_sync_loop()
     start_collections_sync_loop()

@@ -65,6 +65,9 @@ import {
   saveBookSources,
   scanBookFolder,
   fetchPaperSettings,
+  fetchLiteratureConfig,
+  initializeLiteratureVault,
+  saveLiteratureConfig,
   savePaperSettings,
   scanPaperFolder,
   syncZoteroPapers,
@@ -2152,15 +2155,18 @@ function SubscriptionsTab(props: {
 }
 
 function AiTab(props: { locale: Locale; onMessage?: (message: string) => void }): JSX.Element {
-  const { locale } = props;
+  const { locale, onMessage } = props;
   const [view, setView] = useState<LlmSettingsView | null>(null);
   const [baseUrl, setBaseUrl] = useState("");
   const [model, setModel] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [clearing, setClearing] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; text: string } | null>(null);
+  const onMessageRef = useRef(onMessage);
+  onMessageRef.current = onMessage;
 
   useEffect(() => {
     let cancelled = false;
@@ -2174,7 +2180,7 @@ function AiTab(props: { locale: Locale; onMessage?: (message: string) => void })
         setBaseUrl(data.base_url);
         setModel(data.model);
       } catch (err) {
-        props.onMessage?.(err instanceof Error ? err.message : String(err));
+        onMessageRef.current?.(err instanceof Error ? err.message : String(err));
       } finally {
         if (!cancelled) {
           setLoading(false);
@@ -2184,17 +2190,19 @@ function AiTab(props: { locale: Locale; onMessage?: (message: string) => void })
     return () => {
       cancelled = true;
     };
-  }, [props]);
+  }, []);
 
   async function save(): Promise<void> {
     setSaving(true);
     try {
       const data = await saveLlmSettings({ base_url: baseUrl.trim(), model: model.trim(), api_key: apiKey.trim() || undefined });
       setView(data);
+      setBaseUrl(data.base_url);
+      setModel(data.model);
       setApiKey("");
-      props.onMessage?.(L(locale, "AI 设置已保存", "AI settings saved"));
+      onMessageRef.current?.(L(locale, "AI 设置已保存", "AI settings saved"));
     } catch (err) {
-      props.onMessage?.(err instanceof Error ? err.message : String(err));
+      onMessageRef.current?.(err instanceof Error ? err.message : String(err));
     } finally {
       setSaving(false);
     }
@@ -2204,9 +2212,11 @@ function AiTab(props: { locale: Locale; onMessage?: (message: string) => void })
     setTesting(true);
     setTestResult(null);
     try {
-      const result = await testLlmSettings(
-        apiKey.trim() ? { base_url: baseUrl.trim(), model: model.trim(), api_key: apiKey.trim() } : undefined
-      );
+      const result = await testLlmSettings({
+        base_url: baseUrl.trim(),
+        model: model.trim(),
+        api_key: apiKey.trim() || undefined
+      });
       setTestResult({
         ok: result.ok,
         text: result.ok ? `${result.model} · ${result.reply_preview ?? "ok"}` : result.error ?? "failed"
@@ -2215,6 +2225,30 @@ function AiTab(props: { locale: Locale; onMessage?: (message: string) => void })
       setTestResult({ ok: false, text: err instanceof Error ? err.message : String(err) });
     } finally {
       setTesting(false);
+    }
+  }
+
+  async function clearApiKey(): Promise<void> {
+    if (!window.confirm(L(locale, "确定清除当前 API Key？", "Clear the current API key?"))) {
+      return;
+    }
+    setClearing(true);
+    try {
+      const data = await saveLlmSettings({
+        base_url: baseUrl.trim(),
+        model: model.trim(),
+        clear_api_key: true
+      });
+      setView(data);
+      setBaseUrl(data.base_url);
+      setModel(data.model);
+      setApiKey("");
+      setTestResult(null);
+      onMessageRef.current?.(L(locale, "API Key 已清除", "API key cleared"));
+    } catch (err) {
+      onMessageRef.current?.(err instanceof Error ? err.message : String(err));
+    } finally {
+      setClearing(false);
     }
   }
 
@@ -2266,13 +2300,28 @@ function AiTab(props: { locale: Locale; onMessage?: (message: string) => void })
         </div>
       ) : null}
 
-      <div className="flex justify-end gap-2">
-        <button type="button" className={ghostBtn} disabled={testing} onClick={() => void test()}>
-          {testing ? L(locale, "测试中…", "Testing…") : L(locale, "测试连接", "Test")}
-        </button>
-        <button type="button" className={primaryBtn} disabled={saving} onClick={() => void save()}>
-          {saving ? L(locale, "保存中…", "Saving…") : L(locale, "保存", "Save")}
-        </button>
+      <div className="flex items-center justify-between gap-2">
+        <div>
+          {view?.api_key_set ? (
+            <button
+              type="button"
+              className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs text-red-500 transition hover:bg-red-500/10 disabled:opacity-50"
+              disabled={clearing || saving || testing}
+              onClick={() => void clearApiKey()}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              {clearing ? L(locale, "清除中…", "Clearing…") : L(locale, "清除 Key", "Clear key")}
+            </button>
+          ) : null}
+        </div>
+        <div className="flex gap-2">
+          <button type="button" className={ghostBtn} disabled={testing || clearing} onClick={() => void test()}>
+            {testing ? L(locale, "测试中…", "Testing…") : L(locale, "测试连接", "Test")}
+          </button>
+          <button type="button" className={primaryBtn} disabled={saving || clearing} onClick={() => void save()}>
+            {saving ? L(locale, "保存中…", "Saving…") : L(locale, "保存", "Save")}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -2818,9 +2867,12 @@ function BooksTab(props: { locale: Locale; onMessage?: (message: string) => void
 function PapersTab(props: { locale: Locale; onMessage?: (message: string) => void }): JSX.Element {
   const { locale, onMessage } = props;
   const [settings, setSettings] = useState<PaperSettings | null>(null);
+  const [dailyTarget, setDailyTarget] = useState(20);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [browsing, setBrowsing] = useState(false);
+  const [browsingVault, setBrowsingVault] = useState(false);
+  const [initializingVault, setInitializingVault] = useState(false);
   const [browsingApplication, setBrowsingApplication] = useState(false);
   const [running, setRunning] = useState<"folder" | "zotero" | null>(null);
   const onMessageRef = useRef(onMessage);
@@ -2841,8 +2893,45 @@ function PapersTab(props: { locale: Locale; onMessage?: (message: string) => voi
     };
   }, []);
 
+  useEffect(() => {
+    void fetchLiteratureConfig()
+      .then((value) => setDailyTarget(value.daily_target))
+      .catch(() => undefined);
+  }, []);
+
   function patch(value: Partial<PaperSettings>): void {
     setSettings((current) => (current ? { ...current, ...value } : current));
+  }
+
+  async function browseVault(): Promise<void> {
+    setBrowsingVault(true);
+    try {
+      const picked = await pickFolder();
+      if (picked) patch({ literature_vault_path: picked });
+    } catch (error) {
+      onMessage?.(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBrowsingVault(false);
+    }
+  }
+
+  async function initializeVault(): Promise<void> {
+    if (!settings) return;
+    setInitializingVault(true);
+    try {
+      const saved = await savePaperSettings(settings);
+      setSettings(saved);
+      const result = await initializeLiteratureVault();
+      const literatureConfig = await saveLiteratureConfig(dailyTarget);
+      setDailyTarget(literatureConfig.daily_target);
+      const refreshed = await fetchPaperSettings();
+      setSettings(refreshed);
+      onMessage?.(L(locale, `Literature Vault 已初始化：${result.path}`, `Literature Vault initialized: ${result.path}`));
+    } catch (error) {
+      onMessage?.(error instanceof Error ? error.message : String(error));
+    } finally {
+      setInitializingVault(false);
+    }
   }
 
   async function browse(): Promise<void> {
@@ -2874,6 +2963,8 @@ function PapersTab(props: { locale: Locale; onMessage?: (message: string) => voi
     setSaving(true);
     try {
       const saved = await savePaperSettings(settings);
+      const literatureConfig = await saveLiteratureConfig(dailyTarget);
+      setDailyTarget(literatureConfig.daily_target);
       setSettings(saved);
       window.dispatchEvent(new CustomEvent("on1y-paper-settings-changed", { detail: saved }));
       onMessage?.(L(locale, "Paper 设置已保存", "Paper settings saved"));
@@ -2919,24 +3010,160 @@ function PapersTab(props: { locale: Locale; onMessage?: (message: string) => voi
     <div className="space-y-7">
       <section className="space-y-4">
         <div>
-          <h3 className="text-sm font-semibold text-foreground">{L(locale, "AI 中文速览", "AI Chinese brief")}</h3>
+          <h3 className="text-sm font-semibold text-foreground">Literature Vault</h3>
           <p className="mt-1 text-xs leading-relaxed text-muted">
-            {L(locale, "选择速览在打开论文时自动生成，还是由你手动触发。", "Choose whether a brief is generated when a paper is opened or only on demand.")}
+            {L(locale, "论文批次、PDF 和 Markdown Notes 的唯一真实数据源。默认位于 E:\\Literature。", "The canonical location for batches, PDFs, and Markdown notes. Defaults to E:\\Literature.")}
           </p>
         </div>
-        <SegmentedControl
-          value={settings.ai_summary_mode}
-          options={[
-            { value: "manual", label: L(locale, "手动生成", "Manual") },
-            { value: "auto", label: L(locale, "自动生成", "Automatic") }
-          ]}
-          onChange={(value) => patch({ ai_summary_mode: value })}
+        <label className="block">
+          <FieldLabel>{L(locale, "Vault 文件夹", "Vault folder")}</FieldLabel>
+          <div className="flex gap-2">
+            <input className={`${inputClass} min-w-0 flex-1`} value={settings.literature_vault_path}
+              onChange={(event) => patch({ literature_vault_path: event.target.value })} />
+            <button type="button" className={`inline-flex shrink-0 items-center gap-1.5 ${ghostBtn}`}
+              disabled={browsingVault} onClick={() => void browseVault()}>
+              {browsingVault ? <Loader2 className="h-4 w-4 animate-spin" /> : <FolderOpen className="h-4 w-4" />}
+              {L(locale, "选择...", "Choose...")}
+            </button>
+          </div>
+          <p className="mt-1.5 break-all text-[11px] text-muted">
+            {settings.literature_vault?.path ?? settings.literature_vault_path}
+          </p>
+        </label>
+        <label className="block">
+          <FieldLabel>{L(locale, "每日阅读目标", "Daily reading target")}</FieldLabel>
+          <input type="number" min={1} max={100} className={inputClass} value={dailyTarget}
+            onChange={(event) => setDailyTarget(Math.max(1, Math.min(100, Number(event.target.value) || 1)))} />
+          <p className="mt-1.5 text-[11px] text-muted">
+            {L(locale, "结转论文会占用当天名额；当前默认 20 篇。", "Carryovers count toward this target; the default is 20.")}
+          </p>
+        </label>
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-xs text-muted">
+            {settings.literature_vault?.initialized
+              ? L(locale, "Vault 已初始化", "Vault initialized")
+              : L(locale, "尚未初始化", "Not initialized")}
+          </span>
+          <button type="button" className={ghostBtn} disabled={initializingVault}
+            onClick={() => void initializeVault()}>
+            {initializingVault ? L(locale, "初始化中...", "Initializing...") : L(locale, "保存并初始化", "Save and initialize")}
+          </button>
+        </div>
+      </section>
+
+      <section className="space-y-4 border-t border-border pt-6">
+        <div>
+          <h3 className="text-sm font-semibold text-foreground">{L(locale, "双语 PDF", "Bilingual PDFs")}</h3>
+          <p className="mt-1 text-xs leading-relaxed text-muted">
+            {L(locale,
+              "BabelDOC 在独立本地进程中保留论文排版；翻译可复用 AI 设置中的 API，也可单独使用 DeepL。生成后的 PDF 永不覆盖。",
+              "BabelDOC preserves paper layout in an isolated local process. Reuse the configured AI API or use DeepL; generated PDFs are never overwritten.")}
+          </p>
+        </div>
+        <div className={`rounded-lg border px-3 py-2 text-xs ${settings.translation_worker?.available
+          ? "border-emerald-500/30 bg-emerald-500/5 text-emerald-700"
+          : "border-amber-500/30 bg-amber-500/5 text-amber-700"}`}>
+          <div className="font-medium">
+            {settings.translation_worker?.available
+              ? L(locale, "BabelDOC worker 已就绪", "BabelDOC worker ready")
+              : L(locale, "BabelDOC worker 尚未安装", "BabelDOC worker not installed")}
+          </div>
+          <div className="mt-1 break-all opacity-80">
+            {settings.translation_worker?.executable ?? settings.translation_worker?.install_command}
+          </div>
+          <div className="mt-1 opacity-70">BabelDOC {settings.translation_worker?.version ?? "0.6.4"} · AGPL-3.0 · subprocess</div>
+        </div>
+        <ToggleRow
+          label={L(locale, "启用双语 PDF", "Enable bilingual PDFs")}
+          description={L(locale, "开启后，新发布批次会在后台自动进入翻译队列。关闭时仍可在批次上手动触发。",
+            "Newly published batches are queued in the background. When disabled, a batch can still be started manually.")}
+          checked={settings.translation_enabled}
+          onChange={(checked) => patch({ translation_enabled: checked })}
         />
-        <p className="text-xs leading-relaxed text-muted">
-          {settings.ai_summary_mode === "auto"
-            ? L(locale, "首次打开带本地 PDF、尚无速览的论文时自动生成；不会重复生成，避免额外消耗。", "Generate once when opening a paper that has a local PDF and no brief. Existing briefs are not regenerated automatically.")
-            : L(locale, "在 Paper 第三栏点击“生成速览”后才会调用 AI。", "AI is called only when you click Generate brief in the Paper detail column.")}
-        </p>
+        <div>
+          <FieldLabel>{L(locale, "翻译服务", "Translation provider")}</FieldLabel>
+          <SegmentedControl
+            value={settings.translation_provider}
+            options={[
+              { value: "on1y_ai", label: L(locale, "On1y AI 设置", "On1y AI settings") },
+              { value: "deepl", label: "DeepL" }
+            ]}
+            onChange={(value) => patch({ translation_provider: value })}
+          />
+        </div>
+        {settings.translation_provider === "on1y_ai" ? (
+          <label className="block">
+            <FieldLabel>{L(locale, "模型覆盖（可选）", "Model override (optional)")}</FieldLabel>
+            <input className={inputClass} value={settings.translation_model_override ?? ""}
+              onChange={(event) => patch({ translation_model_override: event.target.value || null })}
+              placeholder={L(locale, "留空即使用“AI”页当前模型，例如 qwen-flash", "Use the current AI model, e.g. qwen-flash")} />
+            <p className="mt-1.5 text-[11px] text-muted">
+              {L(locale, "Base URL 与 API Key 始终从当前用户的 AI 设置读取，不会复制到命令行。",
+                "The Base URL and API key come from this user's AI settings and are never copied to the command line.")}
+            </p>
+          </label>
+        ) : (
+          <div className="space-y-3">
+            <label className="block">
+              <FieldLabel>DeepL API Key</FieldLabel>
+              <input type="password" className={inputClass} value={settings.translation_api_key ?? ""}
+                onChange={(event) => patch({ translation_api_key: event.target.value })}
+                placeholder={settings.translation_api_key_set
+                  ? L(locale, `已设置 ${settings.translation_api_key_preview ?? ""}；留空保持不变`, `Configured ${settings.translation_api_key_preview ?? ""}; leave blank to keep`)
+                  : "DeepL-Auth-Key"} />
+            </label>
+            <div>
+              <FieldLabel>{L(locale, "DeepL 套餐", "DeepL plan")}</FieldLabel>
+              <SegmentedControl
+                value={settings.translation_deepl_plan}
+                options={[{ value: "free", label: "API Free" }, { value: "pro", label: "API Pro" }]}
+                onChange={(value) => patch({ translation_deepl_plan: value })}
+              />
+            </div>
+          </div>
+        )}
+        <div className="grid grid-cols-2 gap-3">
+          <label>
+            <FieldLabel>{L(locale, "原文语言", "Source language")}</FieldLabel>
+            <input className={inputClass} value={settings.translation_source_lang}
+              onChange={(event) => patch({ translation_source_lang: event.target.value })} placeholder="en" />
+          </label>
+          <label>
+            <FieldLabel>{L(locale, "目标语言", "Target language")}</FieldLabel>
+            <input className={inputClass} value={settings.translation_target_lang}
+              onChange={(event) => patch({ translation_target_lang: event.target.value })} placeholder="zh-CN" />
+          </label>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <label>
+            <FieldLabel>{L(locale, "每秒请求数", "Requests per second")}</FieldLabel>
+            <input type="number" min={1} max={20} className={inputClass} value={settings.translation_qps}
+              onChange={(event) => patch({ translation_qps: Math.max(1, Math.min(20, Number(event.target.value) || 1)) })} />
+          </label>
+          <label>
+            <FieldLabel>{L(locale, "BabelDOC 路径（可选）", "BabelDOC path (optional)")}</FieldLabel>
+            <input className={inputClass} value={settings.translation_babeldoc_executable ?? ""}
+              onChange={(event) => patch({ translation_babeldoc_executable: event.target.value || null })}
+              placeholder="babeldoc" />
+          </label>
+        </div>
+        <label className="block">
+          <FieldLabel>{L(locale, "术语表 CSV（可选，仅 AI）", "Glossary CSV (optional, AI only)")}</FieldLabel>
+          <input className={inputClass} value={settings.translation_glossary_path ?? ""}
+            onChange={(event) => patch({ translation_glossary_path: event.target.value || null })} />
+        </label>
+        <ToggleRow
+          label={L(locale, "发布后自动入队", "Queue after publishing")}
+          description={L(locale, "只在“启用双语 PDF”时生效。", "Used only when bilingual PDFs are enabled.")}
+          checked={settings.translation_auto_enqueue}
+          onChange={(checked) => patch({ translation_auto_enqueue: checked })}
+        />
+        <ToggleRow
+          label={L(locale, "扫描版 PDF OCR 兼容模式", "OCR workaround for scanned PDFs")}
+          description={L(locale, "会明显变慢，仅在扫描论文较多时开启。", "Slower; enable only when scanned papers are common.")}
+          checked={settings.translation_ocr_workaround}
+          onChange={(checked) => patch({ translation_ocr_workaround: checked })}
+        />
       </section>
 
       <section className="space-y-4">
@@ -3098,7 +3325,7 @@ function PapersTab(props: { locale: Locale; onMessage?: (message: string) => voi
       <section className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-4 text-xs leading-relaxed text-emerald-900">
         <p className="font-medium">{L(locale, "双重同步不会创建两篇相同 Paper", "Folder + Zotero sync will not create duplicate papers")}</p>
         <p className="mt-1 text-emerald-800/80">
-          {L(locale, "系统依次按 Zotero ID、DOI、PDF 路径、标题与年份/作者识别同一论文。匹配后只合并来源信息，并保留你的阅读状态、笔记、星级、主题和本地标签。", "Papers are matched by Zotero ID, DOI, PDF path, then title with year/author checks. Source metadata is merged while your reading status, notes, rating, theme, and local tags are preserved.")}
+          {L(locale, "系统依次按 Zotero ID、DOI、PDF 路径、标题与年份/作者识别同一论文。匹配后只合并来源信息，并保留你的阅读状态、星级、主题和本地标签。", "Papers are matched by Zotero ID, DOI, PDF path, then title with year/author checks. Source metadata is merged while your reading status, rating, theme, and local tags are preserved.")}
         </p>
       </section>
 

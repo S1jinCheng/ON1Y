@@ -7,7 +7,7 @@ from urllib.parse import quote_plus
 
 from pydantic import BaseModel, Field, field_validator
 
-PaperStatus = Literal["to_read", "reading", "read"]
+PaperStatus = Literal["to_read", "reading", "read", "dismissed"]
 
 
 class PaperAiSummary(BaseModel):
@@ -34,6 +34,19 @@ class PaperCollection(BaseModel):
     name: str = Field(min_length=1, max_length=500)
     path: str = Field(min_length=1, max_length=2000)
     parent_key: str | None = Field(default=None, max_length=100)
+
+
+class PaperFolder(BaseModel):
+    """A local filesystem folder used to classify a paper.
+
+    This is deliberately separate from ``PaperCollection`` so Vault navigation
+    never depends on Zotero collection metadata.
+    """
+
+    key: str = Field(min_length=1, max_length=2000)
+    name: str = Field(min_length=1, max_length=500)
+    path: str = Field(min_length=1, max_length=2000)
+    parent_key: str | None = Field(default=None, max_length=2000)
 
 
 class PaperAuthor(BaseModel):
@@ -72,6 +85,8 @@ class PaperItemBase(BaseModel):
 
 
 class PaperCreate(PaperItemBase):
+    folders: list[PaperFolder] = Field(default_factory=list)
+    literature_paper_id: str | None = Field(default=None, max_length=100)
     zotero_collections: list[PaperCollection] = Field(default_factory=list)
     zotero_key: str | None = Field(default=None, max_length=100)
     zotero_library_id: str | None = Field(default=None, max_length=100)
@@ -95,6 +110,8 @@ class PaperUpdate(BaseModel):
     importance: int | None = Field(default=None, ge=1, le=5)
     theme_slug: str | None = Field(default=None, max_length=120)
     tags: list[str] | None = None
+    folders: list[PaperFolder] | None = None
+    literature_paper_id: str | None = Field(default=None, max_length=100)
     zotero_key: str | None = Field(default=None, max_length=100)
     zotero_library_id: str | None = Field(default=None, max_length=100)
     zotero_attachment_key: str | None = Field(default=None, max_length=100)
@@ -111,6 +128,8 @@ class PaperItem(PaperItemBase):
     zotero_attachment_key: str | None = None
     zotero_library_type: Literal["users", "groups"] | None = None
     zotero_version: int | None = None
+    folders: list[PaperFolder] = Field(default_factory=list)
+    literature_paper_id: str | None = None
     zotero_collections: list[PaperCollection] = Field(default_factory=list)
     user_note_html: str | None = None
     importance: int | None = None
@@ -148,6 +167,13 @@ def paper_from_row(row: Any) -> PaperItem:
         )
         if isinstance(value, dict)
     ]
+    folders = [
+        PaperFolder.model_validate(value)
+        for value in (
+            loads_json_list(row["folders_json"] or "[]") if "folders_json" in keys else []
+        )
+        if isinstance(value, dict)
+    ]
     summary_value = loads_meta(row["ai_summary_json"]) if "ai_summary_json" in keys else {}
     figures = [
         PaperFigure.model_validate(value)
@@ -177,6 +203,12 @@ def paper_from_row(row: Any) -> PaperItem:
             str(row["zotero_library_type"]) if row["zotero_library_type"] else None
         ),
         zotero_version=int(row["zotero_version"]) if row["zotero_version"] is not None else None,
+        folders=folders,
+        literature_paper_id=(
+            str(row["literature_paper_id"])
+            if "literature_paper_id" in keys and row["literature_paper_id"]
+            else None
+        ),
         zotero_collections=collections,
         citation_count=int(row["citation_count"]) if row["citation_count"] is not None else None,
         user_note_html=str(row["user_note_html"]) if row["user_note_html"] else None,
@@ -210,6 +242,14 @@ def paper_from_row(row: Any) -> PaperItem:
 
 def paper_dump(item: PaperItem) -> dict[str, Any]:
     payload = item.model_dump()
+    for legacy_key in (
+        "ai_summary",
+        "ai_summary_status",
+        "ai_summary_error",
+        "ai_summary_model",
+        "ai_summary_updated_at",
+    ):
+        payload.pop(legacy_key, None)
     payload["authors"] = [
         {**author.model_dump(), "google_scholar_url": author.google_scholar_url}
         for author in item.authors

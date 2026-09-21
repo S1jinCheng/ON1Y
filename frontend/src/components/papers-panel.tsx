@@ -10,7 +10,6 @@ import {
   Maximize2,
   Plus,
   Search,
-  Sparkles,
   Star,
   Trash2,
   Upload,
@@ -19,10 +18,12 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ImportanceStars } from "@/components/importance-stars";
+import { LiteratureBatches } from "@/components/literature-batches";
 import { RelatedItemsSection } from "@/components/related-items-section";
 import { RichNoteEditor } from "@/components/rich-note-editor";
 import { TagChipEditor } from "@/components/tag-chip-editor";
 import {
+  bulkUpdatePaperStatus,
   createPaper,
   deletePaper,
   extractPaperFigures,
@@ -33,14 +34,12 @@ import {
   openLocalPath,
   paperFigureUrl,
   postRelatedLessRelevant,
-  summarizePaper,
-  syncZoteroPapers,
   updatePaper,
   uploadPaperFile
 } from "@/lib/api";
 import { openZoteroPdf } from "@/lib/open-external";
 import { openPdfWithApplication } from "@/lib/pdf-application";
-import type { PaperCollection, PaperFigure, PaperItem, PaperSettings, PaperStatus } from "@/lib/paper-types";
+import type { PaperFigure, PaperFolder, PaperItem, PaperSettings, PaperStatus } from "@/lib/paper-types";
 import type { KnowledgeItem, Locale } from "@/lib/types";
 
 function L(locale: Locale, zh: string, en: string): string {
@@ -50,10 +49,11 @@ function L(locale: Locale, zh: string, en: string): string {
 function statusLabel(locale: Locale, status: PaperStatus): string {
   if (status === "to_read") return L(locale, "待读", "To read");
   if (status === "reading") return L(locale, "在读", "Reading");
-  return L(locale, "已读", "Read");
+  if (status === "read") return L(locale, "已读", "Read");
+  return L(locale, "已移出", "Dismissed");
 }
 
-const STATUSES: PaperStatus[] = ["to_read", "reading", "read"];
+const STATUSES: PaperStatus[] = ["to_read", "reading", "read", "dismissed"];
 
 async function openPaperDocument(
   item: PaperItem,
@@ -139,10 +139,12 @@ export function PapersListColumn(props: ListProps): JSX.Element {
   const [items, setItems] = useState<PaperItem[]>([]);
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<PaperStatus | "all">("all");
-  const [collectionKey, setCollectionKey] = useState("all");
-  const [collections, setCollections] = useState<PaperCollection[]>([]);
+  const [folderKey, setFolderKey] = useState("all");
+  const [folders, setFolders] = useState<PaperFolder[]>([]);
   const [loading, setLoading] = useState(false);
-  const zoteroSyncStarted = useRef(false);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const lastSelectedIndex = useRef<number | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -150,16 +152,16 @@ export function PapersListColumn(props: ListProps): JSX.Element {
       const response = await listPapers({
         status: status === "all" ? undefined : status,
         query: query.trim() || undefined,
-        collectionKey: collectionKey === "all" ? undefined : collectionKey
+        folderKey: folderKey === "all" ? undefined : folderKey
       });
       setItems(response.items);
-      setCollections(response.collections ?? []);
+      setFolders(response.folders ?? []);
     } catch (error) {
       onMessage(error instanceof Error ? error.message : "load papers failed");
     } finally {
       setLoading(false);
     }
-  }, [collectionKey, onMessage, query, status]);
+  }, [folderKey, onMessage, query, status]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void refresh(), query ? 250 : 0);
@@ -167,15 +169,48 @@ export function PapersListColumn(props: ListProps): JSX.Element {
   }, [query, refresh, refreshKey]);
 
   useEffect(() => {
-    if (zoteroSyncStarted.current) return;
-    zoteroSyncStarted.current = true;
-    void syncZoteroPapers()
-      .then((result) => { if (result.enabled) void refresh(); })
-      .catch(() => undefined);
-  }, [refresh]);
+    setSelected(new Set());
+    lastSelectedIndex.current = null;
+  }, [folderKey, query, status]);
+
+  function toggleSelection(index: number, checked: boolean, shiftKey: boolean): void {
+    setSelected((current) => {
+      const next = new Set(current);
+      if (shiftKey && lastSelectedIndex.current !== null) {
+        const start = Math.min(lastSelectedIndex.current, index);
+        const end = Math.max(lastSelectedIndex.current, index);
+        for (let offset = start; offset <= end; offset += 1) {
+          const item = items[offset];
+          if (item) checked ? next.add(item.id) : next.delete(item.id);
+        }
+      } else {
+        const item = items[index];
+        if (item) checked ? next.add(item.id) : next.delete(item.id);
+      }
+      return next;
+    });
+    lastSelectedIndex.current = index;
+  }
+
+  async function applyBulkStatus(nextStatus: PaperStatus): Promise<void> {
+    if (!selected.size) return;
+    setBulkBusy(true);
+    try {
+      const result = await bulkUpdatePaperStatus({ item_ids: [...selected], status: nextStatus });
+      onMessage(L(locale, `已更新 ${result.updated} 篇论文`, `${result.updated} papers updated`));
+      setSelected(new Set());
+      await refresh();
+      onChanged();
+    } catch (error) {
+      onMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBulkBusy(false);
+    }
+  }
 
   return (
     <div className="flex h-full min-h-0 flex-col">
+      <LiteratureBatches locale={locale} onMessage={onMessage} onPublished={() => { void refresh(); onChanged(); }} />
       <div className="shrink-0 space-y-2 border-b border-border pb-3">
         <div className="flex items-center gap-1.5">
           <button
@@ -199,37 +234,59 @@ export function PapersListColumn(props: ListProps): JSX.Element {
         <label className="flex items-center gap-2 rounded-md border border-border px-2 py-1.5">
           <FolderTree className="h-3.5 w-3.5 shrink-0 text-muted" />
           <select
-            value={collectionKey}
-            onChange={(event) => setCollectionKey(event.target.value)}
+            value={folderKey}
+            onChange={(event) => setFolderKey(event.target.value)}
             className="min-w-0 flex-1 bg-surface text-xs outline-none"
-            title={L(locale, "按 Zotero 分类筛选", "Filter by Zotero collection")}
+            title={L(locale, "按本地文件夹筛选", "Filter by local folder")}
           >
-            <option value="all">{L(locale, "全部 Zotero 分类", "All Zotero collections")}</option>
-            {collections.map((collection) => (
-              <option key={collection.key} value={collection.key}>
-                {collection.path} ({collection.paper_count ?? 0})
+            <option value="all">{L(locale, "全部文件夹", "All folders")}</option>
+            {folders.map((folder) => (
+              <option key={folder.key} value={folder.key}>
+                {folder.path} ({folder.paper_count ?? 0})
               </option>
             ))}
           </select>
         </label>
+        <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+          <label className="inline-flex cursor-pointer items-center gap-1.5">
+            <input type="checkbox" checked={Boolean(items.length) && items.every((item) => selected.has(item.id))}
+              onChange={(event) => setSelected(event.target.checked
+                ? new Set(items.map((item) => item.id)) : new Set())} />
+            {L(locale, "全选当前", "Select visible")}
+          </label>
+          {selected.size ? <>
+            <span className="text-muted">{L(locale, `已选 ${selected.size} 篇`, `${selected.size} selected`)}</span>
+            <button type="button" disabled={bulkBusy} onClick={() => void applyBulkStatus("read")}
+              className="rounded border border-border px-1.5 py-0.5 hover:bg-soft">{L(locale, "标为已读", "Mark read")}</button>
+            <button type="button" disabled={bulkBusy} onClick={() => void applyBulkStatus("to_read")}
+              className="rounded border border-border px-1.5 py-0.5 hover:bg-soft">{L(locale, "撤销已读", "Mark unread")}</button>
+            <button type="button" disabled={bulkBusy} onClick={() => void applyBulkStatus("dismissed")}
+              className="rounded border border-border px-1.5 py-0.5 hover:bg-soft">{L(locale, "移出队列", "Dismiss")}</button>
+          </> : null}
+        </div>
       </div>
 
 
       <div className="min-h-0 flex-1 space-y-2 overflow-y-auto pt-3">
         {loading && !items.length ? <div className="flex items-center gap-2 text-xs text-muted"><Loader2 className="h-4 w-4 animate-spin" />{L(locale, "加载中…", "Loading…")}</div> : null}
-        {items.map((item) => {
+        {items.map((item, index) => {
           const starred = (item.importance ?? 0) > 0;
           return (
             <div key={item.id} className={`group flex rounded-lg border ${activeId === item.id ? "border-foreground bg-soft" : "border-border bg-surface hover:bg-panel"}`}>
+              <label className="flex shrink-0 cursor-pointer items-start px-2 pt-3" title={L(locale, "选择论文；按住 Shift 可连续选择", "Select; hold Shift for a range")}>
+                <input type="checkbox" checked={selected.has(item.id)}
+                  onClick={(event) => event.stopPropagation()}
+                  onChange={(event) => toggleSelection(index, event.target.checked, (event.nativeEvent as MouseEvent).shiftKey)} />
+              </label>
               <button type="button" onClick={() => onSelect(item)} className="min-w-0 flex-1 p-3 text-left">
                 <p className="line-clamp-2 text-sm font-medium leading-snug">{item.title}</p>
                 <p className="mt-1 line-clamp-1 text-xs text-muted">{item.authors.map((author) => author.name).join(", ") || L(locale, "作者未知", "Unknown authors")}</p>
-                <div className="mt-2 flex flex-wrap gap-1 text-[10px] text-muted"><span className="rounded bg-soft px-1.5 py-0.5">{statusLabel(locale, item.status)}</span>{item.year ? <span className="rounded bg-soft px-1.5 py-0.5">{item.year}</span> : null}{item.zotero_key ? <span className="rounded bg-soft px-1.5 py-0.5">Zotero</span> : null}{item.pdf_path ? <span className="rounded bg-soft px-1.5 py-0.5">PDF</span> : null}{item.zotero_collections.slice(0, 2).map((collection) => <span key={collection.key} title={collection.path} className="max-w-full truncate rounded bg-violet-50 px-1.5 py-0.5 text-violet-700 dark:bg-violet-950/40 dark:text-violet-300">{collection.path}</span>)}{item.tags.slice(0, 3).map((tag) => <span key={tag} className="rounded bg-blue-50 px-1.5 py-0.5 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300">#{tag}</span>)}</div>
+                <div className="mt-2 flex flex-wrap gap-1 text-[10px] text-muted"><span className="rounded bg-soft px-1.5 py-0.5">{statusLabel(locale, item.status)}</span>{item.year ? <span className="rounded bg-soft px-1.5 py-0.5">{item.year}</span> : null}{item.pdf_path ? <span className="rounded bg-soft px-1.5 py-0.5">PDF</span> : null}{(item.folders ?? []).slice(-1).map((folder) => <span key={folder.key} title={folder.path} className="max-w-full truncate rounded bg-violet-50 px-1.5 py-0.5 text-violet-700 dark:bg-violet-950/40 dark:text-violet-300">{folder.path}</span>)}{item.tags.slice(0, 3).map((tag) => <span key={tag} className="rounded bg-blue-50 px-1.5 py-0.5 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300">#{tag}</span>)}</div>
               </button>
               <div className="flex w-9 shrink-0 flex-col items-center justify-center border-l border-border">
                 <button type="button" title={starred ? L(locale, "取消收藏", "Unfavorite") : L(locale, "收藏", "Favorite")} onClick={() => void updatePaper(item.id, { importance: starred ? null : 4 }).then(() => { void refresh(); onChanged(); })} className="p-2 text-muted hover:text-foreground"><Star className={`h-4 w-4 ${starred ? "fill-amber-400 text-amber-500" : ""}`} /></button>
                 {item.zotero_reader_url || item.pdf_path ? <button type="button" title={L(locale, "打开 PDF", "Open PDF")} onClick={() => void openPaperDocument(item, locale, onMessage)} className="p-2 text-muted hover:text-foreground"><FileText className="h-4 w-4" /></button> : null}
-                <button type="button" title={L(locale, "删除", "Delete")} onClick={() => void deletePaper(item.id).then(() => { setItems((rows) => rows.filter((row) => row.id !== item.id)); onRemoved(item.id); })} className="p-2 text-muted hover:text-red-500"><Trash2 className="h-4 w-4" /></button>
+                {!item.literature_paper_id ? <button type="button" title={L(locale, "删除", "Delete")} onClick={() => void deletePaper(item.id).then(() => { setItems((rows) => rows.filter((row) => row.id !== item.id)); onRemoved(item.id); })} className="p-2 text-muted hover:text-red-500"><Trash2 className="h-4 w-4" /></button> : null}
               </div>
             </div>
           );
@@ -263,10 +320,7 @@ export function PapersDetailColumn(props: DetailProps): JSX.Element {
   const [status, setStatus] = useState<PaperStatus>("to_read");
   const [file, setFile] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
-  const [summarizing, setSummarizing] = useState(false);
   const [extractingFigures, setExtractingFigures] = useState(false);
-  const [aiSummaryMode, setAiSummaryMode] = useState<"manual" | "auto">("manual");
-  const autoSummaryStarted = useRef(new Set<number>());
   const figureExtractionStarted = useRef(new Set<number>());
   const activeItemId = useRef<number | null>(item?.id ?? null);
   activeItemId.current = item?.id ?? null;
@@ -278,21 +332,6 @@ export function PapersDetailColumn(props: DetailProps): JSX.Element {
 
   useEffect(() => setTags(manualAdd ? [] : item?.tags ?? []), [manualAdd, item?.id, item?.tags]);
   useEffect(() => { void getTaxonomy(locale).then((value) => setTagSuggestions(value.tags.map((row) => row.name))).catch(() => undefined); }, [locale]);
-  useEffect(() => {
-    let cancelled = false;
-    void fetchPaperSettings()
-      .then((value) => { if (!cancelled) setAiSummaryMode(value.ai_summary_mode ?? "manual"); })
-      .catch(() => undefined);
-    const onSettingsChanged = (event: Event) => {
-      const value = (event as CustomEvent<PaperSettings>).detail;
-      if (value?.ai_summary_mode) setAiSummaryMode(value.ai_summary_mode);
-    };
-    window.addEventListener("on1y-paper-settings-changed", onSettingsChanged);
-    return () => {
-      cancelled = true;
-      window.removeEventListener("on1y-paper-settings-changed", onSettingsChanged);
-    };
-  }, []);
   const itemId = item?.id;
   const itemTagsKey = (item?.tags ?? []).join("\0");
   useEffect(() => {
@@ -311,24 +350,6 @@ export function PapersDetailColumn(props: DetailProps): JSX.Element {
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
   }, [previewFigure]);
-
-  useEffect(() => {
-    if (
-      aiSummaryMode !== "auto" || manualAdd || !itemId || !item?.pdf_path ||
-      item.ai_summary || item.ai_summary_status !== "idle" || summarizing ||
-      autoSummaryStarted.current.has(itemId)
-    ) return;
-    autoSummaryStarted.current.add(itemId);
-    setSummarizing(true);
-    void summarizePaper(itemId)
-      .then((saved) => {
-        if (activeItemId.current === saved.id) onSaved(saved);
-        onMessage(L(locale, "AI 中文速览已自动生成", "AI paper brief generated automatically"));
-      })
-      .catch((error) => onMessage(error instanceof Error ? error.message : "summary failed"))
-      .finally(() => setSummarizing(false));
-  }, [aiSummaryMode, itemId, item?.pdf_path, item?.ai_summary, item?.ai_summary_status, locale, manualAdd, onMessage, onSaved, summarizing]);
-
 
   useEffect(() => {
     if (
@@ -390,19 +411,6 @@ export function PapersDetailColumn(props: DetailProps): JSX.Element {
     try { onSaved(await updatePaper(item!.id, input)); } catch (error) { onMessage(error instanceof Error ? error.message : "update failed"); }
   }
 
-  async function generateSummary(): Promise<void> {
-    setSummarizing(true);
-    try {
-      const saved = await summarizePaper(item!.id);
-      onSaved(saved);
-      onMessage(L(locale, "AI 中文速览已生成", "AI paper brief generated"));
-    } catch (error) {
-      onMessage(error instanceof Error ? error.message : "summary failed");
-    } finally {
-      setSummarizing(false);
-    }
-  }
-
   function handleRelatedSelect(rawId: number): void {
     const row = related.find((value) => value.raw_id === rawId);
     if (!row) return;
@@ -416,27 +424,6 @@ export function PapersDetailColumn(props: DetailProps): JSX.Element {
       <div className="mt-3 flex gap-2"><select value={item.status} onChange={(e) => void patch({ status: e.target.value as PaperStatus })} className="rounded-md border border-border bg-surface px-2 py-1 text-xs">{STATUSES.map((value) => <option key={value} value={value}>{statusLabel(locale, value)}</option>)}</select>{item.zotero_reader_url || item.pdf_path ? <button type="button" onClick={() => void openPaperDocument(item, locale, onMessage)} className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs hover:bg-soft"><FileText className="h-3.5 w-3.5" />{L(locale, "打开 PDF", "Open PDF")}</button> : null}{item.url && !item.url.startsWith("file:") ? <a href={item.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs hover:bg-soft">{L(locale, "原文", "Source")}<ExternalLink className="h-3.5 w-3.5" /></a> : null}</div>
     </div>
     {item.abstract ? <section><h3 className="mb-2 text-xs font-medium uppercase tracking-wider text-muted">{L(locale, "摘要", "Abstract")}</h3><p className="whitespace-pre-wrap text-sm leading-relaxed text-muted">{item.abstract}</p></section> : null}
-    <section className="rounded-xl border border-blue-200 bg-blue-50/60 p-4 dark:border-blue-900 dark:bg-blue-950/20">
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <h3 className="flex items-center gap-2 text-sm font-semibold"><Sparkles className="h-4 w-4 text-blue-600" />{L(locale, "AI 中文速览", "AI Chinese brief")}</h3>
-        {aiSummaryMode === "manual" || item.ai_summary || item.ai_summary_status === "error" ? <button type="button" disabled={summarizing || !item.pdf_path} title={!item.pdf_path ? L(locale, "请先附加或同步本地 PDF", "Attach or sync a local PDF first") : undefined} onClick={() => void generateSummary()} className="inline-flex items-center gap-1.5 rounded-md border border-blue-200 bg-surface px-2.5 py-1.5 text-xs hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-blue-800 dark:hover:bg-blue-950">
-          {summarizing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-          {summarizing ? L(locale, "正在阅读论文…", "Reading paper…") : item.ai_summary ? L(locale, "重新生成", "Regenerate") : item.ai_summary_status === "error" ? L(locale, "重试", "Retry") : L(locale, "生成速览", "Generate brief")}
-        </button> : <span className="inline-flex items-center gap-1.5 rounded-full bg-blue-100 px-2.5 py-1 text-xs text-blue-700 dark:bg-blue-950 dark:text-blue-300">{summarizing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}{summarizing ? L(locale, "自动生成中…", "Generating automatically…") : L(locale, "自动模式", "Automatic")}</span>}
-      </div>
-      {item.ai_summary ? <div className="space-y-4 text-sm leading-relaxed">
-        <p className="font-medium text-foreground">{item.ai_summary.overview}</p>
-        <div className="grid gap-3 md:grid-cols-2">
-          {item.ai_summary.research_question ? <div className="rounded-lg bg-surface/80 p-3"><p className="mb-1 text-xs font-medium text-muted">{L(locale, "研究问题", "Research question")}</p><p>{item.ai_summary.research_question}</p></div> : null}
-          {item.ai_summary.method ? <div className="rounded-lg bg-surface/80 p-3"><p className="mb-1 text-xs font-medium text-muted">{L(locale, "方法", "Method")}</p><p>{item.ai_summary.method}</p></div> : null}
-        </div>
-        {item.ai_summary.key_findings.length ? <div><p className="mb-1 text-xs font-medium text-muted">{L(locale, "关键发现", "Key findings")}</p><ul className="list-disc space-y-1 pl-5">{item.ai_summary.key_findings.map((value, index) => <li key={index}>{value}</li>)}</ul></div> : null}
-        {item.ai_summary.effects.length ? <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-900 dark:bg-amber-950/20"><p className="mb-1 text-xs font-semibold text-amber-800 dark:text-amber-300">{L(locale, "效果 / 指标", "Effects / metrics")}</p><ul className="list-disc space-y-1 pl-5">{item.ai_summary.effects.map((value, index) => <li key={index}>{value}</li>)}</ul></div> : null}
-        {item.ai_summary.limitations.length ? <div><p className="mb-1 text-xs font-medium text-muted">{L(locale, "局限与边界", "Limitations")}</p><ul className="list-disc space-y-1 pl-5 text-muted">{item.ai_summary.limitations.map((value, index) => <li key={index}>{value}</li>)}</ul></div> : null}
-        <p className="text-[11px] text-muted">{item.ai_summary_model ? item.ai_summary_model + " · " : ""}{item.ai_summary_updated_at ?? ""}</p>
-      </div> : <p className="text-sm text-muted">{item.pdf_path ? aiSummaryMode === "auto" ? L(locale, "自动模式已开启，正在准备首次速览；生成过的论文不会重复调用 AI。", "Automatic mode is on. The first brief will be generated once; existing briefs are not regenerated.") : L(locale, "点击生成后，将从本地 PDF 提炼研究问题、方法、结果和效果指标。", "Generate a brief from the local PDF: question, method, findings, and metrics.") : L(locale, "请先附加 PDF，或在 Paper 设置中从 Zotero 下载 PDF。", "Attach a PDF or enable Zotero PDF downloads in Paper settings.")}</p>}
-      {item.ai_summary_status === "error" && item.ai_summary_error ? <p className="mt-3 rounded-md bg-red-50 p-2 text-xs text-red-700 dark:bg-red-950/30 dark:text-red-300">{item.ai_summary_error}</p> : null}
-    </section>
     {extractingFigures && !(item.figures ?? []).length ? <section className="rounded-xl border border-border bg-soft/50 p-4">
       <div className="flex items-center gap-2 text-sm text-muted"><Loader2 className="h-4 w-4 animate-spin" />{L(locale, "正在识别论文图表…", "Recognizing paper figures…")}</div>
     </section> : null}
@@ -480,7 +467,7 @@ export function PapersDetailColumn(props: DetailProps): JSX.Element {
       </div>
       <div className="min-h-0 flex-1 p-4 sm:p-6" onClick={(event) => event.stopPropagation()}><img src={paperFigureUrl(item.id, previewFigure.filename)} alt={previewFigure.caption || L(locale, "论文图表", "Paper figure")} className="h-full w-full object-contain" /></div>
     </div> : null}
-    {item.zotero_collections.length ? <section><h3 className="mb-2 text-xs font-medium uppercase tracking-wider text-muted">{L(locale, "Zotero 分类", "Zotero collections")}</h3><div className="flex flex-wrap gap-2">{item.zotero_collections.map((collection) => <span key={collection.key} className="inline-flex items-center gap-1.5 rounded-md bg-violet-50 px-2.5 py-1 text-xs text-violet-700 dark:bg-violet-950/40 dark:text-violet-300"><FolderTree className="h-3.5 w-3.5" />{collection.path}</span>)}</div></section> : null}
+    {(item.folders ?? []).length ? <section><h3 className="mb-2 text-xs font-medium uppercase tracking-wider text-muted">{L(locale, "本地文件夹", "Local folders")}</h3><div className="flex flex-wrap gap-2">{item.folders.map((folder) => <span key={folder.key} className="inline-flex items-center gap-1.5 rounded-md bg-violet-50 px-2.5 py-1 text-xs text-violet-700 dark:bg-violet-950/40 dark:text-violet-300"><FolderTree className="h-3.5 w-3.5" />{folder.path}</span>)}</div></section> : null}
     <section><h3 className="mb-2 text-xs font-medium uppercase tracking-wider text-muted">{L(locale, "标签", "Tags")}</h3><TagChipEditor tags={tags} suggestions={tagSuggestions} locale={locale} onChange={(next) => { setTags(next); void patch({ tags: next }); }} /></section>
     <section><h3 className="mb-2 text-xs font-medium uppercase tracking-wider text-muted">{L(locale, "阅读笔记", "Reading notes")}</h3><RichNoteEditor value={item.user_note_html ?? ""} placeholder={L(locale, "记录方法、结论、引用与想法…", "Methods, findings, quotes, and ideas…")} onSave={(html) => updatePaper(item.id, { user_note_html: html }).then((saved) => { onSaved(saved); })} /></section>
     <section className="border-t border-border pt-4">{related.length ? <RelatedItemsSection items={related} locale={locale} titleLabel={L(locale, "相关内容", "Related") } lessRelevantLabel={L(locale, "不太相关", "Less relevant")} onSelect={handleRelatedSelect} onLessRelevant={(rawId) => { if (item.raw_id != null) void postRelatedLessRelevant(item.raw_id, rawId).then(() => setRelated((rows) => rows.filter((row) => row.raw_id !== rawId))); }} /> : <p className="text-sm text-muted">{L(locale, "添加标签后可发现库内相关论文、文章与视频。", "Add tags to discover related papers, articles, and videos.")}</p>}</section>
