@@ -31,7 +31,7 @@ if (Test-Path $launchPrefsPath) {
     }
 }
 $openBrowser = -not $NoBrowser -and $prefOpenBrowser
-$windowStyle = if ($Quiet) { "Minimized" } else { "Normal" }
+$windowStyle = if ($Quiet) { "Hidden" } else { "Normal" }
 
 try {
     $backendUp = Test-PortListening -Port $backendPort
