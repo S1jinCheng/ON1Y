@@ -97,26 +97,27 @@ def test_list_subscribed_creators_includes_twitter_authors(
     user = UserStore(storage).create_user(username="bob", password="password123")
 
     with user_context(user.id):
-        storage.upsert_raw_item(
-            RawItemCreate(
-                url="https://x.com/i/web/status/1",
-                platform="twitter",
-                source=SourceType.MANUAL,
-                raw_title="Alice: hello",
-                body_text="hello",
-                content_type=ContentType.ARTICLE,
-                extract_status=ExtractStatus.OK,
-                source_meta={
-                    "author": "Alice",
-                    "author_url": "https://twitter.com/alice",
-                    "feed_label": "x-likes",
-                },
+        for index in range(4):
+            storage.upsert_raw_item(
+                RawItemCreate(
+                    url=f"https://x.com/i/web/status/{index + 1}",
+                    platform="twitter",
+                    source=SourceType.MANUAL,
+                    raw_title=f"Alice: hello {index + 1}",
+                    body_text="hello",
+                    content_type=ContentType.ARTICLE,
+                    extract_status=ExtractStatus.OK,
+                    source_meta={
+                        "author": "Alice",
+                        "author_url": "https://twitter.com/alice",
+                        "feed_label": "x-likes",
+                    },
+                )
             )
-        )
         creators = storage.list_subscribed_creators(enrich_avatars=False)
 
     row = next(row for row in creators if row["key"] == "twitter:https://x.com/alice")
     assert row["name"] == "Alice"
     assert row["platform"] == "twitter"
-    assert row["item_count"] == 1
+    assert row["item_count"] == 4
     storage.close()
