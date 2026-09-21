@@ -1,6 +1,7 @@
 def test_preview_returns_top_three_popular(monkeypatch):
     from on1y.books.edition_match import EditionHints
     from on1y.books.preview import preview_ebook_candidates
+    from on1y.books.settings_store import BookSettings
     from on1y.books.zlib_session import ZlibSession
 
     session = ZlibSession(host="zh.z-lib.help", remix_userid="1", remix_userkey="abc")
@@ -33,6 +34,7 @@ def test_preview_returns_top_three_popular(monkeypatch):
     result = preview_ebook_candidates(
         1,
         hints=EditionHints(title="国富论", author="亚当·斯密", translator="唐日松"),
+        settings=BookSettings(),
     )
     assert result["source"] == "zlib"
     assert len(result["candidates"]) == 3
