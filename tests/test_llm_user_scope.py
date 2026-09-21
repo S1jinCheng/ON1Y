@@ -6,7 +6,6 @@ import json
 from pathlib import Path
 
 import pytest
-
 from on1y.auth.context import user_context
 
 
@@ -47,6 +46,41 @@ def test_user2_llm_key_not_from_global_env(tmp_path: Path, monkeypatch: pytest.M
     cfg = resolve_llm_settings(user_id=2)
     assert cfg.api_key == "sk-user2-private"
     assert cfg.api_key_set is True
+
+
+def test_user1_uses_global_env_key_without_file_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ON1Y_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ON1Y_LLM_API_KEY", "sk-global-user1-only")
+    from on1y.config import get_settings
+    from on1y.llm.settings import resolve_llm_settings
+
+    get_settings.cache_clear()
+
+    cfg = resolve_llm_settings(user_id=1)
+    assert cfg.api_key == "sk-global-user1-only"
+
+
+def test_user1_can_explicitly_clear_global_env_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ON1Y_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ON1Y_LLM_API_KEY", "sk-global-user1-only")
+    from on1y.config import get_settings
+    from on1y.llm.settings import resolve_llm_settings, save_file_settings
+
+    get_settings.cache_clear()
+    save_file_settings(
+        base_url="https://api.openai.com/v1",
+        model="gpt-test",
+        clear_api_key=True,
+        user_id=1,
+    )
+
+    cfg = resolve_llm_settings(user_id=1)
+    assert cfg.api_key == ""
+    assert cfg.api_key_set is False
 
 
 def test_distill_candidates_scoped_per_user(isolated_db: Path) -> None:
