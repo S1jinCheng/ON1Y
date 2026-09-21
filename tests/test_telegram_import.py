@@ -22,6 +22,7 @@ def _write_export(export_dir: Path, *, contact: str = "Alice", chat_id: int = 10
         "你觉得先做导出扫描还是直接接 API？",
         "我建议先用 Desktop 导出验证 pipeline。",
         "同意，等书面化效果稳定再上 Telethon。",
+        "还要记录导入水位、内容哈希和失败原因，方便后续去重、重试与排查。",
     ]
     for idx, text in enumerate(lines):
         messages.append(

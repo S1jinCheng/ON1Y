@@ -31,7 +31,7 @@ def test_save_and_load_subscription_settings(tmp_path, monkeypatch) -> None:
 
         view = public_settings_view()
         assert view["bilibili_sync_since"] == "2025-03-15"
-        assert view["platforms"] == ["bilibili", "youtube", "zhihu"]
+        assert view["platforms"] == ["bilibili", "youtube", "zhihu", "twitter"]
 
         assert sync_since_date("bilibili") == date(2025, 3, 15)
         assert sync_since_timestamp("bilibili") == 1_741_996_800
