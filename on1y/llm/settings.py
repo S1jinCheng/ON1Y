@@ -90,13 +90,17 @@ def resolve_llm_settings(*, user_id: int | None = None) -> LlmSettings:
     settings = get_settings()
     uid = user_id if user_id is not None else get_effective_user_id()
     file_cfg = load_file_settings(user_id=uid)
-    # User 1 may use legacy env key; user 2+ only use their own llm_settings.json.
+    # User 1 may use the legacy env key until the per-user file explicitly
+    # overrides it. Keeping an empty api_key in that file means the user chose
+    # to clear the key, so do not fall back to the environment in that case.
     env_key = str(settings.llm_api_key or "").strip()
     if uid == 1:
-        api_key = str(file_cfg.get("api_key") or env_key or "").strip()
+        api_key = str(file_cfg.get("api_key") or "").strip() if "api_key" in file_cfg else env_key
     else:
         api_key = str(file_cfg.get("api_key") or "").strip()
-    base_url = str(file_cfg.get("base_url") or settings.llm_base_url or DEFAULT_BASE_URL).rstrip("/")
+    base_url = str(file_cfg.get("base_url") or settings.llm_base_url or DEFAULT_BASE_URL).rstrip(
+        "/"
+    )
     model = str(file_cfg.get("model") or settings.llm_model or DEFAULT_MODEL).strip()
     return LlmSettings(
         base_url=base_url,
