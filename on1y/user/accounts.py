@@ -329,21 +329,21 @@ class UserStore:
 
 
 def list_sync_user_ids(storage: Any, *, current_user_only: bool = False) -> list[int]:
-    """User ids for background sync loops; single-user installs always use id=1."""
+    """Existing user ids for background sync; a fresh install has no users yet."""
     from on1y.config import get_settings
 
     settings = get_settings()
+    active_ids = set(UserStore(storage).list_active_user_ids())
     if settings.single_user_mode:
-        return [1]
+        return [1] if 1 in active_ids else []
     if current_user_only:
         uid = get_active_sync_user_id()
         if uid is None:
             return []
-        active_ids = set(UserStore(storage).list_active_user_ids())
         return [uid] if uid in active_ids else []
     if not settings.multi_user_background_sync:
-        return [1]
-    return UserStore(storage).list_active_user_ids()
+        return [1] if 1 in active_ids else []
+    return sorted(active_ids)
 
 
 def bootstrap_default_user(storage: Any, *, settings: Settings | None = None) -> UserRow | None:

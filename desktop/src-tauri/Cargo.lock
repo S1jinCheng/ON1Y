@@ -2386,6 +2386,7 @@ dependencies = [
 name = "on1y-desktop"
 version = "0.1.1"
 dependencies = [
+ "getrandom 0.2.17",
  "reqwest 0.12.28",
  "rfd",
  "serde",
@@ -2394,6 +2395,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-opener",
  "tauri-plugin-single-instance",
+ "tempfile",
  "url",
 ]
 

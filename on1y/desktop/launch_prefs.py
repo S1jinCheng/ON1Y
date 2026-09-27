@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Literal
 
@@ -74,7 +75,9 @@ def write_launch_prefs(
         raw = str(data_dir_override or "").strip()
         current["data_dir_override"] = raw or None
     _write_prefs_file(launch_prefs_path(settings), current)
-    bootstrap = PROJECT_ROOT / "data" / _LAUNCH_FILE
+    bootstrap = Path(
+        os.environ.get("ON1Y_LAUNCH_PREFS_FILE") or PROJECT_ROOT / "data" / _LAUNCH_FILE
+    )
     if bootstrap != launch_prefs_path(settings):
         _write_prefs_file(bootstrap, current)
     return current

@@ -6,8 +6,10 @@ import hashlib
 import json
 import logging
 import os
+import platform
 import re
 import shutil
+import sys
 import tempfile
 import threading
 from dataclasses import dataclass
@@ -80,6 +82,10 @@ def _package_version(package: str) -> str:
 
 def _ascii_model_root() -> Path:
     """Paddle's Windows native runtime cannot reliably open non-ASCII model paths."""
+    if sys.platform != "win32":
+        target = get_settings().data_dir / "models"
+        target.mkdir(parents=True, exist_ok=True)
+        return target
     candidates = [
         get_settings().data_dir / "models",
         Path(os.environ.get("PUBLIC") or "C:/Users/Public") / "On1y" / "models",
@@ -138,7 +144,9 @@ def _layout_model() -> Any:
             model_name=MODEL_NAME,
             model_dir=str(_ensure_model_dir()),
             device="cpu",
-            enable_mkldnn=True,
+            enable_mkldnn=(
+                sys.platform != "darwin" and platform.machine().lower() in {"x86_64", "amd64"}
+            ),
             cpu_threads=min(8, max(1, os.cpu_count() or 1)),
         )
         return _MODEL

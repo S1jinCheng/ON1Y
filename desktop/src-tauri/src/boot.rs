@@ -7,7 +7,18 @@ use std::time::{Duration, Instant};
 use reqwest::blocking::Client;
 use serde::Deserialize;
 
+#[path = "runtime_env.rs"]
+mod runtime_env;
+
 const DEFAULT_BACKEND_PORT: u16 = 8765;
+
+fn backend_name() -> &'static str {
+    if cfg!(windows) {
+        "on1y.exe"
+    } else {
+        "on1y"
+    }
+}
 
 fn backend_port(root: &Path, data_dir: &Path) -> u16 {
     if let Ok(port_str) = std::env::var("ON1Y_WEB_PORT") {
@@ -93,7 +104,7 @@ impl std::error::Error for BootError {}
 pub fn resolve_runtime_layout(resource_dir: Option<PathBuf>) -> (PathBuf, Option<PathBuf>, bool) {
     if let Some(res_dir) = resource_dir {
         let app_root = res_dir.join("app");
-        let backend_exe = res_dir.join("backend").join("on1y").join("on1y.exe");
+        let backend_exe = res_dir.join("backend").join("on1y").join(backend_name());
         let frontend = app_root.join("frontend").join("out").join("index.html");
         if frontend.is_file() && backend_exe.is_file() {
             return (app_root, Some(backend_exe), true);
@@ -104,16 +115,16 @@ pub fn resolve_runtime_layout(resource_dir: Option<PathBuf>) -> (PathBuf, Option
 }
 
 /// Create writable user data + config for packaged installs.
-pub fn prepare_portable_runtime(app_root: &Path, bundled: bool) -> PathBuf {
+pub fn prepare_portable_runtime(app_root: &Path, bundled: bool) -> Result<PathBuf, BootError> {
     let data_dir = resolve_data_dir_for_prefs(app_root, bundled);
-    let _ = fs::create_dir_all(&data_dir);
+    fs::create_dir_all(&data_dir).map_err(|_| BootError::msg("无法创建 On1y 数据目录"))?;
 
     if !bundled {
-        return data_dir;
+        return Ok(data_dir);
     }
 
     let (config_dir, env_path) = resolve_user_config_paths(&data_dir, app_root, bundled);
-    let _ = fs::create_dir_all(&config_dir);
+    fs::create_dir_all(&config_dir).map_err(|_| BootError::msg("无法创建 On1y 配置目录"))?;
 
     let feeds = config_dir.join("feeds.yaml");
     if !feeds.is_file() {
@@ -123,34 +134,10 @@ pub fn prepare_portable_runtime(app_root: &Path, bundled: bool) -> PathBuf {
         }
     }
 
-    if !env_path.is_file() {
-        let example = app_root.join(".env.example");
-        let mut body = if example.is_file() {
-            fs::read_to_string(example).unwrap_or_default()
-        } else {
-            String::new()
-        };
-        if !body.contains("ON1Y_AUTH_SECRET_KEY") {
-            body.push_str("\nON1Y_AUTH_SECRET_KEY=");
-            body.push_str(&random_secret());
-            body.push('\n');
-        }
-        for line in [
-            "ON1Y_SINGLE_USER=true",
-            "ON1Y_AUTH_REQUIRED=false",
-            "ON1Y_AUTH_ALLOW_REGISTRATION=false",
-        ] {
-            let key = line.split('=').next().unwrap_or("");
-            if !body.contains(key) {
-                body.push('\n');
-                body.push_str(line);
-                body.push('\n');
-            }
-        }
-        let _ = fs::write(&env_path, body);
-    }
+    runtime_env::ensure_runtime_env(&env_path, &app_root.join(".env.example"))
+        .map_err(BootError::msg)?;
 
-    data_dir
+    Ok(data_dir)
 }
 
 pub fn boot(config: &BootConfig) -> Result<(ManagedServers, String), BootError> {
@@ -164,8 +151,8 @@ pub fn boot(config: &BootConfig) -> Result<(ManagedServers, String), BootError> 
             "安装包资源不完整（缺少前端页面）。请重新下载安装包。".to_string()
         } else {
             format!(
-                "前端尚未构建（需要 static export）。请在 PowerShell 中运行:\n  powershell -ExecutionPolicy Bypass -File \"{}\"",
-                config.root.join("scripts").join("build-frontend.ps1").display()
+                "前端尚未构建。请在项目目录运行:\n  npm --prefix \"{}\" run build",
+                config.root.join("frontend").display()
             )
         }));
     }
@@ -269,9 +256,29 @@ fn spawn_backend(
         .stderr(Stdio::null());
 
     cmd.env("ON1Y_DESKTOP_SHELL", "1");
+    if let Ok(log) = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(data_dir.join("on1y-start.log"))
+    {
+        if let Ok(stdout) = log.try_clone() {
+            cmd.stdout(Stdio::from(stdout));
+        }
+        cmd.stderr(Stdio::from(log));
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        cmd.env("ON1Y_DESKTOP_EXECUTABLE", exe);
+    }
     if bundled {
         cmd.env("ON1Y_BUNDLED", "1");
         cmd.env("ON1Y_ENV_FILE", &env_file);
+        if root.join("browsers").is_dir() {
+            cmd.env("PLAYWRIGHT_BROWSERS_PATH", root.join("browsers"));
+        }
+        cmd.env(
+            "ON1Y_LAUNCH_PREFS_FILE",
+            portable_user_base().join("data/app-launch.json"),
+        );
         if feeds_path.is_file() {
             cmd.env("ON1Y_RSS_CONFIG_PATH", &feeds_path);
         }
@@ -352,8 +359,7 @@ fn wait_http_ok(url: &str, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         if let Ok(resp) = client.get(url).send() {
-            let code = resp.status().as_u16();
-            if (200..500).contains(&code) {
+            if resp.status().is_success() {
                 return true;
             }
         }
@@ -418,8 +424,18 @@ fn is_bundled_app_root(path: &Path) -> bool {
 
 fn find_on1y_exe_dev() -> Result<PathBuf, BootError> {
     let mut candidates: Vec<PathBuf> = Vec::new();
+    let bin_dir = if cfg!(windows) { "Scripts" } else { "bin" };
+    if let Ok(prefix) = std::env::var("VIRTUAL_ENV") {
+        candidates.push(PathBuf::from(prefix).join(bin_dir).join(backend_name()));
+    }
+    candidates.push(
+        find_dev_root()
+            .join(".venv")
+            .join(bin_dir)
+            .join(backend_name()),
+    );
     if let Ok(prefix) = std::env::var("CONDA_PREFIX") {
-        candidates.push(PathBuf::from(prefix).join("Scripts").join("on1y.exe"));
+        candidates.push(PathBuf::from(prefix).join(bin_dir).join(backend_name()));
     }
     if let Ok(home) = std::env::var("USERPROFILE") {
         let home = PathBuf::from(home);
@@ -446,7 +462,7 @@ fn find_on1y_exe_dev() -> Result<PathBuf, BootError> {
     }
 
     Err(BootError::msg(
-        "找不到 on1y.exe。开发环境请先: conda activate on1y\n\
+        "找不到 on1y 后端。开发环境请先安装项目到 .venv 或激活 conda 环境 on1y。\n\
          发布版请重新安装 On1y 桌面应用。",
     ))
 }
@@ -454,12 +470,12 @@ fn find_on1y_exe_dev() -> Result<PathBuf, BootError> {
 fn which_on1y_from_path() -> Result<PathBuf, BootError> {
     let path_var = std::env::var_os("PATH").ok_or_else(|| BootError::msg("PATH 未设置"))?;
     for dir in std::env::split_paths(&path_var) {
-        let candidate = dir.join("on1y.exe");
+        let candidate = dir.join(backend_name());
         if candidate.is_file() {
             return Ok(candidate);
         }
     }
-    Err(BootError::msg("on1y.exe not on PATH"))
+    Err(BootError::msg("on1y backend not on PATH"))
 }
 
 fn resolve_user_config_paths(
@@ -468,7 +484,7 @@ fn resolve_user_config_paths(
     bundled: bool,
 ) -> (PathBuf, PathBuf) {
     let portable = portable_user_base();
-    if bundled && data_dir.starts_with(&portable) {
+    if bundled {
         (portable.join("config"), portable.join(".env"))
     } else {
         let parent = data_dir.parent().unwrap_or(app_root);
@@ -477,19 +493,14 @@ fn resolve_user_config_paths(
 }
 
 fn portable_user_base() -> PathBuf {
+    #[cfg(target_os = "macos")]
+    if let Ok(home) = std::env::var("HOME") {
+        return PathBuf::from(home).join("Library/Application Support/On1y");
+    }
     if let Ok(local) = std::env::var("LOCALAPPDATA") {
         return PathBuf::from(local).join("On1y");
     }
     PathBuf::from(".").join("On1yUser")
-}
-
-fn random_secret() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    format!("{nanos:x}{nanos:032x}")
 }
 
 #[derive(Deserialize)]
@@ -573,8 +584,10 @@ pub fn resolve_data_dir_for_prefs(root: &Path, bundled: bool) -> PathBuf {
                 return PathBuf::from(trimmed);
             }
         }
-        if let Some(dev_data) = dev_data_dir_if_present() {
-            return dev_data;
+        if !cfg!(target_os = "macos") {
+            if let Some(dev_data) = dev_data_dir_if_present() {
+                return dev_data;
+            }
         }
         return data_dir;
     }
@@ -608,4 +621,44 @@ fn log_line(data_dir: &Path, message: &str) {
         .append(true)
         .open(data_dir.join("on1y-start.log"))
         .and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes()));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recognizes_native_packaged_backend() {
+        let dir = std::env::temp_dir().join(format!("on1y-layout-{}", runtime_env::random_secret().unwrap()));
+        let app = dir.join("app");
+        fs::create_dir_all(app.join("frontend/out")).unwrap();
+        fs::write(app.join("frontend/out/index.html"), "test").unwrap();
+        let backend = dir.join("backend/on1y").join(backend_name());
+        fs::create_dir_all(backend.parent().unwrap()).unwrap();
+        fs::write(&backend, "test").unwrap();
+        let (resolved, executable, bundled) = resolve_runtime_layout(Some(dir.clone()));
+        assert_eq!(resolved, app);
+        assert_eq!(executable, Some(backend));
+        assert!(bundled);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn packaged_config_stays_at_user_base_with_external_data() {
+        let base = portable_user_base();
+        let (config, env) = resolve_user_config_paths(
+            Path::new("/Volumes/External/Knowledge"),
+            Path::new("/Applications/On1y.app"),
+            true,
+        );
+        assert_eq!(config, base.join("config"));
+        assert_eq!(env, base.join(".env"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn mac_data_lives_in_application_support() {
+        assert_eq!(backend_name(), "on1y");
+        assert!(portable_user_base().ends_with("Library/Application Support/On1y"));
+    }
 }

@@ -29,6 +29,7 @@ def test_check_skipped_for_dev_build(_mock) -> None:
 
 
 @patch("on1y.app_update.is_bundled_release", return_value=True)
+@patch("on1y.app_update.sys.platform", "win32")
 def test_check_app_update_with_mock_release(_mock) -> None:
     from on1y import app_update as mod
 

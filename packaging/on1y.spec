@@ -1,7 +1,7 @@
-# PyInstaller spec — bundled on1y backend for Windows desktop release.
-# Run via: scripts/package-release.ps1
+# PyInstaller spec for the Windows and macOS desktop backend.
 
 import sys
+import os
 from pathlib import Path
 
 from PyInstaller.utils.hooks import (
@@ -73,7 +73,7 @@ a = Analysis(
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
-    hookspath=[],
+    hookspath=[str(root / "packaging" / "hooks")] if sys.platform == "darwin" else [],
     hooksconfig={},
     runtime_hooks=[],
     excludes=[],
@@ -99,7 +99,7 @@ exe = EXE(
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
-    codesign_identity=None,
+    codesign_identity=os.environ.get("APPLE_SIGNING_IDENTITY") if sys.platform == "darwin" else None,
     entitlements_file=None,
 )
 

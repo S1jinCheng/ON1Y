@@ -225,7 +225,7 @@ def patch_user_profile(*, user_id: int | None = None, **sections: Any) -> dict[s
 
 def public_profile_view(user_id: int | None = None) -> dict[str, Any]:
     from on1y.desktop.launch_prefs import read_launch_prefs
-    from on1y.desktop.windows_autostart import autostart_installed, is_windows
+    from on1y.desktop.autostart import autostart_installed, autostart_supported
 
     profile = load_user_profile(user_id)
     integrations = profile.get("integrations") or {}
@@ -247,8 +247,8 @@ def public_profile_view(user_id: int | None = None) -> dict[str, Any]:
             "open_browser_on_start": bool(
                 launch.get("open_browser_on_start", app.get("open_browser_on_start", True))
             ),
-            "autostart_enabled": autostart_installed() if is_windows() else False,
-            "autostart_supported": is_windows(),
+            "autostart_enabled": autostart_installed(),
+            "autostart_supported": autostart_supported(),
         },
         "kindle": {
             "enabled": profile["kindle"]["enabled"],

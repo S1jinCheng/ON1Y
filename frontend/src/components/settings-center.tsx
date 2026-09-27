@@ -21,6 +21,7 @@ import {
   X
 } from "lucide-react";
 import { FormEvent, useEffect, useRef, useState } from "react";
+import { DeviceSyncSettings } from "@/components/device-sync-settings";
 
 import {
   deleteCookieFile,
@@ -661,8 +662,8 @@ function GeneralTab(props: {
         <p className="text-[11px] leading-relaxed text-neutral-500">
           {L(
             locale,
-            "自动模式会读取 Windows 系统代理，并尝试常见本地端口（Clash/V2Ray）。用于 YouTube 字幕与频道同步。",
-            "Auto reads Windows system proxy and probes common local ports (Clash/V2Ray). Used for YouTube subtitles and channel sync."
+            "自动模式会读取系统代理，并尝试常见本地端口（Clash/V2Ray）。用于 YouTube 字幕与频道同步。",
+            "Auto reads the system proxy and probes common local ports (Clash/V2Ray). Used for YouTube subtitles and channel sync."
           )}
         </p>
         {networkStatus?.effective_proxy ? (
@@ -837,11 +838,11 @@ function GeneralTab(props: {
           {L(locale, "启动", "Startup")}
         </h3>
         <ToggleRow
-          label={L(locale, "登录 Windows 时自动启动 On1y", "Start On1y when I sign in to Windows")}
+          label={L(locale, "登录电脑时自动启动 On1y", "Start On1y when I sign in")}
           description={L(
             locale,
-            "开启后登录 Windows 会自动启动 On1y 并打开工作台。",
-            "When enabled, On1y starts on Windows sign-in and opens the workspace."
+            "开启后，下次登录电脑时会自动启动 On1y。是否打开工作台由启动偏好决定。",
+            "On1y starts at your next sign-in. Launch preferences control whether the workspace opens."
           )}
           checked={autostart}
           disabled={!autostartSupported}
@@ -1445,6 +1446,7 @@ function AccountDataTab(props: {
 
   return (
     <div className="space-y-5">
+      <DeviceSyncSettings locale={locale} />
       <section className="space-y-2">
         <h3 className="text-sm font-semibold text-foreground">{L(locale, "账户数据", "Account data")}</h3>
         <p className="text-xs leading-relaxed text-muted">
@@ -3190,7 +3192,7 @@ function PapersTab(props: { locale: Locale; onMessage?: (message: string) => voi
                 className={`${inputClass} min-w-0 flex-1`}
                 value={settings.pdf_application_path ?? ""}
                 readOnly
-                placeholder={L(locale, "请选择应用程序（.exe）", "Choose an application (.exe)")}
+                placeholder={L(locale, "请选择 PDF 阅读应用", "Choose a PDF reader application")}
               />
               <button
                 type="button"
@@ -3210,7 +3212,7 @@ function PapersTab(props: { locale: Locale; onMessage?: (message: string) => voi
           <p className="text-xs text-muted">
             {settings.pdf_open_mode === "zotero"
               ? L(locale, "优先使用 Zotero 阅读器；没有 Zotero 附件时使用本地 PDF。", "Prefer Zotero Reader, falling back to the local PDF when needed.")
-              : L(locale, "使用 Windows 当前为 PDF 配置的默认应用。", "Use the current Windows default application for PDFs.")}
+              : L(locale, "使用系统当前为 PDF 配置的默认应用。", "Use the current system default application for PDFs.")}
           </p>
         )}
       </section>

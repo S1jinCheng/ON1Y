@@ -249,11 +249,19 @@ def _parse_archive_contents(
         if isinstance(raw_themes, list):
             themes = [t for t in raw_themes if isinstance(t, dict)]
     items: list[dict[str, Any]] = []
-    for line in zf.read(ITEMS_NAME).decode("utf-8").splitlines():
+    # JSONL records are separated by LF (or CRLF), not every Unicode line
+    # separator. U+0085/U+2028/U+2029 are valid inside JSON strings and are
+    # emitted literally by our ensure_ascii=False exporter.
+    for line_number, line in enumerate(zf.read(ITEMS_NAME).decode("utf-8").split("\n"), 1):
         line = line.strip()
         if not line:
             continue
-        row = json.loads(line)
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"{ITEMS_NAME} line {line_number}: invalid JSON ({exc.msg}, column {exc.colno})"
+            ) from exc
         if isinstance(row, dict) and row.get("url"):
             items.append(row)
     return manifest, items, themes
@@ -267,7 +275,11 @@ def _read_archive_payload(
     except zipfile.BadZipFile as exc:
         raise ValueError("not a valid zip archive") from exc
     names = set(zf.namelist())
-    manifest, items, themes = _parse_archive_contents(zf, names)
+    try:
+        manifest, items, themes = _parse_archive_contents(zf, names)
+    except Exception:
+        zf.close()
+        raise
     return manifest, items, themes, zf, names
 
 
@@ -350,7 +362,7 @@ def import_user_archive(
         "errors": errors,
     }
 
-    with user_context(user_id):
+    with zf, user_context(user_id):
         for theme in themes:
             slug = str(theme.get("slug") or "").strip().lower()
             if not slug or storage.get_theme_id_by_slug(slug) is not None:
@@ -370,6 +382,7 @@ def import_user_archive(
                 stats["errors"].append(f"theme {slug}: {exc}")
 
         url_to_raw_id: dict[str, int] = {}
+        imported_items: dict[str, dict[str, Any]] = {}
 
         for item in items:
             url = str(item["url"]).strip()
@@ -450,21 +463,41 @@ def import_user_archive(
                         confidence=tag.get("confidence"),
                         source=str(tag.get("source") or "llm"),
                     )
+                # Restore a complete snapshot, including fields absent from the
+                # backup. Only outgoing relations belong to this item's snapshot;
+                # incoming links from other local items must remain untouched.
+                with storage.transaction() as conn:
+                    if not isinstance(distill, dict):
+                        conn.execute("DELETE FROM distilled_items WHERE raw_id = ?", (raw_id,))
+                    if not theme_slug:
+                        conn.execute(
+                            "UPDATE raw_items SET theme_id = NULL, theme_source = ? WHERE id = ?",
+                            (str(item.get("theme_source") or "llm"), raw_id),
+                        )
+                        conn.execute("DELETE FROM item_themes WHERE raw_id = ?", (raw_id,))
+                    conn.execute("DELETE FROM item_relations WHERE from_raw_id = ?", (raw_id,))
+                    # Earlier upserts index intermediate state, before old metadata
+                    # is removed and tags/themes are restored.
+                    storage._touch_search_index(conn, raw_id)
                 url_to_raw_id[url] = raw_id
+                imported_items[url] = item
                 stats["imported"] += 1
             except Exception as exc:
                 stats["errors"].append(f"{url}: {exc}")
 
-        for item in items:
-            from_url = str(item.get("url") or "").strip()
-            from_id = url_to_raw_id.get(from_url)
-            if from_id is None:
-                continue
+        # Skipped items can be relation targets, but cannot supply new or changed
+        # outgoing relations. For repeated URLs, use the last imported snapshot.
+        for from_url, item in imported_items.items():
+            from_id = url_to_raw_id[from_url]
             for rel in item.get("relations") or []:
                 if not isinstance(rel, dict):
                     continue
                 to_url = str(rel.get("to_url") or "").strip()
                 to_id = url_to_raw_id.get(to_url)
+                if not to_id and to_url:
+                    local_target = storage.get_raw_by_url(to_url)
+                    if local_target is not None:
+                        to_id = local_target.id
                 if not to_id:
                     continue
                 try:
@@ -484,8 +517,6 @@ def import_user_archive(
             stats["cookies_restored"] = settings_stats["cookies_restored"]
             stats["subscription_restored"] = settings_stats["subscription_restored"]
             stats["profile_restored"] = settings_stats["profile_restored"]
-
-    zf.close()
 
     return {
         "manifest": manifest,

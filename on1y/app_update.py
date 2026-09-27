@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import platform
 import re
 import sys
 import time
@@ -57,6 +58,21 @@ def _github_repo() -> str:
 
 
 def _pick_setup_asset(assets: list[dict[str, Any]]) -> dict[str, Any] | None:
+    if sys.platform == "darwin":
+        machine = platform.machine().lower()
+        architectures = (
+            {"aarch64", "arm64"} if machine in {"arm64", "aarch64"} else {"x64", "x86_64"}
+        )
+        for architecture in (*sorted(architectures), "universal"):
+            for asset in assets:
+                name = str(asset.get("name") or "").lower()
+                if name.endswith(".dmg") and re.search(
+                    rf"(?:^|[_-]){architecture}(?:[_.-]|$)", name
+                ):
+                    return asset
+        return None
+    if sys.platform != "win32":
+        return None
     for asset in assets:
         name = str(asset.get("name") or "").lower()
         if name.endswith(".exe") and "setup" in name:

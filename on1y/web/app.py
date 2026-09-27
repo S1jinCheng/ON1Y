@@ -419,8 +419,11 @@ def _multipart_installed() -> bool:
 def create_app() -> FastAPI:
     settings = get_settings()
     from on1y import __version__
+    from on1y.device_sync.routes import register_device_sync_routes, sync_lifespan
 
-    app = FastAPI(title="On1y", version=__version__, description="Phase 1 dashboard")
+    app = FastAPI(
+        title="On1y", version=__version__, description="Phase 1 dashboard", lifespan=sync_lifespan
+    )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_allow_origins(),
@@ -434,6 +437,7 @@ def create_app() -> FastAPI:
 
     register_auth_routes(app)
     install_auth_middleware(app)
+    register_device_sync_routes(app)
     from on1y.papers.routes import register_paper_routes
 
     register_paper_routes(app)
@@ -1309,16 +1313,16 @@ def create_app() -> FastAPI:
         from on1y import __version__
         from on1y.app_update import is_bundled_release
         from on1y.config import PROJECT_ROOT, get_settings
-        from on1y.desktop.windows_autostart import autostart_installed, is_windows
+        from on1y.desktop.autostart import autostart_installed, autostart_supported
 
         from on1y.desktop.launch_prefs import read_launch_prefs
 
         settings = get_settings()
         prefs = read_launch_prefs(settings)
         return {
-            "platform": "windows" if is_windows() else sys.platform,
-            "autostart_supported": is_windows(),
-            "autostart_enabled": autostart_installed() if is_windows() else False,
+            "platform": "windows" if sys.platform == "win32" else sys.platform,
+            "autostart_supported": autostart_supported(),
+            "autostart_enabled": autostart_installed(),
             "version": __version__,
             "project_root": str(PROJECT_ROOT),
             "data_dir": str(settings.data_dir),
@@ -1354,10 +1358,14 @@ def create_app() -> FastAPI:
 
     @app.post("/api/app/autostart")
     def app_set_autostart(body: AutostartRequest) -> dict[str, Any]:
-        from on1y.desktop.windows_autostart import autostart_installed, is_windows, set_autostart
+        from on1y.desktop.autostart import (
+            autostart_installed,
+            autostart_supported,
+            set_autostart,
+        )
 
-        if not is_windows():
-            raise HTTPException(status_code=501, detail="autostart only supported on Windows")
+        if not autostart_supported():
+            raise HTTPException(status_code=501, detail="autostart requires a supported desktop shell")
         try:
             set_autostart(body.enabled)
         except Exception as exc:
@@ -1613,7 +1621,7 @@ def create_app() -> FastAPI:
             storage.close()
 
     @app.post("/api/user/archive/import")
-    async def import_user_archive_api(
+    def import_user_archive_api(
         file: UploadFile = File(...),
         on_conflict: str = Query(default="overwrite"),
     ) -> dict[str, Any]:
@@ -1622,7 +1630,9 @@ def create_app() -> FastAPI:
 
         if on_conflict not in ("skip", "overwrite"):
             raise HTTPException(status_code=400, detail="on_conflict must be skip or overwrite")
-        raw = await file.read()
+        # FastAPI runs synchronous handlers in a worker. Read the upload and
+        # create/use/close SQLite on that same worker, not on the event loop.
+        raw = file.file.read()
         storage = get_storage()
         try:
             uid = get_effective_user_id()

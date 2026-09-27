@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
-from pathlib import Path
+import sys
+from pathlib import Path, PureWindowsPath
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -14,9 +15,19 @@ from on1y.user.paths import user_dir
 logger = logging.getLogger(__name__)
 
 
+def _default_vault_path(user_id: int | None = None) -> str:
+    if sys.platform == "win32":
+        return r"E:\Literature"
+    if user_id is None:
+        from on1y.auth.context import get_effective_user_id
+
+        user_id = get_effective_user_id()
+    return str((user_dir(user_id) / "papers" / "Literature").resolve())
+
+
 class PaperSettings(BaseModel):
     version: int = 3
-    literature_vault_path: str = r"E:\Literature"
+    literature_vault_path: str = Field(default_factory=_default_vault_path)
     cache_dir: str | None = None
     folder_sync_enabled: bool = False
     zotero_enabled: bool = False
@@ -52,17 +63,25 @@ def paper_settings_path(user_id: int) -> Path:
 def load_paper_settings(user_id: int) -> PaperSettings:
     path = paper_settings_path(user_id)
     if not path.is_file():
-        settings = PaperSettings()
+        settings = PaperSettings(literature_vault_path=_default_vault_path(user_id))
         save_paper_settings(user_id, settings)
         return settings
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
         if isinstance(payload, dict):
             payload["version"] = PaperSettings().version
+            # Older Mac builds persisted the Windows default. Never resolve that
+            # drive path relative to the signed application's resources directory.
+            raw_vault = str(payload.get("literature_vault_path") or "")
+            if sys.platform != "win32" and (
+                "literature_vault_path" not in payload
+                or PureWindowsPath(raw_vault) == PureWindowsPath(r"E:\Literature")
+            ):
+                payload["literature_vault_path"] = _default_vault_path(user_id)
         return PaperSettings.model_validate(payload)
     except Exception:
         logger.warning("Invalid paper settings %s; resetting defaults", path)
-        settings = PaperSettings()
+        settings = PaperSettings(literature_vault_path=_default_vault_path(user_id))
         save_paper_settings(user_id, settings)
         return settings
 
@@ -95,6 +114,8 @@ def resolve_literature_vault(user_id: int, override: str | None = None) -> Path:
     raw = str(configured or "").strip()
     if not raw:
         raise ValueError("\u8bf7\u5148\u9009\u62e9 Literature Vault \u6587\u4ef6\u5939")
+    if sys.platform != "win32" and PureWindowsPath(raw).drive:
+        raise ValueError("Windows 文献库路径不能用于当前系统，请重新选择本机文件夹")
     return Path(raw).expanduser().resolve(strict=False)
 
 

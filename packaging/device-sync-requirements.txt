@@ -1,0 +1,4 @@
+# Lightweight relay only. Run from the repository root, not the full desktop install.
+fastapi>=0.115,<1
+pydantic>=2.7,<3
+uvicorn>=0.32,<1

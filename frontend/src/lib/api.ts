@@ -45,6 +45,37 @@ import {
 /** Empty = same-origin when UI is served by `on1y serve` (static export). */
 const API_BASE = process.env.NEXT_PUBLIC_ON1Y_API_BASE?.replace(/\/$/, "") ?? "";
 
+export type DeviceSyncConflict = {
+  id: string;
+  identity: string;
+  field: string;
+  current: unknown;
+  incoming: unknown;
+  device_id: string;
+};
+
+export type DeviceSyncStatus = {
+  enabled: boolean;
+  server_url: string;
+  has_key: boolean;
+  device_id: string;
+  library_id: string;
+  last_sync: string | null;
+  last_error: string | null;
+  pending: number;
+  conflicts: DeviceSyncConflict[];
+};
+
+export const getDeviceSync = (): Promise<DeviceSyncStatus> => request("/api/device-sync");
+export const saveDeviceSync = (settings: { server_url: string; key: string; enabled: boolean }): Promise<DeviceSyncStatus> =>
+  request("/api/device-sync", { method: "POST", body: JSON.stringify(settings) });
+export const runDeviceSync = (): Promise<DeviceSyncStatus> =>
+  request("/api/device-sync/run", { method: "POST", direct: true });
+export const resolveDeviceSyncConflict = (id: string, choice: "current" | "incoming"): Promise<DeviceSyncStatus> =>
+  request(`/api/device-sync/conflicts/${encodeURIComponent(id)}/resolve`, {
+    method: "POST", body: JSON.stringify({ choice }), direct: true
+  });
+
 /** Backend origin for dev (`npm run dev` on :3000) long requests — bypasses Next rewrite proxy timeouts. */
 const DEV_BACKEND_ORIGIN =
   process.env.NEXT_PUBLIC_ON1Y_API_BASE?.replace(/\/$/, "") || "http://127.0.0.1:8765";

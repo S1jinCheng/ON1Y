@@ -22,9 +22,10 @@
 
 ## Description
 
-- Data stays on your machine — nothing is uploaded to the cloud
+- Local-first storage, with optional personal Windows / Mac sync to your own relay
 - Multi-user support with backup and migration
 - Windows desktop installer — ready to use out of the box
+- macOS desktop source build with native app and DMG packaging
 
 ### What it does
 
@@ -44,7 +45,7 @@
 
 ## Demo
 
-On1y is **local-first**. There is no public online demo — your data and cookies stay on your computer.
+On1y is **local-first**, with no public online demo. Personal cross-device sync is off by default. Enabling it uploads supported library data to your chosen trusted relay, excluding cookies, passwords and API keys. See the [personal sync guide](desktop/PERSONAL-SYNC.md).
 
 <div align="center">
   <img src="assets/demo.gif" alt="On1y demo: sync, browse, search, and AI summaries" width="90%" />
@@ -59,14 +60,14 @@ On1y is **local-first**. There is no public online demo — your data and cookie
 
 | Layer | Technologies |
 | --- | --- |
-| **Desktop** | [Tauri 2](https://tauri.app/) · WebView2 |
+| **Desktop** | [Tauri 2](https://tauri.app/) · WebView2 (Windows) / WKWebView (macOS) |
 | **Frontend** | [Next.js 14](https://nextjs.org/) · React 18 · TypeScript · Tailwind CSS · Zustand |
 | **Backend** | [FastAPI](https://fastapi.tiangolo.com/) · Uvicorn · Pydantic |
 | **Storage** | SQLite · FTS5 full-text index |
 | **Ingestion** | Bilibili API · RSS / feedparser · yt-dlp |
 | **Extraction** | Playwright (Zhihu, etc.) · Jina Reader · BeautifulSoup |
 | **AI** | Configurable OpenAI-compatible API (summaries / tags) |
-| **Packaging** | PyInstaller · NSIS installer |
+| **Packaging** | PyInstaller · NSIS (Windows) · App / DMG (macOS) |
 
 
 ---
@@ -84,6 +85,11 @@ On1y is **local-first**. There is no public online demo — your data and cookie
 Requirements: Windows 10/11 x64 · [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/)
 
 ### Developers: run from source
+
+For macOS 14+ setup, native development and `.app` / `.dmg` builds, see the
+[macOS desktop guide](desktop/README.md#macos). Build on the target architecture;
+The Apple Silicon preview is available under [Releases](https://github.com/S1jinCheng/ON1Y/releases).
+It requires macOS 14+ and is ad-hoc signed, not Apple-notarized. Intel is not included.
 
 ```powershell
 conda create -n on1y python=3.11 -y

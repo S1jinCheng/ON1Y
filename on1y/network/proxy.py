@@ -40,9 +40,14 @@ def _normalize_proxy_url(raw: str) -> str | None:
 
 
 def detect_system_proxy() -> str | None:
-    """Read Windows Internet Settings proxy (user-level)."""
+    """Read the platform's configured HTTP(S) proxy."""
     import sys
 
+    if sys.platform == "darwin":
+        from urllib.request import getproxies
+
+        proxies = getproxies()
+        return _normalize_proxy_url(proxies.get("https") or proxies.get("http") or "")
     if sys.platform != "win32":
         return None
     try:

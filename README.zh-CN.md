@@ -22,9 +22,10 @@
 
 ## 描述
 
-- 数据在本地，不上传云端
+- 数据默认保存在本地；可选个人 Win / Mac 同步，仅在开启后上传到你指定的服务
 - 支持多账号、备份迁移
 - 提供 Windows 桌面安装版，开箱即用
+- 支持从源码构建 macOS 桌面版，生成 `.app` 和 `.dmg`
 
 ### 能做什么
 
@@ -44,7 +45,7 @@
 
 ## 演示
 
-On1y 是**本地优先**应用，没有公网在线 Demo，数据与 Cookie 都在你的电脑上。
+On1y 是**本地优先**应用，没有公网在线 Demo。个人跨设备同步默认关闭，开启后将支持的资料上传到你指定的可信服务，Cookie、密码和 API Key 不参与同步。使用方式见[个人同步指南](desktop/PERSONAL-SYNC.md)。
 
 <div align="center">
   <img src="assets/demo.gif" alt="On1y 演示：同步、浏览、搜索与 AI 摘要" width="90%" />
@@ -59,14 +60,14 @@ On1y 是**本地优先**应用，没有公网在线 Demo，数据与 Cookie 都�
 
 | 层级      | 技术                                                                                 |
 | ------- | ---------------------------------------------------------------------------------- |
-| **桌面壳** | [Tauri 2](https://tauri.app/) · WebView2                                           |
+| **桌面壳** | [Tauri 2](https://tauri.app/) · Windows WebView2 / macOS WKWebView |
 | **前端**  | [Next.js 14](https://nextjs.org/) · React 18 · TypeScript · Tailwind CSS · Zustand |
 | **后端**  | [FastAPI](https://fastapi.tiangolo.com/) · Uvicorn · Pydantic                      |
 | **存储**  | SQLite · FTS5 全文索引                                                                 |
 | **采集**  | B 站 API · RSS / feedparser · yt-dlp                                                |
 | **提取**  | Playwright（知乎等）· Jina Reader · BeautifulSoup                                       |
 | **AI**  | 可配置 OpenAI 兼容 API（摘要 / 标签）                                                         |
-| **打包**  | PyInstaller · NSIS 安装程序                                                            |
+| **打包**  | PyInstaller · Windows NSIS / macOS App、DMG |
 
 
 ---
@@ -84,6 +85,28 @@ On1y 是**本地优先**应用，没有公网在线 Demo，数据与 Cookie 都�
 系统要求：Windows 10/11 x64 · [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/)
 
 ### 开发者：从源码运行
+
+macOS 14 及以上版本的环境配置、桌面开发及打包方式见
+[macOS 桌面指南](desktop/README.md#macos)。安装 Python 3.11、Node.js 22.13+
+及当前稳定版 Rust 后，可在项目根目录运行：
+
+```bash
+python3.11 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e ".[dev]"
+npm ci --prefix frontend
+npm ci --prefix desktop
+bash scripts/run-macos.sh
+# 构建独立应用和磁盘映像
+bash scripts/build-macos.sh
+```
+
+打包版数据保存在 `~/Library/Application Support/On1y/data`。Apple Silicon
+和 Intel 需要分别在对应架构上构建；首轮本地验证针对 Apple Silicon。
+Apple Silicon 预览版可从 [Releases](https://github.com/S1jinCheng/ON1Y/releases) 下载，
+要求 macOS 14+。当前使用临时签名，尚未通过 Apple 公证；不包含 Intel 安装包。
+
+Windows 源码运行：
 
 ```powershell
 conda create -n on1y python=3.11 -y

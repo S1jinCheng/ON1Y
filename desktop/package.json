@@ -2,7 +2,7 @@
   "name": "on1y-desktop",
   "private": true,
   "version": "0.1.1",
-  "description": "On1y desktop shell (Tauri + WebView2)",
+  "description": "On1y desktop shell for Windows and macOS (Tauri)",
   "scripts": {
     "tauri": "tauri",
     "dev": "tauri dev",

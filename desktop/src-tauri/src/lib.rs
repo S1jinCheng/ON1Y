@@ -47,7 +47,7 @@ pub fn run() {
         .setup(move |app| {
             let resource_dir = app.path().resource_dir().ok();
             let (root, backend_exe, bundled) = resolve_runtime_layout(resource_dir);
-            let data_dir = prepare_portable_runtime(&root, bundled);
+            let data_dir = prepare_portable_runtime(&root, bundled)?;
             std::env::set_var("ON1Y_ROOT", &root);
             if let Some(state) = app.try_state::<AppState>() {
                 *state.on1y_root.lock().unwrap() = root.to_string_lossy().into_owned();
@@ -83,6 +83,10 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app_handle, event| {
+            #[cfg(target_os = "macos")]
+            if let RunEvent::Reopen { .. } = event {
+                focus_main_window(app_handle);
+            }
             if let RunEvent::Exit = event {
                 if let Some(state) = app_handle.try_state::<AppState>() {
                     if let Ok(mut guard) = state.servers.lock() {
@@ -293,9 +297,14 @@ fn pick_data_folder() -> Option<String> {
 
 #[tauri::command]
 fn pick_pdf_application() -> Option<String> {
-    rfd::FileDialog::new()
-        .set_title("选择 PDF 阅读应用")
-        .add_filter("Windows Applications", &["exe"])
+    let dialog = rfd::FileDialog::new().set_title("选择 PDF 阅读应用");
+    #[cfg(target_os = "macos")]
+    let dialog = dialog
+        .set_directory("/Applications")
+        .add_filter("Applications", &["app"]);
+    #[cfg(windows)]
+    let dialog = dialog.add_filter("Windows Applications", &["exe"]);
+    dialog
         .pick_file()
         .map(|path| path.to_string_lossy().into_owned())
 }
@@ -306,17 +315,35 @@ fn open_pdf_with_application(application_path: String, pdf_path: String) -> Resu
         .map_err(|error| format!("无法访问所选应用: {error}"))?;
     let pdf =
         std::fs::canonicalize(pdf_path.trim()).map_err(|error| format!("无法访问 PDF: {error}"))?;
-    if !application.is_file() || !has_extension(&application, "exe") {
-        return Err("所选路径不是有效的 Windows 应用程序".into());
+    if !valid_pdf_application(&application) {
+        return Err("所选路径不是有效的应用程序".into());
     }
     if !pdf.is_file() || !has_extension(&pdf, "pdf") {
         return Err("所选文件不是有效的 PDF".into());
     }
-    Command::new(&application)
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = Command::new("/usr/bin/open");
+        command.arg("-a").arg(&application);
+        command
+    };
+    #[cfg(not(target_os = "macos"))]
+    let mut command = Command::new(&application);
+    command
         .arg(&pdf)
         .spawn()
         .map(|_| ())
         .map_err(|error| format!("无法用所选应用打开 PDF: {error}"))
+}
+
+fn valid_pdf_application(path: &Path) -> bool {
+    if cfg!(target_os = "macos") {
+        path.is_dir() && has_extension(path, "app") && path.join("Contents/Info.plist").is_file()
+    } else if cfg!(windows) {
+        path.is_file() && has_extension(path, "exe")
+    } else {
+        path.is_file()
+    }
 }
 
 fn has_extension(path: &Path, expected: &str) -> bool {
