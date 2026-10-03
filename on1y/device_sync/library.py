@@ -87,7 +87,13 @@ def snapshot(conn: sqlite3.Connection, user_id: int) -> dict[str, dict[str, Any]
     return records
 
 
-def write_record(conn: sqlite3.Connection, user_id: int, record: dict[str, Any]) -> None:
+def write_record(
+    conn: sqlite3.Connection,
+    user_id: int,
+    record: dict[str, Any],
+    *,
+    library_platform: str | None = None,
+) -> None:
     fields = record["fields"]
     identity = record["identity"]
     if record["kind"] == "theme":
@@ -141,7 +147,7 @@ def write_record(conn: sqlite3.Connection, user_id: int, record: dict[str, Any])
             f"SELECT 1 FROM raw_items r WHERE id=? AND {is_feed_row_sql('r')}",
             (existing["id"],),
         ).fetchone()
-        if not is_feed:
+        if not is_feed and existing["platform"] != library_platform:
             raise ValueError("sync URL collides with a local non-feed item")
     if not existing:
         conn.execute(

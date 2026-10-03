@@ -60,7 +60,7 @@ export function DeviceSyncSettings({ locale }: { locale: Locale }): JSX.Element 
   const dirty = status && (url !== status.server_url || enabled !== status.enabled || key !== "");
   return (
     <section className="space-y-3 rounded-xl border border-border bg-panel/60 p-4">
-      <h4 className="text-sm font-medium">{t("跨设备同步 · 个人版", "Cross-device sync · Personal")}</h4>
+      <h4 className="text-sm font-medium">{t("跨设备同步 · 服务地址", "Cross-device sync · Relay")}</h4>
       <p className="text-xs leading-relaxed text-muted">{t(
         "Win 和 Mac 使用同一个同步地址与配对密钥。本地账号名称可以不同。服务未部署前可保持关闭；不开启不会上传数据。",
         "Use the same server and pairing key on Windows and Mac. Local usernames can differ. Leave disabled until a relay is available; disabled sync uploads nothing."
