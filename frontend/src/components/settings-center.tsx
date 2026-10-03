@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { DeviceSyncSettings } from "@/components/device-sync-settings";
+import { FolderSyncSettings } from "@/components/folder-sync-settings";
 
 import {
   deleteCookieFile,
@@ -944,8 +945,8 @@ function AccountTab(props: {
         <p className="mt-3 text-xs leading-relaxed text-muted">
           {L(
             locale,
-            "账户中心管理个人资料、账户切换和当前账户的数据。它们都保存在本机，不会自动上传到云端。",
-            "Manage your profile, account switching, and account data here. Everything stays on this device unless you export it."
+            "账户中心管理个人资料、账户切换和当前账户的数据。数据默认保存在本机；开启同步后，所选范围的资料会传到对应服务或同步文件夹。",
+            "Manage your profile, account switching, and account data here. Data stays local by default; enabling sync transfers supported content to the selected service or folder."
           )}
         </p>
       </div>
@@ -1446,6 +1447,7 @@ function AccountDataTab(props: {
 
   return (
     <div className="space-y-5">
+      <FolderSyncSettings locale={locale} />
       <DeviceSyncSettings locale={locale} />
       <section className="space-y-2">
         <h3 className="text-sm font-semibold text-foreground">{L(locale, "账户数据", "Account data")}</h3>

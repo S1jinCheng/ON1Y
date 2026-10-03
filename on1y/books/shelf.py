@@ -35,7 +35,9 @@ def _normalize_tags(tags: list[str] | None) -> list[str]:
 def count_shelf_items(storage: SqliteStorage, user_id: int) -> int:
     conn = storage._connect()
     row = conn.execute(
-        "SELECT COUNT(*) AS n FROM book_shelf_items WHERE user_id = ?",
+        "SELECT COUNT(*) AS n FROM book_shelf_items WHERE user_id = ? "
+        "AND NOT EXISTS (SELECT 1 FROM raw_items r WHERE r.id=book_shelf_items.raw_id "
+        "AND r.deleted_at IS NOT NULL)",
         (user_id,),
     ).fetchone()
     return int(row["n"]) if row else 0
@@ -50,14 +52,18 @@ def list_shelf_items(
     offset: int = 0,
 ) -> list[BookShelfItem]:
     conn = storage._connect()
-    where = ["user_id = ?"]
+    where = [
+        "user_id = ?",
+        "NOT EXISTS (SELECT 1 FROM raw_items r WHERE r.id=book_shelf_items.raw_id "
+        "AND r.deleted_at IS NOT NULL)",
+    ]
     params: list[Any] = [user_id]
     if status and status in ("reading", "read"):
         where.append("status = ?")
         params.append(status)
     sql = f"""
         SELECT * FROM book_shelf_items
-        WHERE {' AND '.join(where)}
+        WHERE {" AND ".join(where)}
         ORDER BY updated_at DESC, id DESC
         LIMIT ? OFFSET ?
     """

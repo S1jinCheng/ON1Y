@@ -54,6 +54,31 @@ export type DeviceSyncConflict = {
   device_id: string;
 };
 
+export type FolderSyncStatus = {
+  enabled: boolean;
+  folder: string;
+  suggested_folder: string;
+  library_id: string;
+  last_sync: string | null;
+  last_error: string | null;
+  pending_files: number;
+  pending_events: number;
+  records: number;
+  conflicts: { key: string; title: string; field: string; winner: string;
+    versions: { id: string; value: unknown }[] }[];
+  deleted: { key: string; title: string }[];
+};
+
+export const getFolderSync = (): Promise<FolderSyncStatus> => request("/api/folder-sync");
+export const saveFolderSync = (settings: { folder: string; enabled: boolean; create: boolean }): Promise<FolderSyncStatus> =>
+  request("/api/folder-sync", { method: "POST", body: JSON.stringify(settings) });
+export const runFolderSync = (): Promise<FolderSyncStatus> =>
+  request("/api/folder-sync/run", { method: "POST", direct: true });
+export const resolveFolderSync = (key: string, field: string, version: string): Promise<FolderSyncStatus> =>
+  request("/api/folder-sync/resolve", { method: "POST", body: JSON.stringify({ key, field, version }), direct: true });
+export const restoreFolderSync = (key: string): Promise<FolderSyncStatus> =>
+  request("/api/folder-sync/restore", { method: "POST", body: JSON.stringify({ key }), direct: true });
+
 export type DeviceSyncStatus = {
   enabled: boolean;
   server_url: string;

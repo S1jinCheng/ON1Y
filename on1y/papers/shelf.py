@@ -98,7 +98,9 @@ def find_matching_paper(
     rows = (
         storage._connect()
         .execute(
-            "SELECT * FROM paper_items WHERE user_id = ? ORDER BY id ASC",
+            "SELECT * FROM paper_items WHERE user_id = ? "
+            "AND NOT EXISTS (SELECT 1 FROM raw_items r WHERE r.id=paper_items.raw_id "
+            "AND r.deleted_at IS NOT NULL) ORDER BY id ASC",
             (user_id,),
         )
         .fetchall()
@@ -136,7 +138,12 @@ def find_matching_paper(
 def count_papers(storage: SqliteStorage, user_id: int) -> int:
     row = (
         storage._connect()
-        .execute("SELECT COUNT(*) AS n FROM paper_items WHERE user_id = ?", (user_id,))
+        .execute(
+            "SELECT COUNT(*) AS n FROM paper_items WHERE user_id = ? "
+            "AND NOT EXISTS (SELECT 1 FROM raw_items r WHERE r.id=paper_items.raw_id "
+            "AND r.deleted_at IS NOT NULL)",
+            (user_id,),
+        )
         .fetchone()
     )
     return int(row["n"]) if row else 0
@@ -153,7 +160,11 @@ def list_papers(
     limit: int = 200,
     offset: int = 0,
 ) -> list[PaperItem]:
-    where = ["user_id = ?"]
+    where = [
+        "user_id = ?",
+        "NOT EXISTS (SELECT 1 FROM raw_items r WHERE r.id=paper_items.raw_id "
+        "AND r.deleted_at IS NOT NULL)",
+    ]
     params: list[Any] = [user_id]
     if status in {"to_read", "reading", "read", "dismissed"}:
         where.append("status = ?")
@@ -205,6 +216,8 @@ def list_paper_collections(storage: SqliteStorage, user_id: int) -> list[dict[st
                 COUNT(DISTINCT paper_items.id) AS paper_count
             FROM paper_items, json_each(paper_items.zotero_collections_json) AS collection
             WHERE paper_items.user_id = ?
+              AND NOT EXISTS (SELECT 1 FROM raw_items r WHERE r.id=paper_items.raw_id
+                              AND r.deleted_at IS NOT NULL)
               AND COALESCE(json_extract(collection.value, '$.key'), '') <> ''
             GROUP BY key, name, path, parent_key
             ORDER BY path COLLATE NOCASE, key
@@ -240,6 +253,8 @@ def list_paper_folders(storage: SqliteStorage, user_id: int) -> list[dict[str, A
                 COUNT(DISTINCT paper_items.id) AS paper_count
             FROM paper_items, json_each(paper_items.folders_json) AS folder
             WHERE paper_items.user_id = ?
+              AND NOT EXISTS (SELECT 1 FROM raw_items r WHERE r.id=paper_items.raw_id
+                              AND r.deleted_at IS NOT NULL)
               AND COALESCE(json_extract(folder.value, '$.key'), '') <> ''
             GROUP BY key, name, path, parent_key
             ORDER BY path COLLATE NOCASE, key
@@ -372,9 +387,7 @@ def update_paper(
         "zotero_attachment_key": choose("zotero_attachment_key", existing.zotero_attachment_key),
         "zotero_library_type": choose("zotero_library_type", existing.zotero_library_type),
         "zotero_version": choose("zotero_version", existing.zotero_version),
-        "literature_paper_id": choose(
-            "literature_paper_id", existing.literature_paper_id
-        ),
+        "literature_paper_id": choose("literature_paper_id", existing.literature_paper_id),
     }
     for key in (
         "title",

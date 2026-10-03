@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import threading
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException
@@ -35,11 +35,13 @@ async def sync_lifespan(app: FastAPI):
         while not stop.wait(30):
             if not path.is_file():
                 continue
-            try:
+            # Each transport persists its own error for the settings UI.
+            with suppress(Exception):
                 run_sync(path)
-            except Exception:
-                # run_sync persists a sanitized error for the settings UI.
-                continue
+            with suppress(Exception):
+                from on1y.folder_sync.engine import run_folder_sync
+
+                run_folder_sync(path)
 
     thread = threading.Thread(target=worker, name="on1y-device-sync", daemon=True)
     thread.start()
@@ -50,6 +52,10 @@ async def sync_lifespan(app: FastAPI):
 
 
 def register_device_sync_routes(app: FastAPI) -> None:
+    from on1y.folder_sync.routes import register_folder_sync_routes
+
+    register_folder_sync_routes(app)
+
     @app.get("/api/device-sync")
     def status():
         storage = get_storage()

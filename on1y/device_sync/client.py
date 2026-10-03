@@ -84,6 +84,14 @@ class DeviceSync:
 
     def configure(self, user_id: int, server_url: str, token: str, enabled: bool) -> None:
         self.check_owner(user_id)
+        if (
+            enabled
+            and self.conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='folder_sync_config'"
+            ).fetchone()
+            and self.conn.execute("SELECT 1 FROM folder_sync_config WHERE enabled=1").fetchone()
+        ):
+            raise ValueError("请先关闭文件夹同步，再开启服务地址方式的跨设备同步")
         if not self.conn.execute(
             "SELECT 1 FROM users WHERE id=? AND is_active=1", (user_id,)
         ).fetchone():
