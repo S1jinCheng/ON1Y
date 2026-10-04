@@ -142,7 +142,9 @@ xmlns:epub="http://www.idpf.org/2007/ops"><head><title>Contents</title></head>
             "bidirectional_note_verified": True,
             "cloud_delivery_to_windows_verified": False,
         }
-        (local / "result.json").write_text(json.dumps(report, ensure_ascii=False, indent=2))
+        (local / "result.json").write_text(
+            json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
         print(json.dumps(report, ensure_ascii=False, indent=2))
     finally:
         for store in stores:

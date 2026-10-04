@@ -152,6 +152,101 @@ def snapshot(conn: sqlite3.Connection, user_id: int, staging: Path) -> dict[str,
     return records
 
 
+def pending_literature_fields(conn: sqlite3.Connection, user_id: int, paper_id: int) -> set[str]:
+    """Fields waiting to be committed to this device's canonical Literature Vault."""
+
+    if not conn.execute(
+        """SELECT 1 FROM sqlite_master
+        WHERE type='table' AND name='folder_sync_literature_outbox'"""
+    ).fetchone():
+        return set()
+
+    return {
+        str(row[0])
+        for row in conn.execute(
+            """SELECT field FROM folder_sync_literature_outbox
+            WHERE user_id=? AND paper_id=?""",
+            (user_id, paper_id),
+        )
+    }
+
+
+def drain_literature_outbox(conn: sqlite3.Connection, user_id: int) -> int:
+    """Apply durable cross-database updates after the main SQLite commit."""
+
+    rows = conn.execute(
+        """SELECT paper_id,literature_paper_id,field,data
+        FROM folder_sync_literature_outbox WHERE user_id=?
+        ORDER BY paper_id,field""",
+        (user_id,),
+    ).fetchall()
+    if not rows:
+        return 0
+
+    from on1y.papers.literature import LiteratureVault, local_vault_paper_ids
+
+    expected_ids = list(dict.fromkeys(str(row["literature_paper_id"]) for row in rows))
+    owned_ids = local_vault_paper_ids(user_id, expected_ids)
+    if any(paper_id not in owned_ids for paper_id in expected_ids):
+        raise ValueError(
+            "当前 Literature Vault 不包含待同步论文，已暂停写入；请恢复原 Vault 后重试"
+        )
+    vault = LiteratureVault(user_id)
+    drained = 0
+    for row in rows:
+        value = json.loads(row["data"])
+        if row["field"] == "status":
+            vault.set_paper_statuses([row["literature_paper_id"]], value)
+        elif row["field"] == "importance":
+            vault.set_paper_importance(row["literature_paper_id"], value)
+        else:  # The table constraint protects new rows; fail closed on legacy corruption.
+            raise ValueError("unsupported Literature bridge field")
+        with conn:
+            deleted = conn.execute(
+                """DELETE FROM folder_sync_literature_outbox
+                WHERE user_id=? AND paper_id=? AND field=? AND data=?""",
+                (user_id, row["paper_id"], row["field"], row["data"]),
+            ).rowcount
+        drained += int(bool(deleted))
+    return drained
+
+
+def _queue_literature_updates(
+    conn: sqlite3.Connection,
+    user_id: int,
+    row: sqlite3.Row,
+    fields: dict,
+    values: dict,
+    *,
+    created: bool,
+) -> None:
+    literature_id = str(
+        values.get("literature_paper_id") or row["literature_paper_id"] or ""
+    ).strip()
+    if not literature_id:
+        return
+    updates = {}
+    if "library/status" in fields and (created or values.get("status") != row["status"]):
+        updates["status"] = values.get("status")
+    if "meta/importance" in fields and (created or values.get("importance") != row["importance"]):
+        updates["importance"] = values.get("importance")
+    if not updates:
+        return
+
+    from on1y.papers.literature import local_vault_has_paper
+
+    if not local_vault_has_paper(user_id, literature_id):
+        return
+    for field, value in updates.items():
+        conn.execute(
+            """INSERT INTO folder_sync_literature_outbox(
+            user_id,paper_id,literature_paper_id,field,data) VALUES (?,?,?,?,?)
+            ON CONFLICT(user_id,paper_id,field) DO UPDATE SET
+            literature_paper_id=excluded.literature_paper_id,data=excluded.data""",
+            (user_id, row["id"], literature_id, field, encode(value)),
+        )
+
+
 def write_record(conn: sqlite3.Connection, user_id: int, record: dict) -> None:
     kind, fields = record["kind"], record["fields"]
     if kind not in TABLES:
@@ -168,8 +263,47 @@ def write_record(conn: sqlite3.Connection, user_id: int, record: dict) -> None:
         if mapping
         else None
     )
+    if row is None and kind == "paper":
+        literature_id = str(fields.get("library/literature_paper_id") or "").strip()
+        if literature_id:
+            candidate = conn.execute(
+                """SELECT * FROM paper_items
+                WHERE user_id=? AND literature_paper_id=? ORDER BY id LIMIT 1""",
+                (user_id, literature_id),
+            ).fetchone()
+            existing_mapping = (
+                conn.execute(
+                    """SELECT * FROM folder_sync_mapping
+                    WHERE user_id=? AND kind='paper' AND local_id=?""",
+                    (user_id, candidate["id"]),
+                ).fetchone()
+                if candidate is not None
+                else None
+            )
+            if candidate is not None:
+                row = candidate
+                if existing_mapping is None:
+                    conn.execute(
+                        "INSERT INTO folder_sync_mapping VALUES (?,?,?,?,?)",
+                        (record["key"], user_id, kind, row["id"], record["identity"]),
+                    )
+                elif record["key"] < existing_mapping["key"]:
+                    # Two independently seeded projections can have different
+                    # portable identities. Both devices choose the same key;
+                    # the next capture emits a tombstone for the losing key.
+                    conn.execute(
+                        """UPDATE folder_sync_mapping SET key=?,identity=?
+                        WHERE key=? AND user_id=?""",
+                        (
+                            record["key"],
+                            record["identity"],
+                            existing_mapping["key"],
+                            user_id,
+                        ),
+                    )
     if row is None and fields.get("_deleted"):
         return
+    created = row is None
     if row is None:
         local_id = conn.execute(
             f"INSERT INTO {table}(user_id,title,status) VALUES (?,?,?)",
@@ -216,6 +350,8 @@ def write_record(conn: sqlite3.Connection, user_id: int, record: dict) -> None:
     for name in ("authors_json", "links_json", "zotero_collections_json"):
         if name in values:
             values[name] = values[name] or "[]"
+    if kind == "paper":
+        _queue_literature_updates(conn, user_id, row, fields, values, created=created)
     conn.execute(
         f"UPDATE {table} SET {','.join(name + '=?' for name in values)},"
         "updated_at=datetime('now') WHERE id=? AND user_id=?",

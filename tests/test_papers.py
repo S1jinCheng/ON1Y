@@ -146,6 +146,104 @@ def test_papers_api_roundtrip(storage, monkeypatch) -> None:
     assert client.delete(f"/api/papers/{item_id}").json() == {"ok": True}
 
 
+def test_remote_literature_id_without_local_vault_updates_main_library(
+    storage, monkeypatch
+) -> None:
+    from fastapi.testclient import TestClient
+    from on1y.papers.literature import LiteratureVaultUnavailableError
+    from on1y.papers.models import PaperCreate
+    from on1y.papers.shelf import create_paper
+
+    item = create_paper(
+        storage,
+        1,
+        PaperCreate(
+            title="Remote Literature paper",
+            literature_paper_id="remote-only-literature-id",
+        ),
+    )
+
+    class UnexpectedVault:
+        def __init__(self, _user_id: int) -> None:
+            raise AssertionError("an opaque remote Literature id must not initialize a local Vault")
+
+    monkeypatch.setattr("on1y.papers.literature.LiteratureVault", UnexpectedVault)
+    monkeypatch.setattr(
+        "on1y.papers.literature.local_vault_has_paper",
+        lambda _user_id, _paper_id: False,
+    )
+    monkeypatch.setattr("on1y.adapters.sqlite_storage.get_storage", lambda: storage)
+    from on1y.web.app import create_app
+
+    client = TestClient(create_app())
+    response = client.patch(
+        f"/api/papers/{item.id}",
+        json={"status": "read", "importance": 4},
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "read"
+    assert response.json()["importance"] == 4
+
+    def unavailable(_user_id: int, _paper_id: str) -> bool:
+        raise LiteratureVaultUnavailableError("vault temporarily unavailable")
+
+    monkeypatch.setattr("on1y.papers.literature.local_vault_has_paper", unavailable)
+    blocked = client.patch(f"/api/papers/{item.id}", json={"status": "dismissed"})
+    assert blocked.status_code == 409
+    assert blocked.json()["detail"] == "vault temporarily unavailable"
+
+
+def test_bulk_status_writes_only_local_literature_ids(storage, monkeypatch) -> None:
+    from fastapi.testclient import TestClient
+    from on1y.papers.literature import LiteratureVaultUnavailableError
+
+    calls: list[tuple[list[str], str]] = []
+
+    class FakeLiteratureVault:
+        def __init__(self, _user_id: int) -> None:
+            pass
+
+        @staticmethod
+        def set_paper_statuses(paper_ids: list[str], status: str):
+            calls.append((paper_ids, status))
+            return {"updated": len(paper_ids), "affected_batches": []}
+
+    monkeypatch.setattr("on1y.papers.literature.LiteratureVault", FakeLiteratureVault)
+    monkeypatch.setattr(
+        "on1y.papers.literature.local_vault_paper_ids",
+        lambda _user_id, _paper_ids: {"local-literature-id"},
+    )
+    monkeypatch.setattr(
+        "on1y.papers.literature.sync_published_to_shelf",
+        lambda *_args, **_kwargs: {"created": 0, "updated": 0, "unchanged": 0},
+    )
+    monkeypatch.setattr("on1y.adapters.sqlite_storage.get_storage", lambda: storage)
+    from on1y.web.app import create_app
+
+    client = TestClient(create_app())
+    response = client.post(
+        "/api/papers/bulk-status",
+        json={
+            "literature_paper_ids": ["local-literature-id", "remote-literature-id"],
+            "status": "read",
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["updated"] == 1
+    assert calls == [(["local-literature-id"], "read")]
+
+    def unavailable(_user_id: int, _paper_ids: list[str]) -> set[str]:
+        raise LiteratureVaultUnavailableError("vault temporarily unavailable")
+
+    monkeypatch.setattr("on1y.papers.literature.local_vault_paper_ids", unavailable)
+    blocked = client.post(
+        "/api/papers/bulk-status",
+        json={"literature_paper_ids": ["local-literature-id"], "status": "read"},
+    )
+    assert blocked.status_code == 409
+    assert blocked.json()["detail"] == "vault temporarily unavailable"
+
+
 def test_zotero_item_mapping() -> None:
     from on1y.papers.zotero import _authors, _tags, _venue, _year
 

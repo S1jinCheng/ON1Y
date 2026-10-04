@@ -27,8 +27,8 @@ def register_paper_routes(app: FastAPI) -> None:
         limit: int = Query(default=200, ge=1, le=500),
         offset: int = Query(default=0, ge=0),
     ) -> dict[str, Any]:
-        from on1y.papers.models import paper_dump
         from on1y.papers.literature import sync_published_to_shelf
+        from on1y.papers.models import paper_dump
         from on1y.papers.shelf import (
             count_papers,
             list_paper_collections,
@@ -113,11 +113,20 @@ def register_paper_routes(app: FastAPI) -> None:
             if existing is None:
                 raise HTTPException(status_code=404, detail="paper not found")
             if payload.status is not None and existing.literature_paper_id:
-                from on1y.papers.literature import LiteratureVault
-
-                LiteratureVault(uid).set_paper_statuses(
-                    [existing.literature_paper_id], payload.status
+                from on1y.papers.literature import (
+                    LiteratureVault,
+                    LiteratureVaultUnavailableError,
+                    local_vault_has_paper,
                 )
+
+                try:
+                    vault_owned = local_vault_has_paper(uid, existing.literature_paper_id)
+                except LiteratureVaultUnavailableError as exc:
+                    raise HTTPException(status_code=409, detail=str(exc)) from exc
+                if vault_owned:
+                    LiteratureVault(uid).set_paper_statuses(
+                        [existing.literature_paper_id], payload.status
+                    )
             item = update_paper(storage, uid, item_id, payload)
             if item is None:
                 raise HTTPException(status_code=404, detail="paper not found")
@@ -137,7 +146,12 @@ def register_paper_routes(app: FastAPI) -> None:
 
     @app.post("/api/papers/bulk-status")
     def papers_bulk_status(body: dict[str, Any]) -> dict[str, Any]:
-        from on1y.papers.literature import LiteratureVault, sync_published_to_shelf
+        from on1y.papers.literature import (
+            LiteratureVault,
+            LiteratureVaultUnavailableError,
+            local_vault_paper_ids,
+            sync_published_to_shelf,
+        )
         from on1y.papers.shelf import bulk_update_paper_status, get_paper
 
         status = str(body.get("status") or "").strip()
@@ -166,11 +180,16 @@ def register_paper_routes(app: FastAPI) -> None:
                 if item.literature_paper_id:
                     literature_ids.append(item.literature_paper_id)
             literature_ids = list(dict.fromkeys(literature_ids))
+            try:
+                owned_ids = local_vault_paper_ids(uid, literature_ids)
+            except LiteratureVaultUnavailableError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            local_literature_ids = [value for value in literature_ids if value in owned_ids]
             vault_result = {"updated": 0, "affected_batches": []}
-            if literature_ids:
+            if local_literature_ids:
                 try:
                     vault_result = LiteratureVault(uid).set_paper_statuses(
-                        literature_ids, status
+                        local_literature_ids, status
                     )
                 except LookupError as exc:
                     raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -179,7 +198,7 @@ def register_paper_routes(app: FastAPI) -> None:
             return {
                 "status": status,
                 "updated": len(set(item_ids)) + len(
-                    [value for value in literature_ids if value not in {
+                    [value for value in local_literature_ids if value not in {
                         item.literature_paper_id for item in updated_items
                     }]
                 ),

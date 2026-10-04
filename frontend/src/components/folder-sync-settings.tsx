@@ -57,13 +57,13 @@ export function FolderSyncSettings({ locale }: { locale: Locale }): JSX.Element 
   return <section className="space-y-3 rounded-xl border border-border bg-panel/60 p-4">
     <h4 className="text-sm font-medium">{t("iCloud 资料库同步 · 试用", "iCloud library sync · Preview")}</h4>
     <p className="text-xs leading-relaxed text-muted">{t(
-      "Mac 和 Windows 选择同一个 iCloud Drive 资料库文件夹。支持文章、书架、Paper、笔记、标签、阅读状态和 PDF/电子书，无需同步服务器。",
-      "Choose the same iCloud Drive library on Mac and Windows. Sync articles, books, papers, notes, tags, reading state and PDF/ebooks without a relay server."
+      "Mac 和 Windows 选择同一个 iCloud Drive 协议目录。它同步当前账号的文章、书架、Paper、笔记、标签、阅读状态和已关联附件，不会原样镜像 Literature Vault 的目录结构。",
+      "Choose the same iCloud Drive protocol folder on Mac and Windows. It syncs supported account records and linked attachments; it does not mirror the Literature Vault directory tree."
     )}</p>
     <label className="block space-y-1 text-xs">
       <span>{t("资料库文件夹", "Library folder")}</span>
       <input aria-label={t("资料库文件夹", "Library folder")} value={folder} disabled={busy || !status}
-        onChange={e => setFolder(e.target.value)} placeholder="iCloud Drive / On1y Library"
+        onChange={e => setFolder(e.target.value)} placeholder="iCloud Drive / On1y / Library"
         className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm" />
     </label>
     <button className={button} type="button" disabled={busy || !status} onClick={() => void (async () => {
@@ -78,8 +78,8 @@ export function FolderSyncSettings({ locale }: { locale: Locale }): JSX.Element 
       {t("开启文件夹自动同步", "Enable automatic folder sync")}
     </label>
     <p className="text-xs leading-relaxed text-muted">{t(
-      "首次使用请把资料库设为保持下载，Windows 选择始终保留在此设备上。修改在 iCloud 传输完成后才会到达另一台电脑。本机数据库、Cookie、密码和 API Key 不上传；请先关闭下面的服务地址同步。",
-      "Keep this folder downloaded; on Windows choose Always keep on this device. Changes reach the other computer after iCloud transfers them. Local databases, cookies, passwords and API keys stay local. Disable relay sync below first."
+      "请选择独立的协议专用目录；首次创建必须完全为空，不要选择 Paper 设置中的现有 Literature Vault，也不要放在它的内部。Windows 请设为“始终保留在此设备上”。本机数据库、Cookie、密码和 API Key 不上传；请先关闭下面的服务地址同步。",
+      "Use a separate protocol-only folder. First creation requires it to be completely empty; do not choose or nest it inside the existing Literature Vault. On Windows, choose Always keep on this device. Local databases, cookies, passwords and API keys stay local. Disable relay sync below first."
     )}</p>
     <div className="flex flex-wrap gap-2">
       <button className={button} type="button" disabled={busy || !status || !folder.trim()} onClick={() => void save()}>{t("保存文件夹设置", "Save folder settings")}</button>

@@ -7,18 +7,20 @@
 ## 第一次连接
 
 1. 在 Mac 和 Windows 登录同一个 Apple 账户，并启用 iCloud Drive。
-2. 第一台电脑选择 iCloud Drive 中的一个新空文件夹，例如 `On1y Library`，勾选创建新资料库和开启文件夹自动同步，然后保存。
+2. 第一台电脑选择 iCloud Drive 中的一个新空文件夹，例如 `On1y/Library`，勾选创建新资料库和开启文件夹自动同步，然后保存。它是协议专用目录，不能选择 Paper 设置中已有的 Literature Vault，也不能与 Vault 互相包含。
 3. 在 Finder 中将资料库设为保持下载；Windows 文件资源管理器中选择始终保留在此设备上。
 4. 等待 `on1y-library.json` 到达 Windows。Windows 的 On1y 选择对应文件夹并开启同步，**不要再次创建资料库**。
 5. 点击同步资料库。分别检查书架、Paper、附件能否打开，再在另一台电脑修改一条笔记验证返回。
 
 必须关闭旧的服务地址同步后才能开启文件夹同步。两个同步方式不能同时使用。已有资料库只允许迁移到包含同一份标识的目录；标识缺失或变更时暂停同步，不能通过新建标识修复。
 
+不要为了创建资料库而清空已有的 `Literature` 文件夹。该功能不会原样镜像其中的批次 Markdown、`.obsidian`、`_templates`、`_system/papers.db` 或 Original/Bilingual 目录树；如果已有 FreeFileSync 等工具在镜像 Vault，应把 `On1y/Library` 放在该镜像范围之外。
+
 建议先用独立测试资料库。`scripts/try-icloud-sync.py` 只生成示例 PDF 和 EPUB，并创建两个独立本机数据库验证双向修改，不读取真实账户资料：
 
 ```sh
 .venv/bin/python scripts/try-icloud-sync.py \
-  --folder "$HOME/Library/Mobile Documents/com~apple~CloudDocs/On1y Sync Trial" \
+  --folder "$HOME/Library/Mobile Documents/com~apple~CloudDocs/On1y/Test/Sync Trial" \
   --local ./build/icloud-trial
 ```
 
@@ -34,6 +36,8 @@
 本机数据库、Cookie、账号密码、API Key、Zotero 登录配置、本地绝对路径、抓取队列不进入同步文件夹。论文图像缓存、外部文件夹监控设置、内容关系暂不纳入同步。Zotero 集合名称可同步，本地目录结构和 Zotero 附件关联配置各设备独立保留。
 
 同步后 On1y 使用本机管理的附件副本，原始导入文件保留。通过 On1y 打开副本后保存的编辑会同步；原始导入目录不是通用双向文件镜像。缺少附件或云端文件未下载时，不把它当作删除。更换资料时请从 On1y 内操作。
+
+当前范围是整个本地账号中受支持的文章、书架和 Paper，并非只同步 Literature。首次启用前请在确认框核对范围与 iCloud 空间。
 
 ## 冲突、删除与恢复
 

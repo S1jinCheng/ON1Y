@@ -1,7 +1,15 @@
 from pathlib import Path
 
 import pymupdf
-from on1y.papers.literature import LiteratureVault, normalize_arxiv, normalize_doi
+import pytest
+from on1y.papers.literature import (
+    LiteratureVault,
+    freeform_note_body,
+    normalize_arxiv,
+    normalize_doi,
+    parse_literature_note_importance,
+    update_literature_note_importance,
+)
 from on1y.papers.settings_store import PaperSettings, paper_settings_public_view
 from on1y.papers.translation import (
     BabelDocSubprocessAdapter,
@@ -22,6 +30,73 @@ def make_pdf(path: Path) -> None:
 def test_identifier_normalization() -> None:
     assert normalize_doi("https://doi.org/10.1145/ABC.1?x=1") == "10.1145/abc.1"
     assert normalize_arxiv("https://arxiv.org/pdf/2501.01234v2.pdf") == "2501.01234"
+
+
+def test_literature_rating_block_uses_numeric_values_and_preserves_prose() -> None:
+    body = (
+        "---\npaper_id: HAI-1\n---\n# Paper\n\n"
+        "<!-- on1y:pdf-links:start -->\n[[paper.pdf]]\n"
+        "<!-- on1y:pdf-links:end -->\n\nMy own thought.\n"
+    )
+    rated = update_literature_note_importance(body, 4)
+    assert "- On1y 评分: 4" in rated
+    assert parse_literature_note_importance(rated) == (True, True, 4)
+    assert "My own thought." in rated
+    assert freeform_note_body(rated) == "My own thought."
+
+    cleared = update_literature_note_importance(rated, None)
+    assert "- On1y 评分: 未评分" in cleared
+    assert parse_literature_note_importance(cleared) == (True, True, None)
+    malformed = cleared.replace("未评分", "6")
+    assert parse_literature_note_importance(malformed) == (True, False, None)
+
+
+def test_local_vault_ownership_check_is_read_only(tmp_path: Path, monkeypatch) -> None:
+    from on1y.papers import literature as literature_module
+
+    root = tmp_path / "Literature"
+    monkeypatch.setattr(literature_module, "resolve_literature_vault", lambda _user_id: root)
+
+    assert not literature_module.local_vault_has_paper(1, "missing")
+    assert not root.exists()
+
+    vault = LiteratureVault(1, root)
+    created = vault.create_batch(
+        field="Agents",
+        field_code="AG",
+        batch_date="2026-10-02",
+        records=[{"title": "Locally owned paper"}],
+    )
+    paper_id = created["accepted"][0]["id"]
+    assert literature_module.local_vault_has_paper(1, paper_id)
+    assert not literature_module.local_vault_has_paper(1, "orphan")
+
+
+def test_local_vault_ownership_check_does_not_hide_read_failures(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from on1y.papers import literature as literature_module
+
+    root = tmp_path / "Literature"
+    vault = LiteratureVault(1, root)
+    created = vault.create_batch(
+        field="Agents",
+        field_code="AG",
+        batch_date="2026-10-02",
+        records=[{"title": "Locally owned paper"}],
+    )
+    paper_id = created["accepted"][0]["id"]
+    monkeypatch.setattr(literature_module, "resolve_literature_vault", lambda _user_id: root)
+
+    def unavailable(*_args, **_kwargs):
+        raise literature_module.sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(literature_module.sqlite3, "connect", unavailable)
+    with pytest.raises(
+        literature_module.LiteratureVaultUnavailableError,
+        match="暂时不可读取",
+    ):
+        literature_module.local_vault_has_paper(1, paper_id)
 
 
 def test_vault_batch_publish_and_feedback(tmp_path: Path) -> None:

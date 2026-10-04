@@ -82,16 +82,19 @@ class DeviceSync:
         if config and config["user_id"] != user_id:
             raise ValueError("此设备的同步已绑定另一个本地账号，请切换回原账号")
 
-    def configure(self, user_id: int, server_url: str, token: str, enabled: bool) -> None:
-        self.check_owner(user_id)
+    def check_folder_sync(self) -> None:
         if (
-            enabled
-            and self.conn.execute(
+            self.conn.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name='folder_sync_config'"
             ).fetchone()
             and self.conn.execute("SELECT 1 FROM folder_sync_config WHERE enabled=1").fetchone()
         ):
             raise ValueError("请先关闭文件夹同步，再开启服务地址方式的跨设备同步")
+
+    def configure(self, user_id: int, server_url: str, token: str, enabled: bool) -> None:
+        self.check_owner(user_id)
+        if enabled:
+            self.check_folder_sync()
         if not self.conn.execute(
             "SELECT 1 FROM users WHERE id=? AND is_active=1", (user_id,)
         ).fetchone():
@@ -258,6 +261,7 @@ class DeviceSync:
         config = self.config()
         if not config or not config["enabled"]:
             raise ValueError("请先开启跨设备同步")
+        self.check_folder_sync()
         self.capture(user_id, config["device_id"])
         self.handshake(client)
         batch, size = [], 0
@@ -316,6 +320,7 @@ def run_sync(path: Path, user_id: int | None = None, *, resolution: tuple[str, s
             active = sync.conn.execute("SELECT is_active FROM users WHERE id=?", (uid,)).fetchone()
             if not active or not active[0]:
                 raise ValueError("绑定的本地账号已停用")
+            sync.check_folder_sync()
             with httpx.Client(
                 base_url=validate_url(config["server_url"]),
                 headers={"Authorization": f"Bearer {config['token']}"},

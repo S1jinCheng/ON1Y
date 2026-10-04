@@ -51,8 +51,13 @@ def digest(path: Path) -> str:
 def available(path: Path) -> bool:
     if not path.is_file():
         return False
-    flags = getattr(path.stat(), "st_flags", 0)
-    return not flags & getattr(stat, "UF_DATALESS", 0x40000000)
+    info = path.stat()
+    flags = getattr(info, "st_flags", 0)
+    if flags & getattr(stat, "UF_DATALESS", 0x40000000):
+        return False
+    attributes = getattr(info, "st_file_attributes", 0)
+    windows_placeholder = 0x1000 | 0x40000 | 0x400000
+    return not attributes & windows_placeholder
 
 
 def signature(path: Path) -> str:

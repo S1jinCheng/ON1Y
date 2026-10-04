@@ -8,8 +8,10 @@ arrival order, detect concurrency. Missing parents wait for a later cloud pass.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import sys
+from functools import lru_cache
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -32,14 +34,34 @@ from on1y.folder_sync.protocol import MAX_EVENT_BYTES, VERSION, Event
 MANIFEST = "on1y-library.json"
 
 
+@lru_cache(maxsize=1)
 def suggested_folder() -> str:
     if sys.platform == "darwin":
         root = Path.home() / "Library/Mobile Documents/com~apple~CloudDocs"
     else:
-        root = Path.home() / "iCloudDrive"
-        if not root.is_dir():
-            root = Path.home() / "iCloud Drive"
-    return str(root / "On1y Library") if root.is_dir() else ""
+        candidates = [Path.home() / "iCloudDrive", Path.home() / "iCloud Drive"]
+        if sys.platform == "win32":
+            drives = (
+                os.listdrives()
+                if hasattr(os, "listdrives")
+                else [
+                    f"{chr(letter)}:/"
+                    for letter in range(ord("A"), ord("Z") + 1)
+                    if Path(f"{chr(letter)}:/").is_dir()
+                ]
+            )
+            for drive in drives:
+                volume = Path(drive)
+                candidates.extend(
+                    (
+                        volume / "iCloudDrive",
+                        volume / "iCloud Drive",
+                        volume / "iCloud" / "iCloudDrive",
+                        volume / "iCloud" / "iCloud Drive",
+                    )
+                )
+        root = next((candidate for candidate in candidates if candidate.is_dir()), None)
+    return str(root / "On1y" / "Library") if root is not None and root.is_dir() else ""
 
 
 class FolderSync:
@@ -48,6 +70,7 @@ class FolderSync:
         self.conn = storage._connect()
         self.cache = storage.db_path.parent / "folder-sync-files"
         self.staging = storage.db_path.parent / "folder-sync-staging"
+        self._last_clock: int | None = None
         self.conn.executescript("""
             CREATE TABLE IF NOT EXISTS folder_sync_config (
                 id INTEGER PRIMARY KEY CHECK(id=1), user_id INTEGER NOT NULL,
@@ -64,6 +87,12 @@ class FolderSync:
                 key TEXT PRIMARY KEY, data TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS folder_sync_file_cache (
                 path TEXT PRIMARY KEY, signature TEXT NOT NULL, data TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS folder_sync_literature_outbox (
+                user_id INTEGER NOT NULL, paper_id INTEGER NOT NULL,
+                literature_paper_id TEXT NOT NULL,
+                field TEXT NOT NULL CHECK(field IN ('status','importance')),
+                data TEXT NOT NULL,
+                PRIMARY KEY(user_id,paper_id,field));
         """)
 
     def config(self) -> dict | None:
@@ -105,6 +134,11 @@ class FolderSync:
         db_dir = self.storage.db_path.parent.resolve()
         if db_dir.is_relative_to(root) or root.is_relative_to(db_dir):
             raise ValueError("同步目录必须与 On1y 本机数据库目录分开")
+        from on1y.papers.settings_store import resolve_literature_vault
+
+        vault = resolve_literature_vault(user_id).resolve(strict=False)
+        if root == vault or root.is_relative_to(vault) or vault.is_relative_to(root):
+            raise ValueError("同步资料库文件夹必须与 Literature Vault 分开，不能互相包含")
         if not root.parent.is_dir():
             raise ValueError("上级目录不存在，请先启用 iCloud Drive 或选择现有目录")
         manifest = safe_child(root, MANIFEST)
@@ -246,12 +280,14 @@ class FolderSync:
 
     def add_event(self, record: dict, patch: dict, heads: dict) -> str:
         config = self.config()
-        clock = max((e["clock"] for e in self.events()), default=0) + 1
+        if self._last_clock is None:
+            self._last_clock = max((e["clock"] for e in self.events()), default=0)
+        self._last_clock += 1
         event = Event(
             library_id=config["library_id"],
             id=uuid4(),
             device_id=config["device_id"],
-            clock=clock,
+            clock=self._last_clock,
             kind=record["kind"],
             identity=record["identity"],
             patch=patch,
@@ -265,6 +301,10 @@ class FolderSync:
         return event["id"]
 
     def capture(self, user_id: int) -> dict:
+        # Compute the existing maximum once, then allocate clocks in memory.
+        # Re-reading and decoding every prior event for every new record makes
+        # a first full-library capture quadratic on several thousand items.
+        self._last_clock = None
         with self.conn:
             self.conn.execute("BEGIN IMMEDIATE")
             local = records.snapshot(self.conn, user_id, self.staging)
@@ -375,6 +415,9 @@ class FolderSync:
                     "INSERT OR IGNORE INTO folder_sync_events VALUES (?,?)",
                     (event["id"], encode(event)),
                 )
+        # Incoming devices may have advanced the Lamport clock. Any later
+        # resolve/restore operation must recompute from the combined event set.
+        self._last_clock = None
         state, pending_events = self.state()
         paths = {}
         pending_files = 0
@@ -435,6 +478,7 @@ class FolderSync:
                 pending_files=?,pending_events=? WHERE id=1""",
                 (now(), pending_files, pending_events + waiting),
             )
+        records.drain_literature_outbox(self.conn, user_id)
         return self.status(user_id)
 
     def resolve(self, user_id: int, key: str, field: str, version: str) -> None:

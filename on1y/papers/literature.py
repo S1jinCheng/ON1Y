@@ -23,6 +23,7 @@ from uuid import uuid4
 import httpx
 import yaml
 
+from on1y.knowledge.importance import normalize_importance
 from on1y.papers.settings_store import resolve_literature_vault
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,18 @@ DEFAULT_PAPER_NOTE_TEMPLATE = (
 _LEGACY_NOTE_HEADINGS = re.compile(
     r"(?m)^## (?:My Summary|Important Points|Problems / Criticism|Questions|Ideas|Connections)"
     r"[ \t]*(?:\r?\n|$)"
+)
+_RATING_BLOCK_RE = re.compile(
+    r"<!--\s*on1y:rating:start\s*-->.*?<!--\s*on1y:rating:end\s*-->",
+    re.IGNORECASE | re.DOTALL,
+)
+_RATING_LINE_RE = re.compile(
+    r"^[ \t]*[-*][ \t]*(?:On1y[ \t]*)?(?:评分|rating)[ \t]*[:：][ \t]*([^\r\n]*)$",
+    re.IGNORECASE | re.MULTILINE,
+)
+_PDF_LINK_BLOCK_RE = re.compile(
+    r"<!--\s*on1y:pdf-links:start\s*-->.*?<!--\s*on1y:pdf-links:end\s*-->",
+    re.IGNORECASE | re.DOTALL,
 )
 
 SCHEMA = """
@@ -162,6 +175,116 @@ def remove_legacy_note_headings(body: str) -> str:
     return cleaned.rstrip() + "\n"
 
 
+class LiteratureVaultUnavailableError(ValueError):
+    """The configured Vault exists but cannot currently be checked safely."""
+
+
+def local_vault_paper_ids(user_id: int, paper_ids: list[str]) -> set[str]:
+    """Return locally owned IDs without creating or initializing the Vault.
+
+    A missing Vault/database is a definite empty result. An existing database
+    that cannot be read is different: callers must pause and retry instead of
+    treating a transient lock or I/O failure as proof that a paper is remote.
+    """
+
+    identifiers = list(dict.fromkeys(str(paper_id or "").strip() for paper_id in paper_ids))
+    identifiers = [identifier for identifier in identifiers if identifier]
+    if not identifiers:
+        return set()
+    root = resolve_literature_vault(user_id).resolve(strict=False)
+    db_path = root / "_system" / "papers.db"
+    if not db_path.is_file():
+        return set()
+    try:
+        uri = db_path.resolve(strict=False).as_uri() + "?mode=ro"
+        with closing(sqlite3.connect(uri, uri=True, timeout=5)) as conn:
+            table = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='papers'"
+            ).fetchone()
+            if not table:
+                return set()
+            placeholders = ",".join("?" for _ in identifiers)
+            return {
+                str(row[0])
+                for row in conn.execute(
+                    f"SELECT id FROM papers WHERE id IN ({placeholders})", identifiers
+                )
+            }
+    except (OSError, sqlite3.Error, ValueError) as exc:
+        raise LiteratureVaultUnavailableError(
+            "Literature Vault 暂时不可读取，已暂停更新，请稍后重试"
+        ) from exc
+
+
+def local_vault_has_paper(user_id: int, paper_id: str) -> bool:
+    """Check one local Vault paper without hiding transient read failures."""
+
+    identifier = str(paper_id or "").strip()
+    return bool(identifier and identifier in local_vault_paper_ids(user_id, [identifier]))
+
+
+def parse_literature_note_importance(body: str) -> tuple[bool, bool, int | None]:
+    """Return ``(present, valid, value)`` for a Literature note rating line."""
+
+    block = _RATING_BLOCK_RE.search(body or "")
+    source = block.group(0) if block else (body or "")
+    line = _RATING_LINE_RE.search(source)
+    if line is None:
+        return False, False, None
+    cleaned = str(line.group(1) or "").strip().strip("`*_ ")
+    if cleaned.casefold() in {
+        "",
+        "0",
+        "无",
+        "未评分",
+        "取消",
+        "清除",
+        "none",
+        "null",
+        "clear",
+        "unrated",
+    }:
+        return True, True, None
+    match = re.fullmatch(r"([1-5])(?:\s*/\s*5)?", cleaned)
+    if match:
+        return True, True, int(match.group(1))
+    return True, False, None
+
+
+def literature_rating_block(importance: int | None) -> str:
+    normalized = normalize_importance(importance)
+    rating = str(normalized) if normalized is not None else "未评分"
+    return "\n".join(
+        [
+            "<!-- on1y:rating:start -->",
+            f"- On1y 评分: {rating}",
+            "<!-- 将上面的评分改为 1-5；写“未评分”可清除 -->",
+            "<!-- on1y:rating:end -->",
+        ]
+    )
+
+
+def update_literature_note_importance(body: str, importance: int | None) -> str:
+    """Replace or insert the managed rating block without touching reader prose."""
+
+    managed = literature_rating_block(importance)
+    current = body or ""
+    if _RATING_BLOCK_RE.search(current):
+        return _RATING_BLOCK_RE.sub(lambda _match: managed, current, count=1)
+    loose_line = _RATING_LINE_RE.search(current)
+    if loose_line is not None:
+        return current[: loose_line.start()] + managed + current[loose_line.end() :]
+
+    anchor = _PDF_LINK_BLOCK_RE.search(current)
+    if anchor is None:
+        anchor = re.search(r"(?m)^# [^\r\n]*$", current)
+    if anchor is None:
+        return current.rstrip() + "\n\n" + managed + "\n"
+    prefix = current[: anchor.end()].rstrip()
+    suffix = current[anchor.end() :].lstrip("\r\n")
+    return prefix + "\n\n" + managed + ("\n\n" + suffix if suffix else "\n")
+
+
 def freeform_note_body(body: str) -> str:
     """Return only what the reader wrote in a free-form paper note."""
 
@@ -172,6 +295,8 @@ def freeform_note_body(body: str) -> str:
         cleaned,
         count=1,
     )
+    cleaned = _RATING_BLOCK_RE.sub("", cleaned, count=1)
+    cleaned = _RATING_LINE_RE.sub("", cleaned, count=1)
     cleaned = re.sub(r"(?m)^# [^\r\n]*(?:\r?\n|$)", "", cleaned, count=1)
     cleaned = remove_legacy_note_headings(cleaned)
     return cleaned.strip()
@@ -471,6 +596,49 @@ class LiteratureVault:
             "paper_ids": unique_ids,
             "status": status,
             "affected_batches": affected,
+        }
+
+    def set_paper_importance(self, paper_id: str, importance: int | None) -> dict[str, Any]:
+        """Write a 1–5 On1y rating into one published Literature note."""
+
+        normalized = normalize_importance(importance)
+        if importance is not None and normalized is None:
+            raise ValueError("importance must be between 1 and 5")
+        self.initialize()
+        with closing(self.connect()) as conn:
+            row = conn.execute(
+                "SELECT note_relpath FROM papers WHERE id=?", (str(paper_id),)
+            ).fetchone()
+        if row is None:
+            raise LookupError("paper not found")
+        relpath = str(row["note_relpath"] or "").strip()
+        if not relpath:
+            return {
+                "paper_id": str(paper_id),
+                "importance": normalized,
+                "updated": False,
+                "reason": "note_not_published",
+            }
+        note = (self.root / relpath).resolve(strict=False)
+        if self.root != note and self.root not in note.parents:
+            raise ValueError("note path escapes Literature Vault")
+        if not note.is_file():
+            return {
+                "paper_id": str(paper_id),
+                "importance": normalized,
+                "updated": False,
+                "reason": "note_missing",
+            }
+        before = note.read_text("utf-8")
+        after = update_literature_note_importance(before, normalized)
+        changed = after != before
+        if changed:
+            _atomic_write_text(note, after)
+        return {
+            "paper_id": str(paper_id),
+            "importance": normalized,
+            "updated": changed,
+            "path": str(note),
         }
 
     def create_batch(
@@ -1763,6 +1931,9 @@ def sync_published_to_shelf(
                 created += 1
                 continue
 
+            from on1y.folder_sync.records import pending_literature_fields
+
+            pending_bridge = pending_literature_fields(storage._connect(), user_id, existing.id)
             changes: dict[str, Any] = {}
             current_folders = [folder for folder in existing.folders if not folder.key.startswith("vault:")]
             merged_folders = [*current_folders, *folders]
@@ -1772,12 +1943,24 @@ def sync_published_to_shelf(
                 changes["folders"] = merged_folders
             if existing.literature_paper_id != literature_id:
                 changes["literature_paper_id"] = literature_id
-            if pdf_path and existing.pdf_path != pdf_path:
+            managed_pdf = False
+            if existing.pdf_path:
+                try:
+                    current_pdf = Path(existing.pdf_path).expanduser().resolve(strict=False)
+                    managed_root = (storage.db_path.parent / "folder-sync-files").resolve(
+                        strict=False
+                    )
+                    managed_pdf = current_pdf.is_file() and (
+                        current_pdf == managed_root or current_pdf.is_relative_to(managed_root)
+                    )
+                except (OSError, RuntimeError, ValueError):
+                    managed_pdf = False
+            if pdf_path and existing.pdf_path != pdf_path and not managed_pdf:
                 changes["pdf_path"] = pdf_path
             canonical_status = (
                 str(row.get("status")) if row.get("status") in READING_STATUSES else "to_read"
             )
-            if existing.status != canonical_status:
+            if existing.status != canonical_status and "status" not in pending_bridge:
                 changes["status"] = canonical_status
             if authors and not existing.authors:
                 changes["authors"] = authors
