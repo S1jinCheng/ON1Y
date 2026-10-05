@@ -166,6 +166,23 @@ def test_catalog_export_missing_or_empty_db_is_strict_noop(tmp_path: Path) -> No
     }
 
 
+def test_catalog_export_omits_confirmed_missing_role_file(tmp_path: Path) -> None:
+    library_id = str(uuid4())
+    vault, _batch_id, _paper_id = _source_catalog(tmp_path, library_id)
+    sidecar = _single_paper_sidecar(vault)
+    payload = json.loads(sidecar.read_text(encoding="utf-8"))
+    missing_note = vault.root / payload["paper"]["roles"]["note"]
+    missing_note.unlink()
+
+    report = export_catalog_sidecars(
+        vault, library_id=library_id, authoritative=True
+    )
+
+    assert report["exported"] is True
+    refreshed = json.loads(sidecar.read_text(encoding="utf-8"))
+    assert refreshed["paper"]["roles"]["note"] is None
+
+
 def test_authoritative_catalog_tombstones_delete_receiver_rows(tmp_path: Path) -> None:
     library_id = str(uuid4())
     source, batch_id, paper_id = _source_catalog(tmp_path, library_id)

@@ -276,7 +276,13 @@ def _export_url(value: object) -> str | None:
     return str(value)
 
 
-def _relative_role_path(root: Path, value: object, role: str) -> str | None:
+def _relative_role_path(
+    root: Path,
+    value: object,
+    role: str,
+    *,
+    require_file: bool = True,
+) -> str | None:
     text = _optional_text(value, f"roles.{role}", maximum=MAX_PATH_LENGTH)
     if text is None:
         return None
@@ -300,7 +306,17 @@ def _relative_role_path(root: Path, value: object, role: str) -> str | None:
     resolved = candidate.resolve(strict=False)
     if resolved != resolved_root and resolved_root not in resolved.parents:
         raise LiteratureCatalogError(f"roles.{role} escapes Literature Vault")
-    if candidate.is_symlink() or not candidate.is_file():
+    if candidate.is_symlink():
+        raise LiteratureCatalogError(f"roles.{role} file is missing or unsafe: {text}")
+    if not candidate.is_file():
+        if require_file:
+            raise LiteratureCatalogError(
+                f"roles.{role} file is missing or unsafe: {text}"
+            )
+        return None
+    info = candidate.lstat()
+    attributes = int(getattr(info, "st_file_attributes", 0))
+    if not stat.S_ISREG(info.st_mode) or attributes & _REPARSE_POINT:
         raise LiteratureCatalogError(f"roles.{role} file is missing or unsafe: {text}")
     return text
 
@@ -553,7 +569,9 @@ def _has_core_schema(conn: sqlite3.Connection) -> bool:
     return names == {"papers", "batches", "batch_papers"}
 
 
-def _paper_sidecar(row: sqlite3.Row, *, library_id: str) -> dict[str, Any]:
+def _paper_sidecar(
+    row: sqlite3.Row, *, library_id: str, root: Path
+) -> dict[str, Any]:
     try:
         authors = json.loads(row["authors_json"] or "[]")
     except json.JSONDecodeError as exc:
@@ -584,9 +602,24 @@ def _paper_sidecar(row: sqlite3.Row, *, library_id: str) -> dict[str, Any]:
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
             "roles": {
-                "original": row["original_pdf_relpath"],
-                "bilingual": row["bilingual_pdf_relpath"],
-                "note": row["note_relpath"],
+                "original": _relative_role_path(
+                    root,
+                    row["original_pdf_relpath"],
+                    "original",
+                    require_file=False,
+                ),
+                "bilingual": _relative_role_path(
+                    root,
+                    row["bilingual_pdf_relpath"],
+                    "bilingual",
+                    require_file=False,
+                ),
+                "note": _relative_role_path(
+                    root,
+                    row["note_relpath"],
+                    "note",
+                    require_file=False,
+                ),
             },
         },
     }
@@ -676,7 +709,9 @@ def export_catalog_sidecars(
     paper_payloads: list[tuple[str, dict[str, Any]]] = []
     paper_ids = {str(row["id"]) for row in paper_rows}
     for row in paper_rows:
-        payload = _paper_sidecar(row, library_id=canonical_library_id)
+        payload = _paper_sidecar(
+            row, library_id=canonical_library_id, root=vault.root
+        )
         paper = _validate_paper_payload(
             vault.root, _require_object(payload["paper"], "paper")
         )
