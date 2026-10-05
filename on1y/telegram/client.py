@@ -18,27 +18,10 @@ from on1y.user.paths import user_dir
 
 logger = logging.getLogger(__name__)
 
-_DEBUG_LOG = Path(__file__).resolve().parents[2] / "debug-3ec0ad.log"
-
 
 def _agent_log(hypothesis_id: str, location: str, message: str, data: dict[str, Any]) -> None:
-    # #region agent log
-    try:
-        import json
-
-        payload = {
-            "sessionId": "3ec0ad",
-            "hypothesisId": hypothesis_id,
-            "location": location,
-            "message": message,
-            "data": data,
-            "timestamp": int(time.time() * 1000),
-        }
-        with _DEBUG_LOG.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(payload, ensure_ascii=False) + "\n")
-    except Exception:
-        pass
-    # #endregion
+    # Packaged apps are signed and must not create log files next to their code.
+    logger.debug("%s [%s]: %s %s", location, hypothesis_id, message, data)
 
 
 class TelegramClientError(Exception):
