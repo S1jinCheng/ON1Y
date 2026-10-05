@@ -1721,15 +1721,24 @@ class LiteratureVault:
                     canonical_status = "reading"
                 else:
                     canonical_status = "to_read"
-                conn.execute(
-                    """UPDATE papers SET status=?,read_date=?,updated_at=? WHERE id=?""",
-                    (
-                        canonical_status,
-                        date.today().isoformat() if canonical_status == "read" else None,
-                        utc_now(),
-                        paper["id"],
-                    ),
-                )
+                current_status = str(paper.get("status") or "to_read")
+                current_read_date = paper.get("read_date")
+                if canonical_status == "read":
+                    read_date = (
+                        current_read_date
+                        if current_status == "read" and current_read_date
+                        else date.today().isoformat()
+                    )
+                else:
+                    read_date = None
+                if (
+                    current_status != canonical_status
+                    or current_read_date != read_date
+                ):
+                    conn.execute(
+                        """UPDATE papers SET status=?,read_date=?,updated_at=? WHERE id=?""",
+                        (canonical_status, read_date, utc_now(), paper["id"]),
+                    )
                 conn.execute(
                     """INSERT INTO note_scan_state VALUES(?,?,?,?,?)
                     ON CONFLICT(note_relpath) DO UPDATE SET mtime_ns=excluded.mtime_ns,

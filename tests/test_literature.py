@@ -162,6 +162,24 @@ def test_vault_batch_publish_and_feedback(tmp_path: Path) -> None:
     assert "### My Summary" not in feedback_text
     again = vault.rebuild_feedback(batch_id)
     assert again["changed_notes"] == 0
+    paper_id = published["papers"][0]["id"]
+    with vault.connect() as conn:
+        conn.execute(
+            "UPDATE papers SET updated_at='stable-feedback-scan' WHERE id=?",
+            (paper_id,),
+        )
+        conn.commit()
+    unchanged = vault.rebuild_feedback(batch_id)
+    assert unchanged["changed_notes"] == 0
+    with vault.connect() as conn:
+        row = conn.execute(
+            "SELECT status,read_date,updated_at FROM papers WHERE id=?",
+            (paper_id,),
+        ).fetchone()
+    assert row is not None
+    assert row["status"] == "read"
+    assert row["read_date"]
+    assert row["updated_at"] == "stable-feedback-scan"
 
 
 def test_unavailable_pdf_does_not_block_publish(tmp_path: Path) -> None:
