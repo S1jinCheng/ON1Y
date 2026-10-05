@@ -23,6 +23,7 @@ from typing import Any
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
+from on1y.folder_sync.protocol import portable_relative_path
 from on1y.papers.literature import (
     READING_STATUSES,
     LiteratureVault,
@@ -382,15 +383,13 @@ def _validate_paper_payload(root: Path, payload: dict[str, Any]) -> dict[str, An
 def _validate_batch_payload(payload: dict[str, Any]) -> dict[str, Any]:
     _require_exact_keys(payload, _BATCH_KEYS, "batch")
     batch_id = _required_text(payload["id"], "batch.id", maximum=MAX_ID_LENGTH)
-    field_slug = _required_text(payload["field_slug"], "batch.field_slug", maximum=512)
-    pure_slug = PurePosixPath(field_slug)
-    if (
-        pure_slug.is_absolute()
-        or len(pure_slug.parts) != 1
-        or field_slug in {".", ".."}
-        or "\\" in field_slug
-    ):
-        raise LiteratureCatalogError("invalid batch.field_slug")
+    raw_field_slug = _required_text(
+        payload["field_slug"], "batch.field_slug", maximum=512
+    )
+    try:
+        field_slug = portable_relative_path(raw_field_slug)
+    except ValueError as exc:
+        raise LiteratureCatalogError("invalid batch.field_slug") from exc
     batch_date = _required_text(payload["batch_date"], "batch.batch_date", maximum=32)
     try:
         date.fromisoformat(batch_date)

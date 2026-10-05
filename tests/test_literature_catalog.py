@@ -183,6 +183,23 @@ def test_catalog_export_omits_confirmed_missing_role_file(tmp_path: Path) -> Non
     assert refreshed["paper"]["roles"]["note"] is None
 
 
+def test_catalog_accepts_nested_portable_field_slug(tmp_path: Path) -> None:
+    library_id = str(uuid4())
+    vault, batch_id, _paper_id = _source_catalog(tmp_path, library_id)
+    nested = "Human-AI-Interaction/ProjectionMapping3D"
+    with vault.connect() as conn:
+        conn.execute(
+            "UPDATE batches SET field=?,field_slug=? WHERE id=?",
+            ("Human-AI Interaction/ProjectionMapping3D", nested, batch_id),
+        )
+        conn.commit()
+
+    export_catalog_sidecars(vault, library_id=library_id, authoritative=True)
+    plan = plan_catalog_reconcile(vault, library_id=library_id)
+
+    assert plan.batches[0]["field_slug"] == nested
+
+
 def test_authoritative_catalog_tombstones_delete_receiver_rows(tmp_path: Path) -> None:
     library_id = str(uuid4())
     source, batch_id, paper_id = _source_catalog(tmp_path, library_id)
