@@ -2818,26 +2818,7 @@ def create_app() -> FastAPI:
                 "continue",
                 "chats",
             }:
-                # #region agent log
-                try:
-                    import json
-                    import time
-                    from pathlib import Path
-
-                    payload = {
-                        "sessionId": "3ec0ad",
-                        "hypothesisId": "A",
-                        "location": "app.py:knowledge_items",
-                        "message": "unsupported collection rejected",
-                        "data": {"collection": coll},
-                        "timestamp": int(time.time() * 1000),
-                    }
-                    Path("debug-3ec0ad.log").open("a", encoding="utf-8").write(
-                        json.dumps(payload, ensure_ascii=False) + "\n"
-                    )
-                except Exception:
-                    pass
-                # #endregion
+                logger.debug("Unsupported collection rejected: %s", coll)
                 raise HTTPException(status_code=400, detail=f"unsupported collection: {collection}")
             hot_day: str | None = None
             hot_src: str | None = None
