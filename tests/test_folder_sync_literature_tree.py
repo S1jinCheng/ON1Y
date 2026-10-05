@@ -16,6 +16,7 @@ from on1y.adapters.sqlite_storage import SqliteStorage
 from on1y.device_sync.protocol import record_key
 from on1y.folder_sync.engine import FolderSync
 from on1y.folder_sync.literature_tree import (
+    _backup_existing,
     apply_literature_version,
     scan_literature_tree,
 )
@@ -850,3 +851,18 @@ def test_remote_literature_event_rejects_malicious_or_mismatched_paths(
             },
             parents={"file": []},
         )
+
+
+def test_recoverable_backup_is_independent_and_preserves_source_signature(tmp_path: Path) -> None:
+    from on1y.folder_sync.files import signature
+
+    root = tmp_path / "Literature"
+    root.mkdir()
+    source = root / "note.md"
+    source.write_text("original")
+    before = signature(source)
+    _backup_existing(root, source, "note.md")
+    assert signature(source) == before
+    (backup,) = (root / "_system" / "folder-sync-trash").glob("*/note.md")
+    source.write_text("edited in place")
+    assert backup.read_text() == "original"
