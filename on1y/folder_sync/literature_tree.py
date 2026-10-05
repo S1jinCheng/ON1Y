@@ -462,10 +462,9 @@ def _trash_target(root: Path, relative: str) -> Path:
 
 def _backup_existing(root: Path, source: Path, relative: str) -> None:
     destination = _trash_target(root, relative)
-    try:
-        os.link(source, destination)
-    except OSError:
-        shutil.copy2(source, destination)
+    # A hard link changes source ctime on POSIX and invalidates our own
+    # compare-and-swap check. It also shares later in-place edits with the backup.
+    shutil.copy2(source, destination)
 
 
 def _stage_verified_copy(source: Path, target: Path, ref: BlobRef) -> Path:
