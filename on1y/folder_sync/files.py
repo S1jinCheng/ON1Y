@@ -8,10 +8,20 @@ import os
 import shutil
 import sqlite3
 import stat
+from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
-from on1y.folder_sync.protocol import MAX_EVENT_BYTES, Attachment
+from on1y.folder_sync.protocol import MAX_EVENT_BYTES, Attachment, BlobRef
+
+
+@dataclass(frozen=True)
+class FileCacheUpdate:
+    path: str
+    signature: str
+    data: dict[str, Any]
 
 
 def safe_child(root: Path, *parts: str) -> Path:
@@ -85,15 +95,13 @@ def cached_attachment(conn: sqlite3.Connection, path: Path, staging: Path) -> di
     return attachment
 
 
-def stage_attachment(path: Path, staging: Path) -> dict | None:
-    """Missing/offloaded files never mean remote deletion."""
-    from on1y.folder_sync.protocol import EXTENSIONS
-
-    if not available(path) or path.suffix.lower() not in EXTENSIONS:
+def stage_blob(path: Path, staging: Path) -> dict | None:
+    """Stage a stable file as a content-addressed object without interpreting its type."""
+    if not available(path):
         return None
     before = path.stat()
     if before.st_size > 2 * 1024**3:
-        raise ValueError("第一版附件上限为 2 GiB，请移除过大的附件后重试")
+        raise ValueError("单个同步文件上限为 2 GiB，请移除过大的文件后重试")
     staging.mkdir(parents=True, exist_ok=True)
     temp = staging / f".{uuid4()}.tmp"
     try:
@@ -105,13 +113,65 @@ def stage_attachment(path: Path, staging: Path) -> dict | None:
         destination = safe_child(staging, sha)
         if not destination.exists():
             os.replace(temp, destination)
-        return {"sha256": sha, "extension": path.suffix.lower(), "size": before.st_size}
+        return {"sha256": sha, "size": before.st_size}
     finally:
         temp.unlink(missing_ok=True)
 
 
-def publish_blob(staging: Path, root: Path, attachment: dict) -> bool:
-    ref = Attachment.model_validate(attachment)
+def cached_blob(
+    conn: sqlite3.Connection, path: Path, staging: Path
+) -> tuple[dict | None, FileCacheUpdate | None]:
+    """Read the cache without mutating SQLite; return a write for the caller's transaction."""
+    if not available(path):
+        return None, None
+    value = signature(path)
+    cached = conn.execute(
+        "SELECT * FROM folder_sync_file_cache WHERE path=?", (str(path),)
+    ).fetchone()
+    if cached and cached["signature"] == value:
+        data = json.loads(cached["data"])
+        blob = {"sha256": data.get("sha256"), "size": data.get("size")}
+        try:
+            ref = BlobRef.model_validate(blob)
+        except ValueError:
+            pass
+        else:
+            # A received Literature object may not exist in this device's
+            # upload staging directory. The immutable cloud object is the
+            # durable source; unchanged local files must not be recopied and
+            # rehashed on every 30-second fallback pass.
+            return ref.model_dump(mode="json"), None
+    blob = stage_blob(path, staging)
+    if blob is None:
+        return None, None
+    return blob, FileCacheUpdate(str(path), value, blob)
+
+
+def stage_attachment(path: Path, staging: Path) -> dict | None:
+    """Missing/offloaded files never mean remote deletion."""
+    from on1y.folder_sync.protocol import EXTENSIONS
+
+    extension = path.suffix.lower()
+    if extension not in EXTENSIONS:
+        return None
+    blob = stage_blob(path, staging)
+    if blob is None:
+        return None
+    return {**blob, "extension": extension}
+
+
+def _ref_and_extension(value: Mapping[str, Any] | BlobRef) -> tuple[BlobRef, str]:
+    data = value.model_dump(mode="json") if isinstance(value, BlobRef) else dict(value)
+    if "extension" in data:
+        attachment = Attachment.model_validate(data)
+        return attachment, attachment.extension
+    return BlobRef.model_validate(data), ""
+
+
+def publish_blob(
+    staging: Path, root: Path, attachment: Mapping[str, Any] | BlobRef
+) -> bool:
+    ref, _ = _ref_and_extension(attachment)
     target = safe_child(root, "objects", ref.sha256)
     if target.is_file():
         if not available(target):
@@ -138,12 +198,12 @@ def receive_blob(
     root: Path,
     cache: Path,
     key: str,
-    attachment: dict,
+    attachment: Mapping[str, Any] | BlobRef,
     conn: sqlite3.Connection | None = None,
 ) -> Path | None:
-    ref = Attachment.model_validate(attachment)
+    ref, extension = _ref_and_extension(attachment)
     # Each content version gets its own editable copy. Never overwrite an open PDF.
-    target = safe_child(cache, key, ref.sha256 + ref.extension)
+    target = safe_child(cache, key, ref.sha256 + extension)
     copy_number = 0
     while target.is_file():
         cached = (
@@ -163,7 +223,7 @@ def receive_blob(
         # An external reader edited this copy. Preserve it even when an older
         # revision is explicitly restored or a concurrent revision wins.
         copy_number += 1
-        target = safe_child(cache, key, f"{ref.sha256}-{copy_number}{ref.extension}")
+        target = safe_child(cache, key, f"{ref.sha256}-{copy_number}{extension}")
     source = safe_child(root, "objects", ref.sha256)
     if not available(source):
         return None

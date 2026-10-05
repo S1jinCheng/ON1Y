@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import threading
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException
@@ -13,6 +12,7 @@ from on1y.adapters.sqlite_storage import get_storage
 from on1y.auth.context import get_effective_user_id
 from on1y.config import get_settings
 from on1y.device_sync.client import DeviceSync, run_sync, sync_lock
+from on1y.folder_sync.scheduler import SyncScheduler
 
 
 class SyncConfig(BaseModel):
@@ -28,27 +28,13 @@ class ResolveConflict(BaseModel):
 @asynccontextmanager
 async def sync_lifespan(app: FastAPI):
     path = get_settings().db_path
-    stop = threading.Event()
-
-    def worker() -> None:
-        # No database creation or network work until the user has opened the app.
-        while not stop.wait(30):
-            if not path.is_file():
-                continue
-            # Each transport persists its own error for the settings UI.
-            with suppress(Exception):
-                run_sync(path)
-            with suppress(Exception):
-                from on1y.folder_sync.engine import run_folder_sync
-
-                run_folder_sync(path)
-
-    thread = threading.Thread(target=worker, name="on1y-device-sync", daemon=True)
-    thread.start()
+    scheduler = SyncScheduler(path)
+    app.state.sync_scheduler = scheduler
+    scheduler.start()
     try:
         yield
     finally:
-        stop.set()
+        scheduler.stop(timeout=5.0)
 
 
 def register_device_sync_routes(app: FastAPI) -> None:

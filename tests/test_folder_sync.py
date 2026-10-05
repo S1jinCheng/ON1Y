@@ -673,9 +673,20 @@ def test_authenticated_folder_routes(pair, monkeypatch):
     from on1y.auth.tokens import create_access_token
     from on1y.config import get_settings
     from on1y.folder_sync.routes import register_folder_sync_routes
+    from on1y.papers import settings_store
+    from on1y.papers.literature import LiteratureVault
     from on1y.web.auth_http import install_auth_middleware
 
     a, _, cloud = pair
+    vault_path = cloud.parent / "route-literature"
+    LiteratureVault(1, vault_path).initialize()
+    monkeypatch.setattr(settings_store, "resolve_literature_vault", lambda _uid: vault_path)
+    with a.conn:
+        a.conn.execute(
+            """UPDATE folder_sync_config SET literature_files_enabled=1,
+            literature_vault_path=? WHERE id=1""",
+            (str(vault_path),),
+        )
     monkeypatch.setenv("ON1Y_DB_PATH", str(a.storage.db_path))
     monkeypatch.setenv("ON1Y_AUTH_REQUIRED", "true")
     monkeypatch.setenv("ON1Y_SINGLE_USER_MODE", "false")
@@ -689,6 +700,11 @@ def test_authenticated_folder_routes(pair, monkeypatch):
         assert client.get("/api/folder-sync").status_code == 401
         client.headers["Authorization"] = f"Bearer {token}"
         assert client.get("/api/folder-sync").json()["folder"] == str(cloud)
+        legacy = client.post(
+            "/api/folder-sync", json={"folder": str(cloud), "enabled": True}
+        )
+        assert legacy.status_code == 200
+        assert legacy.json()["literature_files_enabled"] is True
         assert client.post("/api/folder-sync/run").status_code == 200
         result = client.post("/api/folder-sync", json={"folder": str(cloud), "enabled": False})
         assert result.status_code == 200 and result.json()["enabled"] is False

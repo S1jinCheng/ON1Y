@@ -59,6 +59,12 @@ export type FolderSyncStatus = {
   folder: string;
   suggested_folder: string;
   library_id: string;
+  literature_files_enabled: boolean;
+  literature_vault: string;
+  literature_files: number;
+  literature_remote_files: number;
+  literature_excluded: number;
+  literature_last_scan: string | null;
   last_sync: string | null;
   last_error: string | null;
   pending_files: number;
@@ -70,7 +76,12 @@ export type FolderSyncStatus = {
 };
 
 export const getFolderSync = (): Promise<FolderSyncStatus> => request("/api/folder-sync");
-export const saveFolderSync = (settings: { folder: string; enabled: boolean; create: boolean }): Promise<FolderSyncStatus> =>
+export const saveFolderSync = (settings: {
+  folder: string;
+  enabled: boolean;
+  create: boolean;
+  literature_files: boolean;
+}): Promise<FolderSyncStatus> =>
   request("/api/folder-sync", { method: "POST", body: JSON.stringify(settings) });
 export const runFolderSync = (): Promise<FolderSyncStatus> =>
   request("/api/folder-sync/run", { method: "POST", direct: true });

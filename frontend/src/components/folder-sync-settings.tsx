@@ -13,6 +13,7 @@ export function FolderSyncSettings({ locale }: { locale: Locale }): JSX.Element 
   const [status, setStatus] = useState<FolderSyncStatus | null>(null);
   const [folder, setFolder] = useState("");
   const [enabled, setEnabled] = useState(false);
+  const [literatureFiles, setLiteratureFiles] = useState(false);
   const [create, setCreate] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -26,6 +27,7 @@ export function FolderSyncSettings({ locale }: { locale: Locale }): JSX.Element 
       setStatus(value);
       setFolder(value.folder || value.suggested_folder);
       setEnabled(value.enabled);
+      setLiteratureFiles(value.literature_files_enabled);
     }).catch(err => { if (alive) setError(String(err)); });
     const timer = window.setInterval(() => {
       void getFolderSync().then(value => { if (alive) setStatus(value); }).catch(() => {});
@@ -45,20 +47,33 @@ export function FolderSyncSettings({ locale }: { locale: Locale }): JSX.Element 
       "开启后，当前账户的文章、图书、Paper、笔记、标签及关联的 PDF/电子书会写入所选文件夹，并由 iCloud 上传。首次连接会合并资料。是否继续？",
       "This writes this account's articles, books, papers, notes, tags and linked PDF/ebook files to the selected folder for iCloud to upload. Existing libraries will be merged. Continue?"
     ))) return;
+    if (literatureFiles && !status?.literature_files_enabled && !window.confirm(t(
+      "首次开启 Literature 文件树同步会把 Vault 中所有未排除的普通文件（包括 PDF、Markdown、图片和模板）写入协议目录。现有资料可能约 2 GB，随后仍需等待 iCloud 上传；活动数据库和缓存不会上传。本机同步完成不代表云端已经送达。是否继续？",
+      "Enabling Literature tree sync for the first time writes every non-excluded ordinary Vault file (including PDFs, Markdown, images, and templates) into the protocol folder. Existing data may be about 2 GB and must still upload through iCloud; active databases and caches are excluded. A completed local sync does not confirm cloud delivery. Continue?"
+    ))) return;
     await perform(async () => {
-      const result = await saveFolderSync({ folder, enabled, create });
-      setFolder(result.folder); setCreate(false);
+      const result = await saveFolderSync({ folder, enabled, create, literature_files: literatureFiles });
+      setFolder(result.folder);
+      setLiteratureFiles(result.literature_files_enabled);
+      setCreate(false);
       return result;
-    }, t("设置已保存。开启后，On1y 运行期间每 30 秒检查一次。", "Saved. While On1y is running, enabled sync checks every 30 seconds."));
+    }, t(
+      "设置已保存。On1y 运行期间检测到变化后会自动同步，并每 30 秒兜底检查。",
+      "Saved. While On1y is running, changes trigger automatic sync, with a fallback check every 30 seconds."
+    ));
   }
 
-  const dirty = Boolean(status && (folder !== status.folder || enabled !== status.enabled));
+  const dirty = Boolean(status && (
+    folder !== status.folder ||
+    enabled !== status.enabled ||
+    literatureFiles !== status.literature_files_enabled
+  ));
   const canRun = Boolean(status?.enabled && !busy && !dirty);
   return <section className="space-y-3 rounded-xl border border-border bg-panel/60 p-4">
     <h4 className="text-sm font-medium">{t("iCloud 资料库同步 · 试用", "iCloud library sync · Preview")}</h4>
     <p className="text-xs leading-relaxed text-muted">{t(
-      "Mac 和 Windows 选择同一个 iCloud Drive 协议目录。它同步当前账号的文章、书架、Paper、笔记、标签、阅读状态和已关联附件，不会原样镜像 Literature Vault 的目录结构。",
-      "Choose the same iCloud Drive protocol folder on Mac and Windows. It syncs supported account records and linked attachments; it does not mirror the Literature Vault directory tree."
+      "Mac 和 Windows 选择同一个 iCloud Drive 协议目录。元数据和已关联附件始终同步；打开 Literature 文件树后，还会额外同步 Vault 中所有未排除的普通文件。",
+      "Choose the same iCloud Drive protocol folder on Mac and Windows. Metadata and linked attachments always sync; enabling the Literature file tree additionally syncs every non-excluded ordinary file in the Vault."
     )}</p>
     <label className="block space-y-1 text-xs">
       <span>{t("资料库文件夹", "Library folder")}</span>
@@ -74,12 +89,24 @@ export function FolderSyncSettings({ locale }: { locale: Locale }): JSX.Element 
       {t("在空文件夹创建新资料库，仅第一台电脑勾选", "Create a library in an empty folder, first computer only")}
     </label>}
     <label className="flex items-center gap-2 text-xs">
-      <input type="checkbox" checked={enabled} disabled={busy || !status} onChange={e => setEnabled(e.target.checked)} />
+      <input type="checkbox" checked={enabled} disabled={busy || !status} onChange={e => {
+        setEnabled(e.target.checked);
+        if (!e.target.checked) setLiteratureFiles(false);
+      }} />
       {t("开启文件夹自动同步", "Enable automatic folder sync")}
     </label>
+    <label className="flex items-center gap-2 text-xs">
+      <input
+        type="checkbox"
+        checked={literatureFiles}
+        disabled={busy || !status || !enabled}
+        onChange={e => setLiteratureFiles(e.target.checked)}
+      />
+      {t("同步 Literature 文件树（排除数据库与缓存）", "Sync Literature file tree (excluding databases and caches)")}
+    </label>
     <p className="text-xs leading-relaxed text-muted">{t(
-      "请选择独立的协议专用目录；首次创建必须完全为空，不要选择 Paper 设置中的现有 Literature Vault，也不要放在它的内部。Windows 请设为“始终保留在此设备上”。本机数据库、Cookie、密码和 API Key 不上传；请先关闭下面的服务地址同步。",
-      "Use a separate protocol-only folder. First creation requires it to be completely empty; do not choose or nest it inside the existing Literature Vault. On Windows, choose Always keep on this device. Local databases, cookies, passwords and API keys stay local. Disable relay sync below first."
+      "请选择独立的协议专用目录；首次创建必须完全为空，不要选择 Paper 设置中的现有 Literature Vault，也不要放在它的内部。Windows 请设为“始终保留在此设备上”。活动 SQLite、_system 缓存、staging、备份、.obsidian 和临时文件不会上传；首次文件树同步可能约 2 GB。请先关闭下面的服务地址同步。",
+      "Use a separate protocol-only folder. First creation requires it to be completely empty; do not choose or nest it inside the existing Literature Vault. On Windows, choose Always keep on this device. Active SQLite files, _system caches, staging, backups, .obsidian, and temporary files are excluded; the first tree sync may be about 2 GB. Disable relay sync below first."
     )}</p>
     <div className="flex flex-wrap gap-2">
       <button className={button} type="button" disabled={busy || !status || !folder.trim()} onClick={() => void save()}>{t("保存文件夹设置", "Save folder settings")}</button>
@@ -91,6 +118,9 @@ export function FolderSyncSettings({ locale }: { locale: Locale }): JSX.Element 
     {status && <div className="space-y-1 text-xs text-muted">
       <p>{t("上次本机检查：", "Last local check: ")}{status.last_sync ? new Date(status.last_sync).toLocaleString() : t("尚未检查", "Never")}</p>
       <p>{t("资料记录：", "Records: ")}{status.records}{t("，待下载附件：", "; pending attachments: ")}{status.pending_files}{t("，待到达的修改：", "; pending changes: ")}{status.pending_events}</p>
+      <p>{t("Literature 文件树：", "Literature file tree: ")}{status.literature_files_enabled ? t("已开启", "On") : t("未开启", "Off")}{t("；本机文件：", "; local files: ")}{status.literature_files}{t("；协议记录：", "; protocol records: ")}{status.literature_remote_files}{t("；已排除：", "; excluded: ")}{status.literature_excluded}</p>
+      <p className="break-all">{t("Vault 路径：", "Vault path: ")}{status.literature_vault || t("未配置", "Not configured")}</p>
+      <p>{t("上次 Vault 扫描：", "Last Vault scan: ")}{status.literature_last_scan ? new Date(status.literature_last_scan).toLocaleString() : t("尚未扫描", "Never")}</p>
     </div>}
     {(error || status?.last_error) && <p role="alert" className="text-xs text-red-600">{error || status?.last_error}</p>}
     {message && <p role="status" className="text-xs text-muted">{message}</p>}

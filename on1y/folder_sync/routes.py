@@ -8,12 +8,14 @@ from on1y.auth.context import get_effective_user_id
 from on1y.config import get_settings
 from on1y.device_sync.client import sync_lock
 from on1y.folder_sync.engine import FolderSync, run_folder_sync
+from on1y.folder_sync.scheduler import notify_folder_sync
 
 
 class FolderConfig(BaseModel):
     folder: str = Field(max_length=4096)
     enabled: bool = False
     create: bool = False
+    literature_files: bool | None = None
 
 
 class Resolution(BaseModel):
@@ -45,8 +47,16 @@ def register_folder_sync_routes(app: FastAPI) -> None:
             with sync_lock(storage.db_path):
                 sync = FolderSync(storage)
                 uid = get_effective_user_id()
-                sync.configure(uid, body.folder, body.enabled, create=body.create)
-                return sync.status(uid)
+                sync.configure(
+                    uid,
+                    body.folder,
+                    body.enabled,
+                    create=body.create,
+                    literature_files=body.literature_files,
+                )
+                result = sync.status(uid)
+            notify_folder_sync("folder-settings")
+            return result
         except (ValueError, OSError) as exc:
             raise HTTPException(400, str(exc)) from exc
         finally:
